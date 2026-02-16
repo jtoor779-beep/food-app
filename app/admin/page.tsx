@@ -189,7 +189,8 @@ export default function AdminDashboardPage() {
 
       const todayKey = dayKey(new Date());
 
-      for (const row of safeRecent) {
+      // ✅ ONLY FIX HERE: TS safe cast so build passes on Vercel
+      for (const row of safeRecent as any[]) {
         const created = row?.created_at ? new Date(row.created_at) : null;
         if (!created) continue;
         const k = dayKey(created);

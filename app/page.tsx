@@ -8,6 +8,10 @@ import supabase from "@/lib/supabase";
 type Restaurant = {
   id: string;
   name: string | null;
+
+  // ✅ NEW: restaurant profile picture (works if your table/view has it)
+  image_url?: string | null;
+
   // optional
   is_enabled?: boolean | null;
   approval_status?: string | null;
@@ -116,7 +120,7 @@ function setCart(items: CartItem[]) {
   } catch {}
 }
 
-// demo helpers
+// helpers for ETA/rating UI values (no "demo" text shown anywhere)
 function hashNum(s: string) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
@@ -130,12 +134,6 @@ function demoRating(id: string) {
   const n = hashNum(id) % 45;
   return (3.6 + n / 100).toFixed(1);
 }
-
-const OFFERS = [
-  { title: "FLAT ₹50 OFF", code: "SAVE50", note: "Above ₹299 (demo)" },
-  { title: "FREE DELIVERY", code: "FREESHIP", note: "Above ₹199 (demo)" },
-  { title: "20% OFF", code: "NEW20", note: "First order (demo)" },
-];
 
 function niceDesc(it: MenuItem, restaurantName: string) {
   const base =
@@ -195,9 +193,6 @@ export default function CustomerHomeDashboard() {
   const [cartMap, setCartMap] = useState<Record<string, number>>({});
 
   const [selected, setSelected] = useState<MenuItem | null>(null);
-
-  // helpful debug banner if views are empty
-  const [dataSource, setDataSource] = useState<"views" | "tables" | "unknown">("unknown");
 
   function refreshCartState() {
     const c = getCart();
@@ -306,15 +301,6 @@ export default function CustomerHomeDashboard() {
     setItemQty(item, cur - 1);
   }
 
-  function copyOffer(code: string) {
-    try {
-      navigator.clipboard.writeText(code);
-      showToast(`Copied: ${code}`);
-    } catch {
-      showToast(`Code: ${code}`);
-    }
-  }
-
   /**
    * ✅ SAFE SELECT:
    * Try multiple select column sets until one works (prevents "column does not exist" crashes).
@@ -372,8 +358,10 @@ export default function CustomerHomeDashboard() {
 
       try {
         const restRes = await safeSelect("restaurants_public", [
-          "id, name",
+          "id, name, image_url, is_enabled",
+          "id, name, image_url",
           "id, name, is_enabled",
+          "id, name",
         ]);
         if (restRes.error) throw restRes.error;
 
@@ -391,15 +379,17 @@ export default function CustomerHomeDashboard() {
 
         // sort newest-like
         itemList = [...itemList].sort((a, b) => String(b.id).localeCompare(String(a.id)));
-
-        setDataSource("views");
       } catch (viewErr: any) {
         // 2) Fallback: base tables + client filtering
         const viewMsg = String(viewErr?.message || viewErr || "");
         console.warn("Views failed, fallback to tables:", viewMsg);
 
-        // restaurants table: try several schemas
         const restRes = await safeSelect("restaurants", [
+          "id, name, image_url, is_enabled, approval_status, is_approved, approved",
+          "id, name, image_url, is_enabled, approval_status, approved",
+          "id, name, image_url, is_enabled, approval_status",
+          "id, name, image_url, is_enabled",
+          "id, name, image_url",
           "id, name, is_enabled, approval_status, is_approved, approved",
           "id, name, is_enabled, approval_status, approved",
           "id, name, is_enabled, approval_status",
@@ -413,7 +403,6 @@ export default function CustomerHomeDashboard() {
 
         const approvedIds = new Set(restList.map((r) => r.id));
 
-        // menu_items table: try several schemas
         const itemRes = await safeSelect("menu_items", [
           "id, restaurant_id, name, price, cuisine, image_url, is_veg, is_best_seller, in_stock, description",
           "id, restaurant_id, name, price, cuisine, image_url, is_veg, is_best_seller, in_stock",
@@ -427,8 +416,6 @@ export default function CustomerHomeDashboard() {
 
         // newest-like
         itemList = [...itemList].sort((a, b) => String(b.id).localeCompare(String(a.id)));
-
-        setDataSource("tables");
       }
 
       // extra safety
@@ -443,7 +430,6 @@ export default function CustomerHomeDashboard() {
       setErr(e?.message || String(e));
       setRestaurants([]);
       setItems([]);
-      setDataSource("unknown");
     } finally {
       setLoading(false);
     }
@@ -700,33 +686,11 @@ export default function CustomerHomeDashboard() {
 
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
-            <div style={pill}>{role === "customer" ? "Customer Dashboard" : "Food App"}</div>
             <h1 style={heroTitle}>What are you craving today?</h1>
 
             <div style={{ color: "rgba(17,24,39,0.72)", marginTop: 8, fontWeight: 600 }}>
               Explore restaurants, browse items, and place an order.
             </div>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-              <div style={statCard}>
-                <div style={statNum}>{restaurants.length}</div>
-                <div style={statLabel}>Restaurants</div>
-              </div>
-              <div style={statCard}>
-                <div style={statNum}>{items.length}</div>
-                <div style={statLabel}>Items</div>
-              </div>
-              <div style={statCard}>
-                <div style={statNum}>{cartCount}</div>
-                <div style={statLabel}>In Cart</div>
-              </div>
-            </div>
-
-            {!loading ? (
-              <div style={{ marginTop: 10, color: "rgba(17,24,39,0.55)", fontWeight: 900, fontSize: 12 }}>
-                Data source: <b>{dataSource}</b>
-              </div>
-            ) : null}
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -743,25 +707,12 @@ export default function CustomerHomeDashboard() {
         </div>
 
         <div style={{ marginTop: 14 }}>
-          <div style={rowTitle}>
-            <h2 style={sectionTitle}>Offers & Coupons</h2>
-            <span style={subtle}>Tap to copy code (demo)</span>
-          </div>
-
-          <div style={offerGrid}>
-            {OFFERS.map((o) => (
-              <button key={o.code} onClick={() => copyOffer(o.code)} style={offerCard}>
-                <div style={{ fontWeight: 1000, fontSize: 14 }}>{o.title}</div>
-                <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 800, fontSize: 12 }}>
-                  Code: <span style={codePill}>{o.code}</span> • {o.note}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginTop: 14 }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search restaurants or dishes…" style={search} />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search restaurants or dishes…"
+            style={search}
+          />
         </div>
 
         {recent.length > 0 ? (
@@ -789,7 +740,8 @@ export default function CustomerHomeDashboard() {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
           {CATEGORIES.map((c) => (
             <button key={c.key} onClick={() => setActiveCat(c.key)} style={activeCat === c.key ? chipActive : chip}>
-              {c.label} <span style={countPill}>{c.key === "recommended" ? items.length : categoryCounts[c.key] || 0}</span>
+              {c.label}{" "}
+              <span style={countPill}>{c.key === "recommended" ? items.length : categoryCounts[c.key] || 0}</span>
             </button>
           ))}
           <button onClick={loadData} style={chip}>
@@ -813,7 +765,9 @@ export default function CustomerHomeDashboard() {
         </div>
 
         {err ? <div style={alertErr}>{err}</div> : null}
-        {loading ? <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 700 }}>Loading dashboard…</div> : null}
+        {loading ? (
+          <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 700 }}>Loading dashboard…</div>
+        ) : null}
 
         {!loading ? (
           <>
@@ -823,7 +777,9 @@ export default function CustomerHomeDashboard() {
                   ? "Recommended for you"
                   : `Top ${CATEGORIES.find((x) => x.key === activeCat)?.label || ""}`}
               </h2>
-              <span style={subtle}>{vegOnly || bestsellerOnly || under199 || inStockOnly ? "Filters applied" : "Top picks"}</span>
+              <span style={subtle}>
+                {vegOnly || bestsellerOnly || under199 || inStockOnly ? "Filters applied" : "Top picks"}
+              </span>
             </div>
 
             {featuredItems.length === 0 ? (
@@ -838,7 +794,11 @@ export default function CustomerHomeDashboard() {
 
                   return (
                     <div key={it.id} style={cardGlass}>
-                      <div style={{ ...imgWrap, cursor: "pointer" }} onClick={() => setSelected(it)} title="Click to view details">
+                      <div
+                        style={{ ...imgWrap, cursor: "pointer" }}
+                        onClick={() => setSelected(it)}
+                        title="Click to view details"
+                      >
                         {it.image_url ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={it.image_url} alt={it.name || "item"} style={img} />
@@ -926,8 +886,8 @@ export default function CustomerHomeDashboard() {
                 <span style={miniHint}>Sort:</span>
                 <select value={restSort} onChange={(e) => setRestSort(e.target.value as any)} style={selectMini}>
                   <option value="name">Name</option>
-                  <option value="eta">Delivery time (demo)</option>
-                  <option value="rating">Rating (demo)</option>
+                  <option value="eta">Delivery time</option>
+                  <option value="rating">Rating</option>
                 </select>
               </div>
             </div>
@@ -938,25 +898,34 @@ export default function CustomerHomeDashboard() {
               <div style={grid}>
                 {filteredRestaurants.slice(0, 12).map((r) => (
                   <div key={r.id} style={cardGlass}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    {/* ✅ Restaurant profile pic (if available) */}
+                    <div style={{ ...imgWrap, height: 130 }}>
+                      {r.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={r.image_url} alt={r.name || "restaurant"} style={img} />
+                      ) : (
+                        <div style={imgPlaceholder}>No image</div>
+                      )}
+                      <div style={cardTopBadges}>
+                        <span style={badgeDark}>⭐ {demoRating(r.id)}</span>
+                        <span style={badgeLight}>{demoEta(r.id)} mins</span>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
                       <div style={{ fontWeight: 950, fontSize: 16, color: "#111827" }}>{r.name || "Restaurant"}</div>
-                      <span style={badgeLight}>⭐ {demoRating(r.id)}</span>
                     </div>
 
                     <div style={{ marginTop: 8, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
-                      {demoEta(r.id)} mins • Fast delivery • Best ratings (demo)
+                      Fast delivery • Highly rated
                     </div>
 
+                    {/* ✅ Only ONE button now (no duplicate) */}
                     <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
                       <Link href={`/restaurants/${r.id}`} style={btnSmallOutline}>
                         Open Menu
                       </Link>
-                      <Link href={`/restaurants/${r.id}`} style={btnSmallOutline}>
-                        View
-                      </Link>
                     </div>
-
-                    <div style={{ marginTop: 10, color: "rgba(17,24,39,0.45)", fontSize: 12 }}>ID: {r.id}</div>
                   </div>
                 ))}
               </div>
@@ -1060,46 +1029,12 @@ const heroGlass: React.CSSProperties = {
   flexWrap: "wrap",
 };
 
-const pill: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "6px 12px",
-  borderRadius: 999,
-  border: "1px solid rgba(0,0,0,0.08)",
-  background: "rgba(255,255,255,0.7)",
-  fontSize: 12,
-  fontWeight: 900,
-  color: "rgba(17,24,39,0.85)",
-};
-
 const heroTitle: React.CSSProperties = {
-  margin: "10px 0 0 0",
+  margin: "0 0 0 0",
   fontSize: 34,
   fontWeight: 1000,
   color: "#0b1220",
   letterSpacing: -0.2,
-};
-
-const statCard: React.CSSProperties = {
-  minWidth: 110,
-  padding: "10px 12px",
-  borderRadius: 16,
-  border: "1px solid rgba(0,0,0,0.08)",
-  background: "rgba(255,255,255,0.7)",
-};
-
-const statNum: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: 1000,
-  color: "#0b1220",
-};
-
-const statLabel: React.CSSProperties = {
-  marginTop: 2,
-  fontSize: 12,
-  fontWeight: 800,
-  color: "rgba(17,24,39,0.65)",
 };
 
 const btnPrimary: React.CSSProperties = {
@@ -1409,32 +1344,6 @@ const floatingCart: React.CSSProperties = {
   textDecoration: "none",
   fontWeight: 950,
   boxShadow: "0 14px 40px rgba(0,0,0,0.22)",
-};
-
-const offerGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-  gap: 10,
-};
-
-const offerCard: React.CSSProperties = {
-  borderRadius: 18,
-  padding: 14,
-  background: "rgba(255,255,255,0.78)",
-  border: "1px solid rgba(0,0,0,0.08)",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.07)",
-  backdropFilter: "blur(10px)",
-  cursor: "pointer",
-  textAlign: "left",
-};
-
-const codePill: React.CSSProperties = {
-  display: "inline-block",
-  padding: "4px 8px",
-  borderRadius: 999,
-  border: "1px solid rgba(0,0,0,0.12)",
-  background: "rgba(255,255,255,0.9)",
-  fontWeight: 950,
 };
 
 const selectMini: React.CSSProperties = {

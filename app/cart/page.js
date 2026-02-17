@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
@@ -219,7 +219,6 @@ function asBool(v) {
 }
 
 async function countRows(table, filters = []) {
-  // filters: [{col, op, val}]  op used as method: "eq", "in", etc
   try {
     let q = supabase.from(table).select("id", { count: "exact", head: true });
     for (const f of filters) {
@@ -239,7 +238,6 @@ async function validateCouponFromDb({ code, subtotal, userId }) {
   if (!clean) return { ok: false, reason: "Enter coupon code." };
 
   try {
-    // ✅ UPDATED SELECT to match your actual coupons table
     const { data: c, error } = await supabase
       .from("coupons")
       .select(
@@ -266,7 +264,6 @@ async function validateCouponFromDb({ code, subtotal, userId }) {
       return { ok: false, reason: `Minimum order ${money(minOrder)} required for this coupon.` };
     }
 
-    // Optional limits (best-effort, won’t block if your redemptions schema differs)
     const usageLimit = toNum(c.usage_limit_total, 0);
     const perUserLimit = toNum(c.usage_limit_per_user, 0);
 
@@ -287,7 +284,6 @@ async function validateCouponFromDb({ code, subtotal, userId }) {
       }
     }
 
-    // Calculate discount on SUBTOTAL ONLY ✅ (Option A)
     const type = String(c.type || "").toLowerCase();
     const value = toNum(c.value, 0);
 
@@ -530,8 +526,29 @@ const rowLight = {
   fontSize: 13,
 };
 
+// ✅ Mobile responsive hook (pure JS)
+function useIsMobile(breakpoint = 860) {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const apply = () => setIsMobile(!!mq.matches);
+    apply();
+    mq.addEventListener?.("change", apply);
+    mq.addListener?.(apply);
+    return () => {
+      mq.removeEventListener?.("change", apply);
+      mq.removeListener?.(apply);
+    };
+  }, [breakpoint]);
+
+  return isMobile;
+}
+
 export default function CartPage() {
   const router = useRouter();
+  const isMobile = useIsMobile(860);
+  const deliveryRef = useRef(null);
 
   const [isAuthed, setIsAuthed] = useState(false);
   const [userRole, setUserRole] = useState("");
@@ -553,12 +570,12 @@ export default function CartPage() {
 
   // Premium fields
   const [coupon, setCoupon] = useState("");
-  const [couponApplied, setCouponApplied] = useState(null); // { id, code, type, value, max_discount, min_order_amount }
+  const [couponApplied, setCouponApplied] = useState(null);
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponDiscountValue, setCouponDiscountValue] = useState(0);
 
   const [tip, setTip] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState("cod"); // cod | upi | card (demo)
+  const [paymentMethod, setPaymentMethod] = useState("cod");
   const [saveAddress, setSaveAddress] = useState(true);
 
   const subtotal = useMemo(() => {
@@ -575,7 +592,6 @@ export default function CartPage() {
 
   const gst = useMemo(() => Math.round(subtotal * 0.05), [subtotal]);
 
-  // ✅ Option A: discount applies ONLY on SUBTOTAL (already ensured in validation)
   const discount = useMemo(() => {
     if (!couponApplied) return 0;
     return Math.max(0, Number(couponDiscountValue || 0));
@@ -663,7 +679,6 @@ export default function CartPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ If subtotal changed after coupon applied, we re-check quietly (best effort)
   useEffect(() => {
     let cancelled = false;
 
@@ -691,9 +706,7 @@ export default function CartPage() {
 
         setCouponApplied(res.coupon);
         setCouponDiscountValue(res.discount || 0);
-      } catch {
-        // ignore background recheck errors
-      }
+      } catch {}
     }
 
     recheck();
@@ -821,7 +834,6 @@ export default function CartPage() {
 
       if (saveAddress) saveAddressToLocal();
 
-      // ✅ Before placing, re-validate coupon (so nobody can fake discount)
       let finalCoupon = null;
       let finalDiscount = 0;
 
@@ -859,17 +871,14 @@ export default function CartPage() {
         .filter(Boolean)
         .join(" ");
 
-      // ✅ REAL GEOCODING: convert address -> lat/lng
       const fullAddr = buildFullAddress({
         address_line1: address_line1.trim(),
         address_line2: address_line2.trim() || "",
         landmark: landmark.trim() || "",
       });
 
-      // We try geocode, but we never block order if geocode fails.
       const geo = await geocodeAddressClient(fullAddr);
 
-      // ✅ NEW: Fetch restaurant lat/lng from restaurants table
       let restLat = null;
       let restLng = null;
       try {
@@ -890,7 +899,6 @@ export default function CartPage() {
         restLng = null;
       }
 
-      // ✅ totals breakdown to store in DB
       const subtotal_amount = Math.max(0, Number(subtotal || 0));
       const discount_amount = Math.max(0, Number(finalDiscount || 0));
       const total_amount = Math.max(
@@ -904,31 +912,20 @@ export default function CartPage() {
           user_id: user.id,
           restaurant_id,
           status: "pending",
-
-          // ✅ keep old column so nothing breaks
           total: total_amount,
-
-          // ✅ new totals columns
           subtotal_amount,
           discount_amount,
           total_amount,
-
-          // ✅ coupon columns
           coupon_id: finalCoupon?.id ?? null,
           coupon_code: finalCoupon?.code ?? null,
-
           customer_name: customer_name.trim(),
           phone: phone.trim(),
           address_line1: address_line1.trim(),
           address_line2: address_line2.trim() || null,
           landmark: landmark.trim() || null,
           instructions: finalInstructions || null,
-
-          // ✅ drop coordinates
           customer_lat: geo?.lat ?? null,
           customer_lng: geo?.lng ?? null,
-
-          // ✅ pickup coordinates
           restaurant_lat: restLat,
           restaurant_lng: restLng,
         })
@@ -947,7 +944,6 @@ export default function CartPage() {
       const { error: oiErr } = await supabase.from("order_items").insert(order_items_rows);
       if (oiErr) throw oiErr;
 
-      // ✅ best-effort coupon redemption log (won’t break if schema different)
       if (finalCoupon?.id) {
         try {
           await supabase.from("coupon_redemptions").insert({
@@ -956,9 +952,7 @@ export default function CartPage() {
             order_id: orderRow.id,
             coupon_code: finalCoupon.code,
           });
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
 
       setItems([]);
@@ -967,16 +961,12 @@ export default function CartPage() {
       setCouponDiscountValue(0);
       setTip(0);
 
-      // Optional info
       const notes = [];
       if (!geo) notes.push("Address geocode failed (drop location missing)");
       if (!restLat || !restLng) notes.push("Restaurant location missing (pickup location missing)");
 
-      if (notes.length) {
-        setInfoMsg(`✅ Order placed successfully! (Note: ${notes.join(" • ")})`);
-      } else {
-        setInfoMsg("✅ Order placed successfully! (Pickup + drop locations saved)");
-      }
+      if (notes.length) setInfoMsg(`✅ Order placed successfully! (Note: ${notes.join(" • ")})`);
+      else setInfoMsg("✅ Order placed successfully! (Pickup + drop locations saved)");
 
       router.push("/orders");
       router.refresh();
@@ -987,25 +977,91 @@ export default function CartPage() {
     }
   }
 
+  // ✅ Responsive computed styles
+  const wrap = {
+    maxWidth: 1120,
+    margin: "0 auto",
+    paddingBottom: isMobile ? 140 : 90,
+  };
+
+  const hero = {
+    ...heroGlass,
+    padding: isMobile ? 14 : heroGlass.padding,
+    alignItems: isMobile ? "stretch" : heroGlass.alignItems,
+  };
+
+  const heroTitleR = {
+    ...heroTitle,
+    fontSize: isMobile ? 26 : heroTitle.fontSize,
+    lineHeight: isMobile ? "30px" : "40px",
+  };
+
+  const gridMain = {
+    display: "grid",
+    gridTemplateColumns: isMobile ? "1fr" : "1.4fr 0.9fr",
+    gap: 12,
+    marginTop: 12,
+  };
+
+  const itemCard = {
+    borderRadius: 16,
+    border: "1px solid rgba(0,0,0,0.08)",
+    background: "rgba(255,255,255,0.82)",
+    padding: 12,
+    display: "grid",
+    gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
+    gap: 10,
+  };
+
+  const itemActions = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: isMobile ? "space-between" : "flex-start",
+  };
+
+  const offerRow = {
+    marginTop: 10,
+    display: "grid",
+    gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
+    gap: 10,
+  };
+
+  const sticky = {
+    ...stickyBar,
+    paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
+    flexDirection: isMobile ? "column" : "row",
+    alignItems: isMobile ? "stretch" : "center",
+  };
+
+  function scrollToDelivery() {
+    if (deliveryRef.current) {
+      deliveryRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+
   return (
-    <main style={pageBg}>
-      <div style={{ maxWidth: 1120, margin: "0 auto", paddingBottom: 90 }}>
-        <div style={heroGlass}>
-          <div style={{ minWidth: 260 }}>
+    <main style={{ ...pageBg, padding: isMobile ? 12 : 20 }}>
+      <div style={wrap}>
+        <div style={hero}>
+          <div style={{ minWidth: isMobile ? "100%" : 260 }}>
             <div style={pill}>Customer</div>
-            <h1 style={heroTitle}>Cart</h1>
+            <h1 style={heroTitleR}>Cart</h1>
             <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>
               Review items + delivery details
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={statCard}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end" }}>
+            <div style={{ ...statCard, minWidth: isMobile ? 110 : statCard.minWidth }}>
               <div style={statNum}>{itemCount}</div>
               <div style={statLabel}>Items</div>
             </div>
 
-            <div style={statCard}>
+            <div style={{ ...statCard, minWidth: isMobile ? 140 : statCard.minWidth }}>
               <div style={statNum}>{money(subtotal)}</div>
               <div style={statLabel}>Subtotal</div>
             </div>
@@ -1031,7 +1087,7 @@ export default function CartPage() {
             </div>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.9fr", gap: 12, marginTop: 12 }}>
+          <div style={gridMain}>
             {/* LEFT: Items + Offers */}
             <div style={cardGlass}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -1040,28 +1096,19 @@ export default function CartPage() {
                   <div style={helperText}>Adjust quantities or remove items.</div>
                 </div>
 
-                <button onClick={clearCart} style={btnSmallGhost}>
+                <button onClick={clearCart} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
                   Clear Cart
                 </button>
               </div>
 
               <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
                 {items.map((it, ix) => (
-                  <div
-                    key={`${it.menu_item_id}-${ix}`}
-                    style={{
-                      borderRadius: 16,
-                      border: "1px solid rgba(0,0,0,0.08)",
-                      background: "rgba(255,255,255,0.82)",
-                      padding: 12,
-                      display: "grid",
-                      gridTemplateColumns: "1fr auto",
-                      gap: 10,
-                    }}
-                  >
+                  <div key={`${it.menu_item_id}-${ix}`} style={itemCard}>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{it.name || "Item"}</div>
-                      <div style={{ marginTop: 4, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
+                      <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
+                        {it.name || "Item"}
+                      </div>
+                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
                         {money(it.price_each)} each • Line:{" "}
                         <b>{money(Number(it.qty || 0) * Number(it.price_each || 0))}</b>
                       </div>
@@ -1072,16 +1119,18 @@ export default function CartPage() {
                       ) : null}
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                        −
-                      </button>
-                      <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
-                      <button onClick={() => incQty(ix)} style={btnSmallGhost}>
-                        +
-                      </button>
+                    <div style={itemActions}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button onClick={() => decQty(ix)} style={btnSmallGhost}>
+                          −
+                        </button>
+                        <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
+                        <button onClick={() => incQty(ix)} style={btnSmallGhost}>
+                          +
+                        </button>
+                      </div>
 
-                      <button onClick={() => removeItem(ix)} style={btnSmallGhost}>
+                      <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
                         Remove
                       </button>
                     </div>
@@ -1096,14 +1145,9 @@ export default function CartPage() {
                   <div style={helperText}>Enter your coupon code</div>
                 </div>
 
-                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
-                  <input
-                    value={coupon}
-                    onChange={(e) => setCoupon(e.target.value)}
-                    placeholder="Enter coupon code"
-                    style={input}
-                  />
-                  <button onClick={applyCoupon} style={btnSmallPrimary} disabled={couponLoading}>
+                <div style={offerRow}>
+                  <input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" style={input} />
+                  <button onClick={applyCoupon} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }} disabled={couponLoading}>
                     {couponLoading ? "Checking…" : "Apply"}
                   </button>
                 </div>
@@ -1119,7 +1163,7 @@ export default function CartPage() {
                           setCoupon("");
                           setInfoMsg("Coupon removed.");
                         }}
-                        style={btnSmallGhost}
+                        style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}
                       >
                         Remove coupon
                       </button>
@@ -1139,7 +1183,7 @@ export default function CartPage() {
             </div>
 
             {/* RIGHT: Delivery Details + Summary */}
-            <div style={cardGlass}>
+            <div ref={deliveryRef} style={cardGlass}>
               <h2 style={sectionTitle}>Delivery Details</h2>
               <div style={helperText}>Enter delivery details to place the order.</div>
 
@@ -1183,10 +1227,7 @@ export default function CartPage() {
                     <button onClick={() => setPaymentMethod("upi")} style={paymentMethod === "upi" ? chipActive : chip}>
                       UPI
                     </button>
-                    <button
-                      onClick={() => setPaymentMethod("card")}
-                      style={paymentMethod === "card" ? chipActive : chip}
-                    >
+                    <button onClick={() => setPaymentMethod("card")} style={paymentMethod === "card" ? chipActive : chip}>
                       Card
                     </button>
                   </div>
@@ -1197,15 +1238,7 @@ export default function CartPage() {
                   Save this address on this device
                 </label>
 
-                <div
-                  style={{
-                    marginTop: 6,
-                    paddingTop: 10,
-                    borderTop: "1px solid rgba(0,0,0,0.08)",
-                    fontWeight: 900,
-                    color: "rgba(17,24,39,0.75)",
-                  }}
-                >
+                <div style={{ marginTop: 6, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0" }}>
                     <span>Total items</span>
                     <span style={{ color: "#0b1220" }}>{itemCount}</span>
@@ -1240,19 +1273,7 @@ export default function CartPage() {
                     </div>
                   ) : null}
 
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      paddingTop: 12,
-                      fontWeight: 1000,
-                      fontSize: 16,
-                      color: "#0b1220",
-                      borderTop: "1px solid rgba(0,0,0,0.08)",
-                      marginTop: 10,
-                      paddingBottom: 10,
-                    }}
-                  >
+                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 12, fontWeight: 1000, fontSize: 16, color: "#0b1220", borderTop: "1px solid rgba(0,0,0,0.08)", marginTop: 10, paddingBottom: 10 }}>
                     <span>Payable</span>
                     <span>{money(payable)}</span>
                   </div>
@@ -1280,14 +1301,12 @@ export default function CartPage() {
         )}
 
         {items.length > 0 ? (
-          <div style={stickyBar}>
+          <div style={sticky}>
             <div style={{ fontWeight: 1000 }}>
               {itemCount} item{itemCount === 1 ? "" : "s"} • Payable <b>{money(payable)}</b>
             </div>
-            <button
-              onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" })}
-              style={btnSmallPrimary}
-            >
+
+            <button onClick={scrollToDelivery} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }}>
               Checkout →
             </button>
           </div>

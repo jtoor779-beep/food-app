@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function CheckoutSuccessPage() {
+function SuccessInner() {
   const sp = useSearchParams();
   const sessionId = sp.get("session_id");
 
@@ -53,6 +54,26 @@ export default function CheckoutSuccessPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function CheckoutSuccessPage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={pageBg}>
+          <div style={{ maxWidth: 980, margin: "0 auto" }}>
+            <div style={card}>
+              <div style={badgeOk}>Payment Successful</div>
+              <h1 style={title}>Loading…</h1>
+              <p style={sub}>Preparing your confirmation details.</p>
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <SuccessInner />
+    </Suspense>
   );
 }
 

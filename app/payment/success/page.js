@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
 
 function clampText(s, max = 140) {
@@ -247,7 +247,7 @@ function detectOrderTypeFromLocalStorage() {
   return "restaurant";
 }
 
-export default function PaymentSuccessPage() {
+function PaymentSuccessInner() {
   const sp = useSearchParams();
   const router = useRouter();
   const sessionId = sp.get("session_id") || "";
@@ -800,6 +800,8 @@ export default function PaymentSuccessPage() {
 
   const typePill = orderType === "grocery" ? "Grocery Order" : "Restaurant Order";
 
+  const showRedirect = paid && orderSaved && !orderSaving && typeof redirectIn === "number";
+
   return (
     <main style={pageBg}>
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
@@ -822,7 +824,7 @@ export default function PaymentSuccessPage() {
               <b>Order Status:</b> {orderStatusText}
             </div>
 
-            {paid && orderSaved && !orderSaving && typeof redirectIn === "number" ? (
+            {showRedirect ? (
               <div style={{ marginTop: 6, ...tinyNote }}>
                 Redirecting in <b>{Math.max(0, redirectIn)}</b>s…
               </div>
@@ -918,6 +920,51 @@ export default function PaymentSuccessPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function PaymentSuccessPage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={pageBg}>
+          <div style={{ maxWidth: 980, margin: "0 auto" }}>
+            <div style={heroGlass}>
+              <div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={pillWarn}>Checking Payment…</div>
+                  <div style={pillSoft}>Preparing…</div>
+                </div>
+
+                <h1 style={title}>Loading…</h1>
+                <div style={sub}>Verifying your payment securely.</div>
+
+                <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Link href="/orders" style={btnPrimary}>
+                    View My Orders
+                  </Link>
+                  <Link href="/" style={btnGhost}>
+                    Back to Home
+                  </Link>
+                </div>
+              </div>
+
+              <div style={sideCard}>
+                <div style={{ fontWeight: 1000, color: "#0b1220" }}>Payment Details</div>
+                <div style={{ marginTop: 10, ...tinyNote }}>Loading session…</div>
+              </div>
+            </div>
+
+            <div style={infoCard}>
+              <div style={infoTitle}>Please wait…</div>
+              <div style={infoText}>We’re loading your confirmation page.</div>
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <PaymentSuccessInner />
+    </Suspense>
   );
 }
 

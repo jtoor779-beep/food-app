@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
@@ -43,7 +43,7 @@ function yyyymmdd(d) {
   }
 }
 
-export default function RestaurantInvoicePage() {
+function InvoiceInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -71,10 +71,16 @@ export default function RestaurantInvoicePage() {
     const fromCol = Number(order?.subtotal_amount || 0);
     if (fromCol > 0) return fromCol;
 
-    return items.reduce((s, it) => s + Number(it?.qty || 0) * Number(it?.price_each || 0), 0);
+    return items.reduce(
+      (s, it) => s + Number(it?.qty || 0) * Number(it?.price_each || 0),
+      0
+    );
   }, [order, items]);
 
-  const discount = useMemo(() => Math.max(0, Number(order?.discount_amount || 0)), [order]);
+  const discount = useMemo(
+    () => Math.max(0, Number(order?.discount_amount || 0)),
+    [order]
+  );
 
   const total = useMemo(() => {
     // prefer total_amount, else total, else computed
@@ -163,7 +169,11 @@ export default function RestaurantInvoicePage() {
         ];
 
         for (const sel of tries) {
-          const { data: r, error: rErr } = await supabase.from("restaurants").select(sel).eq("id", o.restaurant_id).maybeSingle();
+          const { data: r, error: rErr } = await supabase
+            .from("restaurants")
+            .select(sel)
+            .eq("id", o.restaurant_id)
+            .maybeSingle();
           if (!rErr && r) {
             rRow = r;
             break;
@@ -195,16 +205,23 @@ export default function RestaurantInvoicePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const restName = safeStr(restaurant?.name) || safeStr(restaurant?.restaurant_name) || "Restaurant";
+  const restName =
+    safeStr(restaurant?.name) ||
+    safeStr(restaurant?.restaurant_name) ||
+    "Restaurant";
 
   const restPhone = safeStr(restaurant?.phone);
   const restAddr =
     safeStr(restaurant?.address) ||
-    [safeStr(restaurant?.address_line1), safeStr(restaurant?.address_line2)].filter(Boolean).join(", ");
+    [safeStr(restaurant?.address_line1), safeStr(restaurant?.address_line2)]
+      .filter(Boolean)
+      .join(", ");
 
   const custName = safeStr(order?.customer_name) || safeStr(user?.email) || "Customer";
   const custPhone = safeStr(order?.phone);
-  const custAddr = [safeStr(order?.address_line1), safeStr(order?.address_line2)].filter(Boolean).join(", ");
+  const custAddr = [safeStr(order?.address_line1), safeStr(order?.address_line2)]
+    .filter(Boolean)
+    .join(", ");
 
   const coupon = safeStr(order?.coupon_code);
 
@@ -215,7 +232,10 @@ export default function RestaurantInvoicePage() {
   // ✅ Premium: invoice number (no DB needed)
   const invoiceNo = useMemo(() => {
     const dt = yyyymmdd(order?.created_at || Date.now());
-    const short = String(order?.id || id || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 6).toUpperCase();
+    const short = String(order?.id || id || "")
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .slice(0, 6)
+      .toUpperCase();
     return `INV-${dt}-${short || "000000"}`;
   }, [order, id]);
 
@@ -224,7 +244,7 @@ export default function RestaurantInvoicePage() {
     return raw.length > 12 ? `${raw.slice(0, 6)}…${raw.slice(-4)}` : raw;
   }, [order, id]);
 
-  const isPaid = !!order?.stripe_session_id; // your current system: stripe_session_id present => online paid
+  const isPaid = !!order?.stripe_session_id; // stripe_session_id present => online paid
   const payLabel = isPaid ? "PAID" : "PENDING";
 
   return (
@@ -242,7 +262,11 @@ export default function RestaurantInvoicePage() {
 
             <h1 style={title}>Order Invoice</h1>
             <div style={sub}>
-              {loading ? "Loading invoice…" : err ? "Invoice error" : `Order #${String(order?.id || "").slice(0, 8)}…`}
+              {loading
+                ? "Loading invoice…"
+                : err
+                ? "Invoice error"
+                : `Order #${String(order?.id || "").slice(0, 8)}…`}
             </div>
 
             {/* ✅ Premium header chips */}
@@ -264,7 +288,10 @@ export default function RestaurantInvoicePage() {
             ) : null}
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="no-print">
+          <div
+            style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}
+            className="no-print"
+          >
             <Link href="/orders" style={btnGhost}>
               ← Back to Orders
             </Link>
@@ -276,7 +303,11 @@ export default function RestaurantInvoicePage() {
 
         {err ? <div style={alertErr}>{err}</div> : null}
 
-        {loading ? <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading…</div> : null}
+        {loading ? (
+          <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>
+            Loading…
+          </div>
+        ) : null}
 
         {!loading && !err && order ? (
           <div style={{ marginTop: 12, ...cardGlass }}>
@@ -288,13 +319,19 @@ export default function RestaurantInvoicePage() {
                 </div>
                 <div>
                   <div style={brandTitle}>{restName}</div>
-                  <div style={brandSub}>Thank you for ordering with HomyFood • Food + Groceries</div>
+                  <div style={brandSub}>
+                    Thank you for ordering with HomyFood • Food + Groceries
+                  </div>
                 </div>
               </div>
 
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Invoice Total</div>
-                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>{money(total)}</div>
+                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>
+                  Invoice Total
+                </div>
+                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>
+                  {money(total)}
+                </div>
                 <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.60)", fontSize: 12 }}>
                   Generated: {formatTime(new Date())}
                 </div>
@@ -302,7 +339,15 @@ export default function RestaurantInvoicePage() {
             </div>
 
             {/* Header Row */}
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
+                marginTop: 12,
+              }}
+            >
               <div style={box}>
                 <div style={boxTitle}>Billed From</div>
                 <div style={boxStrong}>{restName}</div>
@@ -334,8 +379,12 @@ export default function RestaurantInvoicePage() {
                 </div>
                 <div style={boxText}>
                   <b>Payment:</b>{" "}
-                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>{String(method || "stripe").toUpperCase()}</span>{" "}
-                  <span style={{ marginLeft: 6, ...(isPaid ? paidDot : pendingDot) }}>{isPaid ? "Paid" : "Pending"}</span>
+                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>
+                    {String(method || "stripe").toUpperCase()}
+                  </span>{" "}
+                  <span style={{ marginLeft: 6, ...(isPaid ? paidDot : pendingDot) }}>
+                    {isPaid ? "Paid" : "Pending"}
+                  </span>
                 </div>
                 {coupon ? (
                   <div style={boxText}>
@@ -352,7 +401,15 @@ export default function RestaurantInvoicePage() {
 
             {/* Items */}
             <div style={{ marginTop: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
                 <div style={{ fontWeight: 1000, color: "#0b1220" }}>Items</div>
                 <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.65)", fontSize: 12 }}>
                   {itemsCount} item(s) • {safeStr(order.status) || "pending"}
@@ -374,9 +431,15 @@ export default function RestaurantInvoicePage() {
                   return (
                     <div key={it.id} style={tRowHover}>
                       <div style={{ fontWeight: 950, color: "#0b1220" }}>{name}</div>
-                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{qty}</div>
-                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{money(priceEach)}</div>
-                      <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>{money(qty * priceEach)}</div>
+                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
+                        {qty}
+                      </div>
+                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
+                        {money(priceEach)}
+                      </div>
+                      <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>
+                        {money(qty * priceEach)}
+                      </div>
                     </div>
                   );
                 })}
@@ -385,7 +448,14 @@ export default function RestaurantInvoicePage() {
               {order?.instructions ? (
                 <div style={{ marginTop: 12, ...noteBox }}>
                   <div style={{ fontWeight: 1000 }}>Customer Instructions</div>
-                  <div style={{ marginTop: 6, fontWeight: 850, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontWeight: 850,
+                      color: "rgba(17,24,39,0.72)",
+                      lineHeight: 1.45,
+                    }}
+                  >
                     {String(order.instructions)}
                   </div>
                 </div>
@@ -408,7 +478,9 @@ export default function RestaurantInvoicePage() {
 
                 <div style={line}>
                   <span>Discount{coupon ? ` (${coupon})` : ""}</span>
-                  <span style={{ color: discount > 0 ? "#065f46" : "#0b1220" }}>{discount > 0 ? `- ${money(discount)}` : money(0)}</span>
+                  <span style={{ color: discount > 0 ? "#065f46" : "#0b1220" }}>
+                    {discount > 0 ? `- ${money(discount)}` : money(0)}
+                  </span>
                 </div>
 
                 <div style={{ ...line, borderBottom: "none" }}>
@@ -433,6 +505,42 @@ export default function RestaurantInvoicePage() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+export default function RestaurantInvoicePage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={pageBg}>
+          <style>{printCss}</style>
+          <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+            <div style={heroGlass}>
+              <div>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={pill}>Invoice • Restaurant</div>
+                  <div style={{ ...pillPending }}>LOADING</div>
+                </div>
+                <h1 style={title}>Order Invoice</h1>
+                <div style={sub}>Preparing invoice…</div>
+              </div>
+
+              <div className="no-print" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <Link href="/orders" style={btnGhost}>
+                  ← Back to Orders
+                </Link>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12, ...cardGlass }}>
+              <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Loading…</div>
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <InvoiceInner />
+    </Suspense>
   );
 }
 

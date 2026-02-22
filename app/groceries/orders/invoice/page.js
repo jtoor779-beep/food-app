@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
@@ -53,10 +53,23 @@ function safeNum(v, d = 0) {
 }
 
 /* =========================
-   PAGE
+   ✅ FIX FOR NEXT BUILD:
+   Wrap useSearchParams() in Suspense boundary
    ========================= */
 
 export default function GroceryInvoicePage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 20, fontWeight: 900 }}>Loading invoice…</div>}>
+      <GroceryInvoiceInner />
+    </Suspense>
+  );
+}
+
+/* =========================
+   PAGE (OLD LOGIC 100% KEPT)
+   ========================= */
+
+function GroceryInvoiceInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -536,9 +549,12 @@ const chip = {
 
 function statusChipStyle(status) {
   const s = String(status || "").toLowerCase();
-  if (s === "delivered") return { background: "rgba(236,253,245,0.92)", border: "1px solid rgba(16,185,129,0.25)", color: "#065f46" };
-  if (s === "cancelled" || s === "rejected") return { background: "rgba(254,242,242,0.92)", border: "1px solid rgba(239,68,68,0.25)", color: "#7f1d1d" };
-  if (s === "on_the_way" || s === "picked_up" || s === "delivering") return { background: "rgba(239,246,255,0.92)", border: "1px solid rgba(59,130,246,0.22)", color: "#1e40af" };
+  if (s === "delivered")
+    return { background: "rgba(236,253,245,0.92)", border: "1px solid rgba(16,185,129,0.25)", color: "#065f46" };
+  if (s === "cancelled" || s === "rejected")
+    return { background: "rgba(254,242,242,0.92)", border: "1px solid rgba(239,68,68,0.25)", color: "#7f1d1d" };
+  if (s === "on_the_way" || s === "picked_up" || s === "delivering")
+    return { background: "rgba(239,246,255,0.92)", border: "1px solid rgba(59,130,246,0.22)", color: "#1e40af" };
   return { background: "rgba(255,247,237,0.92)", border: "1px solid rgba(249,115,22,0.22)", color: "#9a3412" };
 }
 

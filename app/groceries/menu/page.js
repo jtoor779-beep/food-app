@@ -1,75 +1,36 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
 /* =========================
-   Helpers
-   ========================= */
-function clean(v) {
-  return String(v || "").trim();
-}
-function lower(v) {
-  return clean(v).toLowerCase();
-}
-function money(v) {
-  const n = Number(v || 0);
-  return `₹${n.toFixed(0)}`;
-}
-function clampText(s, max = 90) {
-  const str = String(s ?? "");
-  if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
-}
-function num(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/* =========================
-   Cart (localStorage)
+   ✅ Suspense Wrapper (Next.js build fix)
    =========================
-   IMPORTANT FIX:
-   Your /cart page is reading from "cart_items".
-   Previously groceries saved into "grocery_cart_items" so /cart looked empty.
+   Next.js requires useSearchParams() to be wrapped in <Suspense>.
+   We keep your entire old page logic inside GroceryMenuInner().
 */
-const CART_KEY = "cart_items"; // ✅ same key used by restaurant cart page
-
-function readCart() {
-  try {
-    // ✅ primary: cart_items (shared cart page)
-    const a = localStorage.getItem(CART_KEY);
-    if (a) return JSON.parse(a);
-
-    // ✅ fallback: older grocery keys (so nothing breaks if already stored)
-    const b = localStorage.getItem("grocery_cart_items");
-    if (b) return JSON.parse(b);
-
-    const c = localStorage.getItem("grocery_cart");
-    if (c) return JSON.parse(c);
-
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCart(items) {
-  // ✅ write to primary key so /cart page reads it
-  localStorage.setItem(CART_KEY, JSON.stringify(items));
-
-  // ✅ also keep a backup in grocery key (optional, helps future separate grocery cart page)
-  try {
-    localStorage.setItem("grocery_cart_items", JSON.stringify(items));
-  } catch {}
+export default function GroceryMenuPage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={pageBg}>
+          <div style={{ maxWidth: 980, margin: "0 auto", fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>
+            Loading groceries…
+          </div>
+        </main>
+      }
+    >
+      <GroceryMenuInner />
+    </Suspense>
+  );
 }
 
 /* =========================
-   Page
+   Page (your original logic)
    ========================= */
-export default function GroceryMenuPage() {
+function GroceryMenuInner() {
   const router = useRouter();
   const params = useSearchParams();
   const storeId = clean(params.get("store_id"));
@@ -241,13 +202,7 @@ export default function GroceryMenuPage() {
 
   // ✅ legacy subcategory fallback (if you ever store it in a text column later)
   function legacySubName(it) {
-    return (
-      clean(it?.subcategory) ||
-      clean(it?.sub_category) ||
-      clean(it?.subCategory) ||
-      clean(it?.subcategory_name) ||
-      ""
-    );
+    return clean(it?.subcategory) || clean(it?.sub_category) || clean(it?.subCategory) || clean(it?.subcategory_name) || "";
   }
 
   const processed = useMemo(() => {
@@ -413,9 +368,7 @@ export default function GroceryMenuPage() {
           <div style={heroLeft}>
             <div style={pill}>Groceries</div>
             <h1 style={heroTitle}>{store?.name || "Grocery Store"}</h1>
-            <div style={subText}>
-              📍 {store?.city || "City not set"} • Browse items & add to cart
-            </div>
+            <div style={subText}>📍 {store?.city || "City not set"} • Browse items & add to cart</div>
 
             <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button onClick={() => router.push("/groceries")} style={btnLight}>
@@ -449,15 +402,7 @@ export default function GroceryMenuPage() {
 
         {/* FILTER BAR */}
         <div style={panelGlass}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 10,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ fontWeight: 1000, color: "#0b1220" }}>Search</div>
             <button onClick={clearFilters} style={btnGhost}>
               Clear
@@ -508,7 +453,13 @@ export default function GroceryMenuPage() {
           ) : null}
 
           <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.6fr", gap: 10 }}>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search items…" style={input} autoComplete="off" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search items…"
+              style={input}
+              autoComplete="off"
+            />
             <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={input}>
               <option value="recommended">Sort: Recommended</option>
               <option value="newest">Sort: Newest</option>
@@ -675,6 +626,67 @@ export default function GroceryMenuPage() {
       </div>
     </main>
   );
+}
+
+/* =========================
+   Helpers
+   ========================= */
+function clean(v) {
+  return String(v || "").trim();
+}
+function lower(v) {
+  return clean(v).toLowerCase();
+}
+function money(v) {
+  const n = Number(v || 0);
+  return `₹${n.toFixed(0)}`;
+}
+function clampText(s, max = 90) {
+  const str = String(s ?? "");
+  if (str.length <= max) return str;
+  return str.slice(0, max - 1) + "…";
+}
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/* =========================
+   Cart (localStorage)
+   =========================
+   IMPORTANT FIX:
+   Your /cart page is reading from "cart_items".
+   Previously groceries saved into "grocery_cart_items" so /cart looked empty.
+*/
+const CART_KEY = "cart_items"; // ✅ same key used by restaurant cart page
+
+function readCart() {
+  try {
+    // ✅ primary: cart_items (shared cart page)
+    const a = localStorage.getItem(CART_KEY);
+    if (a) return JSON.parse(a);
+
+    // ✅ fallback: older grocery keys (so nothing breaks if already stored)
+    const b = localStorage.getItem("grocery_cart_items");
+    if (b) return JSON.parse(b);
+
+    const c = localStorage.getItem("grocery_cart");
+    if (c) return JSON.parse(c);
+
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCart(items) {
+  // ✅ write to primary key so /cart page reads it
+  localStorage.setItem(CART_KEY, JSON.stringify(items));
+
+  // ✅ also keep a backup in grocery key (optional, helps future separate grocery cart page)
+  try {
+    localStorage.setItem("grocery_cart_items", JSON.stringify(items));
+  } catch {}
 }
 
 /* =========================

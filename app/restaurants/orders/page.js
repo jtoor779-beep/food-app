@@ -146,35 +146,6 @@ const emptyBox = {
 };
 
 const styles = {
-  grid: { display: "grid", gridTemplateColumns: "1fr", gap: 14, marginTop: 14 },
-
-  orderCard: {
-    borderRadius: 18,
-    padding: 16,
-    background: "rgba(255,255,255,0.78)",
-    border: "1px solid rgba(0,0,0,0.08)",
-    boxShadow: "0 12px 36px rgba(0,0,0,0.08)",
-    backdropFilter: "blur(10px)",
-  },
-
-  orderTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
-
-  sectionTitle: { marginTop: 12, marginBottom: 6, fontWeight: 950, fontSize: 13, color: "#0b1220" },
-
-  row: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
-
-  infoBox: {
-    border: "1px solid rgba(0,0,0,0.08)",
-    borderRadius: 16,
-    padding: 12,
-    background: "rgba(255,255,255,0.75)",
-    fontSize: 13,
-  },
-
-  label: { color: "rgba(17,24,39,0.6)", fontWeight: 900, fontSize: 12, marginBottom: 4 },
-
-  val: { fontWeight: 950, color: "#0b1220" },
-
   select: {
     padding: "10px 12px",
     borderRadius: 14,
@@ -200,6 +171,10 @@ const styles = {
 
   smallMuted: { color: "rgba(17,24,39,0.65)", fontSize: 12, fontWeight: 850 },
 };
+
+/* =========================
+   HELPERS (your existing logic kept)
+   ========================= */
 
 function pick(obj, keys, fallback = "-") {
   for (const k of keys) {
@@ -277,6 +252,79 @@ function mapsUrlFromOrder(o) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(addr || "").trim())}`;
 }
 
+/* =========================
+   CUSTOMER-LIKE UI PIECES (for owner page)
+   ========================= */
+
+function friendlyStatus(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "pending") return "Pending";
+  if (s === "preparing") return "Preparing";
+  if (s === "ready") return "Ready";
+  if (s === "delivering") return "Out for delivery";
+  if (s === "picked_up") return "Picked up";
+  if (s === "on_the_way") return "On the way";
+  if (s === "delivered") return "Delivered";
+  if (s === "rejected" || s === "cancelled") return "Rejected";
+  return s ? s : "Pending";
+}
+
+function statusStepInfo(status) {
+  const s = String(status || "").toLowerCase();
+
+  if (s === "rejected" || s === "cancelled") {
+    return { mode: "cancelled", currentIndex: 0 };
+  }
+
+  if (s === "delivered") return { mode: "normal", currentIndex: 3 };
+  if (s === "on_the_way" || s === "picked_up" || s === "delivering") return { mode: "normal", currentIndex: 2 };
+  if (s === "ready" || s === "preparing" || s === "accepted" || s === "confirmed") return { mode: "normal", currentIndex: 1 };
+  return { mode: "normal", currentIndex: 0 };
+}
+
+function StatusSteps({ status }) {
+  const { mode, currentIndex } = statusStepInfo(status);
+
+  if (mode === "cancelled") {
+    return (
+      <div
+        style={{
+          marginTop: 10,
+          borderRadius: 14,
+          padding: 12,
+          border: "1px solid rgba(239,68,68,0.25)",
+          background: "rgba(254,242,242,0.90)",
+        }}
+      >
+        <div style={{ fontWeight: 1000, color: "#7f1d1d" }}>Order Cancelled</div>
+        <div style={{ marginTop: 6, fontWeight: 850, color: "rgba(127,29,29,0.85)", fontSize: 13 }}>This order was cancelled/rejected.</div>
+      </div>
+    );
+  }
+
+  const steps = ["Placed", "Preparing", "On the way", "Delivered"];
+
+  return (
+    <div style={stepsWrap}>
+      {steps.map((t, i) => {
+        const done = i < currentIndex;
+        const active = i === currentIndex;
+        return (
+          <div key={t} style={stepItem}>
+            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "✓" : i + 1}</div>
+            <div style={{ ...stepLabel, opacity: done || active ? 1 : 0.65 }}>{t}</div>
+            {i !== steps.length - 1 ? <div style={{ ...stepLine, ...(done ? stepLineDone : stepLineTodo) }} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================
+   PAGE
+   ========================= */
+
 export default function RestaurantOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -285,7 +333,7 @@ export default function RestaurantOrdersPage() {
   const [ownerEmail, setOwnerEmail] = useState("");
   const [role, setRole] = useState("");
 
-  // ✅ Multi-restaurant support (fixes "JSON object requested..." error)
+  // ✅ Multi-restaurant support
   const [restaurants, setRestaurants] = useState([]); // [{id,name}]
   const [restaurantId, setRestaurantId] = useState("");
   const [restaurantName, setRestaurantName] = useState("");
@@ -298,6 +346,9 @@ export default function RestaurantOrdersPage() {
 
   // ✅ keep one realtime channel only
   const channelRef = useRef(null);
+
+  // ✅ NEW: customer-like behavior (list view + one open detail)
+  const [openOrderId, setOpenOrderId] = useState(null);
 
   async function initOwner() {
     setErr("");
@@ -329,7 +380,7 @@ export default function RestaurantOrdersPage() {
     }
     setRole(prof?.role || "restaurant_owner");
 
-    // ✅ FIX: fetch ALL restaurants (no .single/.maybeSingle)
+    // ✅ fetch ALL restaurants (no .single/.maybeSingle)
     const { data: rs, error: rErr } = await supabase
       .from("restaurants")
       .select("id,name,owner_user_id")
@@ -366,13 +417,13 @@ export default function RestaurantOrdersPage() {
   async function loadOrdersForRestaurant(rid) {
     if (!rid) {
       setOrders([]);
+      setOpenOrderId(null);
       return;
     }
 
     setErr("");
     setInfo("");
 
-    // orders
     const { data: o, error: oErr } = await supabase
       .from("orders")
       .select("*")
@@ -389,11 +440,9 @@ export default function RestaurantOrdersPage() {
     let nameByMenuId = {};
 
     if (orderIds.length > 0) {
-      // order_items
       const { data: items, error: iErr } = await supabase.from("order_items").select("*").in("order_id", orderIds);
 
       if (!iErr && items) {
-        // fetch menu item names
         const menuIds = Array.from(new Set(items.map((it) => it.menu_item_id).filter(Boolean)));
 
         if (menuIds.length > 0) {
@@ -407,7 +456,6 @@ export default function RestaurantOrdersPage() {
           }
         }
 
-        // group items by order
         itemsByOrder = items.reduce((acc, it) => {
           const oid = it.order_id;
           if (!oid) return acc;
@@ -416,15 +464,13 @@ export default function RestaurantOrdersPage() {
           const resolvedName = nameByMenuId[mid]?.name || fallbackName || "Item";
 
           const qty = safeNum(pick(it, ["qty", "quantity"], 1), 1);
-          const price =
-            safeNum(pick(it, ["price_each", "price", "item_price", "unit_price"], NaN), NaN) ??
-            NaN;
+          const price = safeNum(pick(it, ["price_each", "price", "item_price", "unit_price"], NaN), NaN) ?? NaN;
 
           const resolvedPrice = Number.isFinite(price)
             ? price
             : Number.isFinite(safeNum(nameByMenuId[mid]?.price, NaN))
-              ? safeNum(nameByMenuId[mid]?.price, 0)
-              : 0;
+            ? safeNum(nameByMenuId[mid]?.price, 0)
+            : 0;
 
           const clean = {
             ...it,
@@ -447,12 +493,16 @@ export default function RestaurantOrdersPage() {
     }));
 
     setOrders(merged);
+
+    // ✅ if open order no longer exists, close it safely
+    if (openOrderId && !merged.find((x) => x.id === openOrderId)) {
+      setOpenOrderId(null);
+    }
   }
 
   function setupRealtime(rid) {
     if (!rid) return;
 
-    // clear old channel if switching restaurant
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
@@ -461,7 +511,6 @@ export default function RestaurantOrdersPage() {
     const ch = supabase
       .channel(`owner_orders_${rid}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `restaurant_id=eq.${rid}` }, () => {
-        // refresh list when anything changes for this restaurant
         loadOrdersForRestaurant(rid);
       })
       .subscribe();
@@ -481,7 +530,6 @@ export default function RestaurantOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // whenever restaurantId changes, load orders + realtime for that restaurant
   useEffect(() => {
     if (!restaurantId) return;
     loadOrdersForRestaurant(restaurantId);
@@ -548,9 +596,14 @@ export default function RestaurantOrdersPage() {
     return list;
   }, [orders, statusFilter, searchText]);
 
+  const openOrder = useMemo(() => {
+    if (!openOrderId) return null;
+    return (orders || []).find((x) => x.id === openOrderId) || null;
+  }, [orders, openOrderId]);
+
   return (
     <main style={pageBg}>
-      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ width: "100%", margin: "0 auto" }}>
         {/* HERO */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
@@ -577,7 +630,7 @@ export default function RestaurantOrdersPage() {
           </div>
         </div>
 
-        {/* Badges + Controls */}
+        {/* Controls (keep your existing logic) */}
         <div style={{ ...cardGlass, marginTop: 12 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <span style={pill}>Owner: {ownerEmail || "-"}</span>
@@ -592,6 +645,7 @@ export default function RestaurantOrdersPage() {
                   setRestaurantId(rid);
                   const found = (restaurants || []).find((x) => String(x.id) === String(rid));
                   setRestaurantName(found?.name || "");
+                  setOpenOrderId(null); // ✅ close details when switching restaurants
                 }}
                 style={styles.select}
               >
@@ -642,7 +696,13 @@ export default function RestaurantOrdersPage() {
                 placeholder="Search name / phone / address / item / order id…"
                 style={styles.input}
               />
-              <button onClick={() => { setSearchText(""); setStatusFilter("all"); }} style={btnGhost}>
+              <button
+                onClick={() => {
+                  setSearchText("");
+                  setStatusFilter("all");
+                }}
+                style={btnGhost}
+              >
                 Clear
               </button>
             </div>
@@ -658,15 +718,99 @@ export default function RestaurantOrdersPage() {
           <div style={emptyBox}>No restaurant selected.</div>
         ) : visibleOrders.length === 0 ? (
           <div style={emptyBox}>No orders found for current filter/search.</div>
-        ) : (
-          <div style={styles.grid}>
+        ) : null}
+
+        {/* =========================
+            CLEAN LIST VIEW (customer-like)
+           ========================= */}
+        {!loading && visibleOrders.length > 0 && !openOrder ? (
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
             {visibleOrders.map((o) => {
-              const c = statusColor(o.status);
+              const items = o.items || [];
+
+              const calcTotal = items.reduce((sum, it) => sum + safeNum(it.line_total, 0), 0);
+              const total = safeNum(pick(o, ["total", "amount", "grand_total"], NaN), NaN);
+              const finalTotal = Number.isFinite(total) ? total : calcTotal;
+
+              const badge = statusColor(o.status);
+
+              const firstItemName = items?.[0]?.item_name || items?.[0]?.name || items?.[0]?.title || "Items";
+              const itemsCount = items.reduce((s, it) => s + Number(it.qty || it.quantity || 0), 0);
+
+              return (
+                <div key={o.id} style={listCard} onClick={() => setOpenOrderId(o.id)} title="Click to view details">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontWeight: 1000,
+                          fontSize: 12,
+                          background: badge.bg,
+                          border: `1px solid ${badge.border}`,
+                          color: badge.text,
+                        }}
+                      >
+                        {friendlyStatus(o.status).toUpperCase()}
+                      </span>
+
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>
+                        Order • <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}…</span>
+                      </div>
+
+                      <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>{formatWhen(o.created_at || o.createdAt)}</div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>₹{Math.round(finalTotal || 0)}</div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenOrderId(o.id);
+                        }}
+                        style={btnView}
+                      >
+                        View details →
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <StatusSteps status={o.status} />
+                  </div>
+
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
+                      {firstItemName}
+                      {itemsCount > 1 ? (
+                        <span style={{ marginLeft: 8, color: "rgba(17,24,39,0.55)", fontWeight: 900, fontSize: 12 }}>
+                          + {itemsCount - 1} more
+                        </span>
+                      ) : null}
+                    </div>
+                    <div style={{ color: "rgba(17,24,39,0.55)", fontWeight: 850, fontSize: 12 }}>Click to open full details + items</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {/* =========================
+            DETAIL VIEW (ONLY ONE ORDER) - owner keeps status change
+           ========================= */}
+        {!loading && visibleOrders.length > 0 && openOrder ? (
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+            {(() => {
+              const o = openOrder;
 
               const items = o.items || [];
               const calcTotal = items.reduce((sum, it) => sum + safeNum(it.line_total, 0), 0);
               const total = safeNum(pick(o, ["total", "amount", "grand_total"], NaN), NaN);
               const finalTotal = Number.isFinite(total) ? total : calcTotal;
+
+              const badge = statusColor(o.status);
 
               const customerName = pick(o, ["customer_name", "name", "full_name"]);
               const customerPhone = pick(o, ["phone", "customer_phone", "mobile", "customer_mobile"]);
@@ -678,40 +822,99 @@ export default function RestaurantOrdersPage() {
               const mapsUrl = mapsUrlFromOrder(o);
 
               return (
-                <div key={o.id} style={styles.orderCard}>
-                  <div style={styles.orderTop}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={cardGlass}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <button onClick={() => setOpenOrderId(null)} style={btnBack}>
+                      ← Back to all orders
+                    </button>
+
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <span
                         style={{
-                          ...pill,
-                          background: c.bg,
-                          border: `1px solid ${c.border}`,
-                          color: c.text,
-                          textTransform: "capitalize",
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          fontWeight: 1000,
+                          fontSize: 12,
+                          background: badge.bg,
+                          border: `1px solid ${badge.border}`,
+                          color: badge.text,
                         }}
                       >
-                        {o.status || "unknown"}
+                        {friendlyStatus(o.status).toUpperCase()}
                       </span>
-                      <span style={{ fontWeight: 950, color: "#0b1220" }}>{formatWhen(o.created_at || o.createdAt)}</span>
-                      <span style={styles.smallMuted}>
-                        Order ID: <span style={{ color: "#0b1220", fontWeight: 950 }}>{o.id}</span>
-                      </span>
+
+                      <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>{formatWhen(o.created_at || o.createdAt)}</div>
+
+                      <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>
+                        Order ID: <span style={{ color: "#0b1220" }}>{o.id}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: ₹{Math.round(finalTotal || 0)}</div>
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <StatusSteps status={o.status} />
+                  </div>
+
+                  {/* Owner tools + status update */}
+                  <div
+                    style={{
+                      marginTop: 12,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div style={styles.smallMuted}>
+                      Restaurant: <span style={{ color: "#0b1220", fontWeight: 950 }}>{restaurantName || "-"}</span>
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }}>Total: ₹{Math.round(finalTotal || 0)}</div>
+                      <span style={{ fontWeight: 950, fontSize: 13, color: "#0b1220" }}>Change Status:</span>
+                      <select value={String(o.status || "pending")} onChange={(e) => updateStatus(o.id, e.target.value)} style={styles.select}>
+                        <option value="pending">pending</option>
+                        <option value="preparing">preparing</option>
+                        <option value="ready">ready</option>
+
+                        <option value="delivering">delivering</option>
+                        <option value="picked_up">picked_up</option>
+                        <option value="on_the_way">on_the_way</option>
+
+                        <option value="delivered">delivered</option>
+                        <option value="rejected">rejected</option>
+                      </select>
                     </div>
                   </div>
 
-                  <div style={styles.row}>
-                    <div style={styles.infoBox}>
-                      <div style={styles.label}>Customer</div>
-                      <div style={styles.val}>{customerName}</div>
+                  {/* Two boxes like customer details */}
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div
+                      style={{
+                        borderRadius: 16,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "rgba(255,255,255,0.75)",
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Customer</div>
 
-                      <div style={{ height: 10 }} />
-
-                      <div style={styles.label}>Phone</div>
-                      <div style={styles.val}>{customerPhone}</div>
+                      <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                        <b>Name:</b> {customerName || "—"}
+                      </div>
+                      <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                        <b>Phone:</b> {customerPhone || "—"}
+                      </div>
+                      <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                        <b>Address:</b> {customerAddress || "—"}
+                      </div>
+                      {String(customerInstructions || "").trim() && customerInstructions !== "-" ? (
+                        <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                          <b>Instructions:</b> {customerInstructions}
+                        </div>
+                      ) : null}
 
                       <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                         <a href={telUrl} style={{ ...btnGhost, textDecoration: "none" }}>
@@ -734,9 +937,22 @@ export default function RestaurantOrdersPage() {
                       </div>
                     </div>
 
-                    <div style={styles.infoBox}>
-                      <div style={styles.label}>Delivery Address</div>
-                      <div style={{ fontWeight: 900, color: "#0b1220" }}>{customerAddress}</div>
+                    <div
+                      style={{
+                        borderRadius: 16,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "rgba(255,255,255,0.75)",
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Delivery</div>
+
+                      <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                        <b>Maps:</b>{" "}
+                        <a href={mapsUrl} target="_blank" rel="noreferrer" style={{ color: "#111827", fontWeight: 1000 }}>
+                          Open →
+                        </a>
+                      </div>
 
                       <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                         <a href={mapsUrl} target="_blank" rel="noreferrer" style={{ ...btnGhost, textDecoration: "none" }}>
@@ -754,65 +970,160 @@ export default function RestaurantOrdersPage() {
                           Copy Address
                         </button>
                       </div>
+
+                      <div style={{ marginTop: 10, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 12 }}>
+                        Order created: <span style={{ color: "#0b1220" }}>{formatWhen(o.created_at || o.createdAt)}</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div style={styles.sectionTitle}>Instructions</div>
-                  <div style={styles.infoBox}>{customerInstructions}</div>
+                  {/* Items block like customer */}
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Items</div>
 
-                  <div style={styles.sectionTitle}>Items</div>
-                  <div style={styles.infoBox}>
-                    {items.length ? (
-                      <ul style={{ margin: 0, paddingLeft: 18 }}>
-                        {items.map((it, idx) => {
+                    <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                      {items.length ? (
+                        items.map((it, idx) => {
                           const itemName = pick(it, ["item_name", "name", "title"], "Item");
                           const qty = safeNum(pick(it, ["qty", "quantity"], 1), 1);
                           const price = safeNum(pick(it, ["price_each", "price", "item_price", "unit_price"], 0), 0);
                           const line = Math.round(qty * price);
-                          return (
-                            <li key={idx} style={{ marginBottom: 8 }}>
-                              <div style={{ fontWeight: 1000, color: "#0b1220" }}>{itemName}</div>
-                              <div style={{ color: "rgba(17,24,39,0.70)", fontWeight: 900, fontSize: 12 }}>
-                                Qty {qty} • ₹{Math.round(price)} each • Line ₹{line}
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : (
-                      <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 850 }}>
-                        No items found for this order. (If this keeps happening, check that order_items.menu_item_id is filled.)
-                      </div>
-                    )}
-                  </div>
 
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-                    <div style={styles.smallMuted}>
-                      Restaurant: <span style={{ color: "#0b1220", fontWeight: 950 }}>{restaurantName || "-"}</span>
+                          return (
+                            <div
+                              key={it.id || idx}
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 10,
+                                flexWrap: "wrap",
+                                padding: "8px 10px",
+                                borderRadius: 14,
+                                border: "1px solid rgba(0,0,0,0.08)",
+                                background: "rgba(255,255,255,0.85)",
+                              }}
+                            >
+                              <div style={{ fontWeight: 950, color: "#0b1220" }}>{itemName}</div>
+                              <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
+                                Qty {qty}
+                                <span style={{ marginLeft: 10 }}>₹{line}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div style={{ ...emptyBox, marginTop: 8 }}>
+                          No items found for this order. (If this keeps happening, check that order_items.menu_item_id is filled.)
+                        </div>
+                      )}
                     </div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontWeight: 950, fontSize: 13, color: "#0b1220" }}>Change Status:</span>
-                      <select value={String(o.status || "pending")} onChange={(e) => updateStatus(o.id, e.target.value)} style={styles.select}>
-                        <option value="pending">pending</option>
-                        <option value="preparing">preparing</option>
-                        <option value="ready">ready</option>
-
-                        <option value="delivering">delivering</option>
-                        <option value="picked_up">picked_up</option>
-                        <option value="on_the_way">on_the_way</option>
-
-                        <option value="delivered">delivered</option>
-                        <option value="rejected">rejected</option>
-                      </select>
+                    <div style={{ marginTop: 10, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 12 }}>
+                      Restaurant ID: <span style={{ color: "#0b1220" }}>{o.restaurant_id || restaurantId}</span>
                     </div>
                   </div>
                 </div>
               );
-            })}
+            })()}
           </div>
-        )}
+        ) : null}
       </div>
     </main>
   );
 }
+
+/* =========================
+   EXTRA STYLES (LIST + STEPS) - copied from customer style
+   ========================= */
+
+const listCard = {
+  ...cardGlass,
+  cursor: "pointer",
+  transition: "transform 120ms ease, box-shadow 120ms ease",
+};
+
+const btnView = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(17,24,39,0.95)",
+  background: "rgba(17,24,39,0.95)",
+  color: "#fff",
+  fontWeight: 950,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const btnBack = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.85)",
+  color: "#111827",
+  fontWeight: 950,
+  cursor: "pointer",
+};
+
+const stepsWrap = {
+  display: "flex",
+  gap: 0,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const stepItem = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  position: "relative",
+  paddingRight: 14,
+};
+
+const stepDot = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 1000,
+  fontSize: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+};
+
+const stepDotDone = {
+  background: "rgba(17,24,39,0.95)",
+  color: "#fff",
+  border: "1px solid rgba(17,24,39,0.95)",
+};
+
+const stepDotActive = {
+  background: "rgba(255,255,255,0.92)",
+  color: "#111827",
+  border: "1px solid rgba(17,24,39,0.35)",
+};
+
+const stepDotTodo = {
+  background: "rgba(255,255,255,0.75)",
+  color: "rgba(17,24,39,0.65)",
+};
+
+const stepLabel = {
+  fontWeight: 950,
+  fontSize: 12,
+  color: "rgba(17,24,39,0.82)",
+};
+
+const stepLine = {
+  width: 44,
+  height: 2,
+  borderRadius: 999,
+  marginLeft: 10,
+};
+
+const stepLineDone = {
+  background: "rgba(17,24,39,0.95)",
+};
+
+const stepLineTodo = {
+  background: "rgba(0,0,0,0.10)",
+};

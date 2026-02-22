@@ -19,15 +19,13 @@ function money(v) {
 }
 
 /* =========================================================
-   ✅ CART STORAGE FIX (SUPER IMPORTANT)
-   Supports BOTH keys:
-   - "foodapp_cart"
-   - "cart_items"
-   + protects against corrupted qty/price (99 issue)
-   + FIXES "1 item becomes 2" (dedupe logic)
+   ✅ CART STORAGE FIX (NO FREEZE)
+   - NO "storage" event dispatch inside READ functions
+   - Uses custom event: "foodapp_cart_updated"
    ========================================================= */
 
-const MAX_SAFE_QTY = 20; // anything above = corrupted, reset to 1
+const CART_EVT = "foodapp_cart_updated";
+const MAX_SAFE_QTY = 20;
 
 function safeParse(raw) {
   try {
@@ -50,7 +48,7 @@ function sanitizeQty(qty) {
   if (!isFinite(n)) return 1;
   const i = Math.floor(n);
   if (i <= 0) return 1;
-  if (i > MAX_SAFE_QTY) return 1; // ✅ stops 99/999 corruption
+  if (i > MAX_SAFE_QTY) return 1;
   return i;
 }
 
@@ -77,17 +75,10 @@ function stableStringify(obj) {
   }
 }
 
-/**
- * ✅ KEY FIX:
- * If both keys contain the same items, DO NOT SUM.
- * If they differ, we dedupe by taking MAX qty per menu_item_id (not sum).
- */
 function mergePreferMax(a, b) {
   const map = new Map();
 
-  for (const it of a) {
-    map.set(String(it.menu_item_id), { ...it });
-  }
+  for (const it of a) map.set(String(it.menu_item_id), { ...it });
 
   for (const it of b) {
     const key = String(it.menu_item_id);
@@ -96,9 +87,7 @@ function mergePreferMax(a, b) {
     else {
       map.set(key, {
         ...existing,
-        // ✅ DO NOT SUM — take the max (prevents 1->2 bug)
         qty: Math.max(Number(existing.qty || 1), Number(it.qty || 1)),
-        // prefer existing fields, but fill missing
         name: existing.name || it.name,
         image_url: existing.image_url || it.image_url,
         price_each: existing.price_each || it.price_each,
@@ -110,39 +99,33 @@ function mergePreferMax(a, b) {
   return Array.from(map.values());
 }
 
-function getCartCompat() {
+/**
+ * READ only (no writes, no events) — prevents freeze
+ */
+function readRestaurantCartRaw() {
   const rawA = safeParse(localStorage.getItem("cart_items"));
   const rawB = safeParse(localStorage.getItem("foodapp_cart"));
-
   const a = normalizeCartShape(rawA);
   const b = normalizeCartShape(rawB);
 
   if (a.length === 0 && b.length === 0) return [];
 
-  // If both are identical, just use one
-  if (a.length > 0 && b.length > 0 && stableStringify(a) === stableStringify(b)) {
-    try {
-      localStorage.setItem("cart_items", JSON.stringify(a));
-      localStorage.setItem("foodapp_cart", JSON.stringify(a));
-      window.dispatchEvent(new Event("storage"));
-    } catch {}
-    return a;
-  }
+  if (a.length > 0 && b.length > 0 && stableStringify(a) === stableStringify(b)) return a;
 
   const merged = mergePreferMax(a, b);
-
-  // enforce one-restaurant cart
   const rid = merged[0]?.restaurant_id;
   const cleaned = merged.filter((x) => x.restaurant_id === rid);
-
-  // ✅ always write back cleaned cart (auto-fix corruption + keep keys synced)
-  try {
-    localStorage.setItem("cart_items", JSON.stringify(cleaned));
-    localStorage.setItem("foodapp_cart", JSON.stringify(cleaned));
-    window.dispatchEvent(new Event("storage"));
-  } catch {}
-
   return cleaned;
+}
+
+/**
+ * One-time repair/sync (safe to call only on init)
+ */
+function repairRestaurantCartToBothKeys(items) {
+  try {
+    localStorage.setItem("cart_items", JSON.stringify(items));
+    localStorage.setItem("foodapp_cart", JSON.stringify(items));
+  } catch {}
 }
 
 function setCartCompat(items) {
@@ -150,7 +133,65 @@ function setCartCompat(items) {
   try {
     localStorage.setItem("cart_items", JSON.stringify(cleaned));
     localStorage.setItem("foodapp_cart", JSON.stringify(cleaned));
-    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new Event(CART_EVT));
+  } catch {}
+}
+
+/* =========================================================
+   ✅ GROCERY CART (SEPARATE KEY)
+   ========================================================= */
+
+const GROCERY_CART_KEY = "grocery_cart_items";
+const GROCERY_FALLBACK_KEY = "grocery_cart";
+
+function normalizeGroceryCartShape(arr) {
+  const list = Array.isArray(arr) ? arr : [];
+  return list
+    .map((x) => ({
+      id: x?.id, // grocery_items.id
+      store_id: x?.store_id, // grocery_stores.id
+      name: x?.name,
+      price: clampMoney(x?.price, 0, 100000, 0),
+      qty: sanitizeQty(x?.qty),
+      image_url: x?.image_url || "",
+      category: x?.category || "General",
+    }))
+    .filter((x) => x.id && x.store_id && x.qty > 0);
+}
+
+/**
+ * READ only (no writes, no events)
+ */
+function readGroceryCartRaw() {
+  const rawA = safeParse(localStorage.getItem(GROCERY_CART_KEY));
+  const rawB = safeParse(localStorage.getItem(GROCERY_FALLBACK_KEY));
+  const a = normalizeGroceryCartShape(rawA);
+  const b = normalizeGroceryCartShape(rawB);
+
+  if (a.length === 0 && b.length === 0) return [];
+  const chosen = a.length > 0 ? a : b;
+
+  const sid = chosen[0]?.store_id;
+  const cleaned = chosen.filter((x) => x.store_id === sid);
+  return cleaned;
+}
+
+/**
+ * One-time repair/sync (safe to call only on init)
+ */
+function repairGroceryCartToBothKeys(items) {
+  try {
+    localStorage.setItem(GROCERY_CART_KEY, JSON.stringify(items));
+    localStorage.setItem(GROCERY_FALLBACK_KEY, JSON.stringify(items));
+  } catch {}
+}
+
+function setGroceryCart(items) {
+  const cleaned = normalizeGroceryCartShape(items);
+  try {
+    localStorage.setItem(GROCERY_CART_KEY, JSON.stringify(cleaned));
+    localStorage.setItem(GROCERY_FALLBACK_KEY, JSON.stringify(cleaned));
+    window.dispatchEvent(new Event(CART_EVT));
   } catch {}
 }
 
@@ -192,26 +233,20 @@ async function geocodeAddressClient(q) {
 
 /* =========================
    ✅ COUPON HELPERS (DB)
-   ✅ MATCHES YOUR REAL TABLE:
-   id, code, type, value, min_order_amount, max_discount,
-   starts_at, expires_at, is_active, usage_limit_total, usage_limit_per_user
    ========================= */
 
 function normCode(code) {
   return String(code || "").trim().toUpperCase().replace(/\s+/g, "");
 }
-
 function toNum(v, fallback = 0) {
   const n = Number(v);
   return isFinite(n) ? n : fallback;
 }
-
 function parseDateMaybe(v) {
   if (!v) return null;
   const d = new Date(v);
   return isFinite(d.getTime()) ? d : null;
 }
-
 function asBool(v) {
   if (typeof v === "boolean") return v;
   const s = String(v ?? "").toLowerCase();
@@ -317,8 +352,105 @@ async function validateCouponFromDb({ code, subtotal, userId }) {
   }
 }
 
+/* =========================================================
+   ✅ Grocery checkout DB helpers (AUTO column-safe)
+   Tables:
+   - grocery_orders
+   - grocery_order_items  (plural)
+   ========================================================= */
+
+function isMissingColumnError(msg) {
+  const m = String(msg || "").toLowerCase();
+  return m.includes("column") && m.includes("does not exist");
+}
+
+async function insertGroceryOrderAuto(payload) {
+  // try with store_id first (needed for owner filters)
+  const attempts = [
+    {
+      ...payload,
+      store_id: payload.store_id,
+    },
+    // fallback if store_id column doesn't exist
+    (() => {
+      const x = { ...payload };
+      delete x.store_id;
+      return x;
+    })(),
+  ];
+
+  let lastErr = null;
+
+  for (const body of attempts) {
+    const { data, error } = await supabase.from("grocery_orders").insert(body).select("id").single();
+    if (!error) return data;
+    lastErr = error;
+
+    const msg = error?.message || String(error);
+    if (isMissingColumnError(msg)) continue; // try next
+    throw error;
+  }
+
+  throw lastErr || new Error("Failed to create grocery order.");
+}
+
+async function insertGroceryOrderItemsAuto(rows) {
+  // We don’t know your exact columns, so we try a few shapes safely.
+  // Table name is PLURAL: grocery_order_items
+  const candidates = [
+    // common: order_id + grocery_item_id + qty + price_each
+    (r) => ({
+      order_id: r.order_id,
+      grocery_item_id: r.item_id,
+      qty: r.qty,
+      price_each: r.price_each,
+      item_name: r.name,
+    }),
+    // common: order_id + item_id + qty + price
+    (r) => ({
+      order_id: r.order_id,
+      item_id: r.item_id,
+      qty: r.qty,
+      price: r.price_each,
+      name: r.name,
+    }),
+    // minimal: order_id + item_id + qty
+    (r) => ({
+      order_id: r.order_id,
+      item_id: r.item_id,
+      qty: r.qty,
+    }),
+    // minimal alt: order_id + grocery_item_id + quantity
+    (r) => ({
+      order_id: r.order_id,
+      grocery_item_id: r.item_id,
+      quantity: r.qty,
+    }),
+  ];
+
+  let lastErr = null;
+
+  for (const build of candidates) {
+    const attemptRows = rows.map(build);
+
+    const { error } = await supabase.from("grocery_order_items").insert(attemptRows);
+    if (!error) return true;
+
+    lastErr = error;
+    const msg = error?.message || String(error);
+
+    // missing column → try next shape
+    if (isMissingColumnError(msg)) continue;
+
+    // any other error → stop
+    throw error;
+  }
+
+  throw lastErr || new Error("Failed to create grocery order items.");
+}
+
 /* =========================
-   ✅ PREMIUM THEME
+   ✅ PREMIUM THEME (UNCHANGED)
    ========================= */
 
 const pageBg = {
@@ -554,6 +686,9 @@ export default function CartPage() {
   const [userRole, setUserRole] = useState("");
 
   const [items, setItemsState] = useState([]);
+  const [gItems, setGItemsState] = useState([]);
+  const [cartMode, setCartMode] = useState("restaurant");
+
   const [loading, setLoading] = useState(true);
 
   const [errMsg, setErrMsg] = useState("");
@@ -568,34 +703,43 @@ export default function CartPage() {
   const [landmark, setLandmark] = useState("");
   const [instructions, setInstructions] = useState("");
 
-  // Premium fields
+  // Premium fields (restaurant only)
   const [coupon, setCoupon] = useState("");
   const [couponApplied, setCouponApplied] = useState(null);
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponDiscountValue, setCouponDiscountValue] = useState(0);
 
   const [tip, setTip] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState("cod");
+
+  // ✅ CHANGED: default to card (removed cod/up i)
+  const [paymentMethod, setPaymentMethod] = useState("card");
+
   const [saveAddress, setSaveAddress] = useState(true);
 
-  const subtotal = useMemo(() => {
-    return (items || []).reduce((s, x) => s + Number(x.qty || 0) * Number(x.price_each || 0), 0);
-  }, [items]);
+  const activeItems = useMemo(() => (cartMode === "grocery" ? gItems : items), [cartMode, gItems, items]);
 
-  const itemCount = useMemo(() => (items || []).reduce((s, x) => s + Number(x.qty || 0), 0), [items]);
+  const subtotal = useMemo(() => {
+    if (cartMode === "grocery") {
+      return (gItems || []).reduce((s, x) => s + Number(x.qty || 0) * Number(x.price || 0), 0);
+    }
+    return (items || []).reduce((s, x) => s + Number(x.qty || 0) * Number(x.price_each || 0), 0);
+  }, [cartMode, gItems, items]);
+
+  const itemCount = useMemo(() => (activeItems || []).reduce((s, x) => s + Number(x.qty || 0), 0), [activeItems]);
 
   const deliveryFee = useMemo(() => {
-    if (!items || items.length === 0) return 0;
+    if (!activeItems || activeItems.length === 0) return 0;
     const base = 25;
     return subtotal >= 499 ? 0 : base;
-  }, [items, subtotal]);
+  }, [activeItems, subtotal]);
 
   const gst = useMemo(() => Math.round(subtotal * 0.05), [subtotal]);
 
   const discount = useMemo(() => {
+    if (cartMode !== "restaurant") return 0;
     if (!couponApplied) return 0;
     return Math.max(0, Number(couponDiscountValue || 0));
-  }, [couponApplied, couponDiscountValue]);
+  }, [cartMode, couponApplied, couponDiscountValue]);
 
   const payable = useMemo(() => {
     const p = subtotal + deliveryFee + gst + Number(tip || 0) - discount;
@@ -616,8 +760,22 @@ export default function CartPage() {
 
         const user = sessionData?.session?.user || null;
 
-        const c = getCartCompat();
-        if (!cancelled) setItemsState(Array.isArray(c) ? c : []);
+        // READ carts (no freeze)
+        const rCart = readRestaurantCartRaw();
+        const gCart = readGroceryCartRaw();
+
+        // one-time repair/sync so both keys stay aligned (NO events)
+        repairRestaurantCartToBothKeys(rCart);
+        repairGroceryCartToBothKeys(gCart);
+
+        if (!cancelled) {
+          setItemsState(Array.isArray(rCart) ? rCart : []);
+          setGItemsState(Array.isArray(gCart) ? gCart : []);
+
+          if ((rCart || []).length > 0) setCartMode("restaurant");
+          else if ((gCart || []).length > 0) setCartMode("grocery");
+          else setCartMode("restaurant");
+        }
 
         // Load saved address
         try {
@@ -665,16 +823,24 @@ export default function CartPage() {
 
     init();
 
-    const onStorage = () => {
-      const c = getCartCompat();
-      setItemsState(Array.isArray(c) ? c : []);
+    const onAnyCartUpdate = () => {
+      const rCart = readRestaurantCartRaw();
+      const gCart = readGroceryCartRaw();
+      setItemsState(Array.isArray(rCart) ? rCart : []);
+      setGItemsState(Array.isArray(gCart) ? gCart : []);
+
+      if (cartMode === "restaurant" && (rCart || []).length === 0 && (gCart || []).length > 0) setCartMode("grocery");
+      if (cartMode === "grocery" && (gCart || []).length === 0 && (rCart || []).length > 0) setCartMode("restaurant");
     };
 
-    window.addEventListener("storage", onStorage);
+    // native storage (other tabs) + custom event (same tab)
+    window.addEventListener("storage", onAnyCartUpdate);
+    window.addEventListener(CART_EVT, onAnyCartUpdate);
 
     return () => {
       cancelled = true;
-      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("storage", onAnyCartUpdate);
+      window.removeEventListener(CART_EVT, onAnyCartUpdate);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -683,6 +849,7 @@ export default function CartPage() {
     let cancelled = false;
 
     async function recheck() {
+      if (cartMode !== "restaurant") return;
       if (!couponApplied?.code) return;
       try {
         const { data: userData } = await supabase.auth.getUser();
@@ -714,20 +881,44 @@ export default function CartPage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subtotal]);
+  }, [subtotal, cartMode]);
 
   function setItems(next) {
     setItemsState(next);
     setCartCompat(next);
   }
 
+  function setGroceryItems(next) {
+    setGItemsState(next);
+    setGroceryCart(next);
+  }
+
   function incQty(ix) {
+    if (cartMode === "grocery") {
+      const next = [...gItems];
+      next[ix] = { ...next[ix], qty: sanitizeQty(Number(next[ix].qty || 0) + 1) };
+      setGroceryItems(next);
+      return;
+    }
     const next = [...items];
     next[ix] = { ...next[ix], qty: sanitizeQty(Number(next[ix].qty || 0) + 1) };
     setItems(next);
   }
 
   function decQty(ix) {
+    if (cartMode === "grocery") {
+      const next = [...gItems];
+      const q = Number(next[ix].qty || 0) - 1;
+      if (q <= 0) {
+        next.splice(ix, 1);
+        setGroceryItems(next);
+        return;
+      }
+      next[ix] = { ...next[ix], qty: sanitizeQty(q) };
+      setGroceryItems(next);
+      return;
+    }
+
     const next = [...items];
     const q = Number(next[ix].qty || 0) - 1;
     if (q <= 0) {
@@ -740,12 +931,26 @@ export default function CartPage() {
   }
 
   function removeItem(ix) {
+    if (cartMode === "grocery") {
+      const next = [...gItems];
+      next.splice(ix, 1);
+      setGroceryItems(next);
+      return;
+    }
     const next = [...items];
     next.splice(ix, 1);
     setItems(next);
   }
 
   function clearCart() {
+    if (cartMode === "grocery") {
+      setGroceryItems([]);
+      setTip(0);
+      setInfoMsg("✅ Grocery cart cleared.");
+      setErrMsg("");
+      return;
+    }
+
     setItems([]);
     setCoupon("");
     setCouponApplied(null);
@@ -758,6 +963,11 @@ export default function CartPage() {
   async function applyCoupon() {
     setErrMsg("");
     setInfoMsg("");
+
+    if (cartMode !== "restaurant") {
+      setErrMsg("Coupons are currently available only for restaurant orders.");
+      return;
+    }
 
     const code = normCode(coupon);
     if (!code) return;
@@ -804,6 +1014,127 @@ export default function CartPage() {
     } catch {}
   }
 
+  /* =========================================================
+     ✅ STRIPE CHECKOUT (NEW) - only triggers when paymentMethod="card"
+     Uses existing API route: /api/stripe/checkout
+     ========================================================= */
+  function buildStripeItems() {
+    if (cartMode === "grocery") {
+      return (gItems || []).map((it) => ({
+        name: it?.name || "Grocery Item",
+        price: Number(it?.price || 0),
+        quantity: sanitizeQty(Number(it?.qty || 1)),
+      }));
+    }
+
+    return (items || []).map((it) => ({
+      name: it?.name || "Menu Item",
+      price: Number(it?.price_each || 0),
+      quantity: sanitizeQty(Number(it?.qty || 1)),
+    }));
+  }
+
+  async function payWithStripe() {
+    setErrMsg("");
+    setInfoMsg("");
+
+    if (!isAuthed) {
+      setErrMsg("Please login or sign up to pay.");
+      router.push("/login?next=/cart");
+      return;
+    }
+
+    if (!customer_name.trim()) return setErrMsg("Please enter customer name.");
+    if (!phone.trim()) return setErrMsg("Please enter phone.");
+    if (!address_line1.trim()) return setErrMsg("Please enter address line 1.");
+
+    if (!activeItems || activeItems.length === 0) {
+      return setErrMsg("Cart is empty.");
+    }
+
+    // grocery single-store rule (keep same logic)
+    if (cartMode === "grocery") {
+      const store_id = gItems[0]?.store_id;
+      if (!store_id) return setErrMsg("Grocery cart items missing store_id. Please re-add items.");
+      const multi = gItems.some((x) => x.store_id !== store_id);
+      if (multi) return setErrMsg("Please order from one grocery store at a time.");
+    }
+
+    // restaurant single-restaurant rule (keep same logic)
+    if (cartMode === "restaurant") {
+      const restaurant_id = items[0]?.restaurant_id;
+      if (!restaurant_id) return setErrMsg("Cart items missing restaurant_id. Please re-add items.");
+      const multi = items.some((x) => x.restaurant_id !== restaurant_id);
+      if (multi) return setErrMsg("Please order from one restaurant at a time.");
+    }
+
+    if (saveAddress) saveAddressToLocal();
+
+    setPlacing(true);
+    try {
+      const restaurant_id = cartMode === "restaurant" ? (items[0]?.restaurant_id || "") : "";
+      const store_id = cartMode === "grocery" ? (gItems[0]?.store_id || "") : "";
+
+      // ✅ NEW: tell Stripe which flow this is, so /payment/success can save to correct tables
+      const order_type = cartMode === "grocery" ? "grocery" : "restaurant";
+
+      // ✅ NEW: where should success page redirect
+      // If you don't have /groceries/orders yet, you can change to "/orders"
+      const success_redirect = cartMode === "grocery" ? "/groceries/orders" : "/orders";
+
+      const payload = {
+        items: buildStripeItems(),
+
+        // ✅ NEW (works with updated /api/stripe/checkout route)
+        order_type,
+        restaurant_id: restaurant_id || undefined,
+        store_id: store_id || undefined,
+        success_redirect,
+
+        // keep old meta (doesn't break anything)
+        meta: {
+          cartMode,
+          customer_name: customer_name.trim(),
+          phone: phone.trim(),
+          address: buildFullAddress({
+            address_line1: address_line1.trim(),
+            address_line2: address_line2.trim() || "",
+            landmark: landmark.trim() || "",
+          }),
+          instructions: (instructions || "").trim() || "",
+          tip: Number(tip || 0),
+          deliveryFee: Number(deliveryFee || 0),
+          gst: Number(gst || 0),
+          discount: Number(discount || 0),
+          payable: Number(payable || 0),
+        },
+      };
+
+      const r = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const j = await r.json().catch(() => null);
+
+      if (!r.ok) {
+        throw new Error(j?.error || j?.message || "Stripe checkout failed.");
+      }
+
+      // Expecting API returns: { url } (or similar)
+      const url = j?.url || j?.checkoutUrl || j?.sessionUrl;
+      if (!url) throw new Error("Stripe did not return a checkout URL.");
+
+      // Redirect to Stripe
+      window.location.href = url;
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setPlacing(false);
+    }
+  }
+
   async function placeOrder() {
     setErrMsg("");
     setInfoMsg("");
@@ -814,10 +1145,106 @@ export default function CartPage() {
       return;
     }
 
-    if (!items || items.length === 0) return setErrMsg("Cart is empty.");
+    // shared validations
     if (!customer_name.trim()) return setErrMsg("Please enter customer name.");
     if (!phone.trim()) return setErrMsg("Please enter phone.");
     if (!address_line1.trim()) return setErrMsg("Please enter address line 1.");
+
+    // ✅ Grocery checkout (NOW WIRED)
+    if (cartMode === "grocery") {
+      if (!gItems || gItems.length === 0) return setErrMsg("Grocery cart is empty.");
+
+      const store_id = gItems[0]?.store_id;
+      if (!store_id) return setErrMsg("Grocery cart items missing store_id. Please re-add items.");
+
+      const multi = gItems.some((x) => x.store_id !== store_id);
+      if (multi) return setErrMsg("Please order from one grocery store at a time.");
+
+      setPlacing(true);
+      try {
+        const { data: userData, error: userErr } = await supabase.auth.getUser();
+        if (userErr) throw userErr;
+        const user = userData?.user;
+        if (!user) throw new Error("Not logged in.");
+
+        if (saveAddress) saveAddressToLocal();
+
+        const fullAddr = buildFullAddress({
+          address_line1: address_line1.trim(),
+          address_line2: address_line2.trim() || "",
+          landmark: landmark.trim() || "",
+        });
+
+        const geo = await geocodeAddressClient(fullAddr);
+
+        const total_amount = Math.max(
+          0,
+          Number(subtotal || 0) + Number(deliveryFee || 0) + Number(gst || 0) + Number(tip || 0)
+        );
+
+        // Your grocery_orders columns (from screenshot):
+        // customer_user_id, customer_name, customer_phone, delivery_address,
+        // instructions, status, total_amount
+        const orderPayload = {
+          customer_user_id: user.id,
+          store_id, // will auto-fallback if column not exists
+          customer_name: customer_name.trim(),
+          customer_phone: phone.trim(),
+          delivery_address: fullAddr,
+          instructions: (instructions || "").trim() || null,
+          status: "pending",
+          total_amount,
+          // optional (if you add these later): customer_lat, customer_lng
+          customer_lat: geo?.lat ?? null,
+          customer_lng: geo?.lng ?? null,
+        };
+
+        // some DBs won’t have customer_lat/lng yet → remove safely if needed
+        let orderRow = null;
+        try {
+          orderRow = await insertGroceryOrderAuto(orderPayload);
+        } catch (e) {
+          const msg = e?.message || String(e);
+          if (isMissingColumnError(msg)) {
+            // retry without lat/lng if those columns don't exist
+            const slim = { ...orderPayload };
+            delete slim.customer_lat;
+            delete slim.customer_lng;
+            orderRow = await insertGroceryOrderAuto(slim);
+          } else {
+            throw e;
+          }
+        }
+
+        // insert items
+        const rows = gItems.map((it) => ({
+          order_id: orderRow.id,
+          item_id: it.id,
+          qty: sanitizeQty(Number(it.qty || 1)),
+          price_each: clampMoney(Number(it.price || 0), 0, 100000, 0),
+          name: it.name || "Item",
+        }));
+
+        await insertGroceryOrderItemsAuto(rows);
+
+        // clear grocery cart
+        setGroceryItems([]);
+        setTip(0);
+
+        setInfoMsg("✅ Grocery order placed successfully!");
+        // optional redirect if you have a grocery orders page:
+        // router.push("/groceries/orders");
+        router.refresh();
+      } catch (e) {
+        setErrMsg(e?.message || String(e));
+      } finally {
+        setPlacing(false);
+      }
+      return;
+    }
+
+    // ✅ Restaurant logic (unchanged)
+    if (!items || items.length === 0) return setErrMsg("Cart is empty.");
 
     const restaurant_id = items[0]?.restaurant_id;
     if (!restaurant_id) return setErrMsg("Cart items missing restaurant_id. Please re-add items.");
@@ -977,9 +1404,8 @@ export default function CartPage() {
     }
   }
 
-  // ✅ Responsive computed styles
   const wrap = {
-    maxWidth: 1120,
+    Width: "100",
     margin: "0 auto",
     paddingBottom: isMobile ? 140 : 90,
   };
@@ -1043,15 +1469,27 @@ export default function CartPage() {
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   }
 
+  const backHref = cartMode === "grocery" ? "/groceries" : "/menu";
+  const backLabel = cartMode === "grocery" ? "← Back to Groceries" : "← Back to Menu";
+
   return (
     <main style={{ ...pageBg, padding: isMobile ? 12 : 20 }}>
       <div style={wrap}>
         <div style={hero}>
           <div style={{ minWidth: isMobile ? "100%" : 260 }}>
-            <div style={pill}>Customer</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={pill}>Customer</span>
+              <button onClick={() => setCartMode("restaurant")} style={cartMode === "restaurant" ? chipActive : chip}>
+                Restaurant Cart ({(items || []).reduce((s, x) => s + Number(x.qty || 0), 0)})
+              </button>
+              <button onClick={() => setCartMode("grocery")} style={cartMode === "grocery" ? chipActive : chip}>
+                Grocery Cart ({(gItems || []).reduce((s, x) => s + Number(x.qty || 0), 0)})
+              </button>
+            </div>
+
             <h1 style={heroTitleR}>Cart</h1>
             <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>
-              Review items + delivery details
+              {cartMode === "grocery" ? "Review grocery items + delivery details" : "Review items + delivery details"}
             </div>
           </div>
 
@@ -1066,8 +1504,8 @@ export default function CartPage() {
               <div style={statLabel}>Subtotal</div>
             </div>
 
-            <Link href="/menu" style={pill}>
-              ← Back to Menu
+            <Link href={backHref} style={pill}>
+              {backLabel}
             </Link>
           </div>
         </div>
@@ -1077,18 +1515,17 @@ export default function CartPage() {
 
         {loading ? (
           <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div>
-        ) : items.length === 0 ? (
+        ) : activeItems.length === 0 ? (
           <div style={{ marginTop: 12, ...emptyBox }}>
             Cart is empty.
             <div style={{ marginTop: 8 }}>
-              <Link href="/menu" style={pill}>
-                Browse Menu →
+              <Link href={backHref} style={pill}>
+                Browse {cartMode === "grocery" ? "Groceries" : "Menu"} →
               </Link>
             </div>
           </div>
         ) : (
           <div style={gridMain}>
-            {/* LEFT: Items + Offers */}
             <div style={cardGlass}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div>
@@ -1102,87 +1539,123 @@ export default function CartPage() {
               </div>
 
               <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                {items.map((it, ix) => (
-                  <div key={`${it.menu_item_id}-${ix}`} style={itemCard}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
-                        {it.name || "Item"}
-                      </div>
-                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
-                        {money(it.price_each)} each • Line:{" "}
-                        <b>{money(Number(it.qty || 0) * Number(it.price_each || 0))}</b>
-                      </div>
-                      {it.note ? (
-                        <div style={{ marginTop: 6, color: "rgba(17,24,39,0.62)", fontWeight: 850, fontSize: 12 }}>
-                          Note: {it.note}
+                {cartMode === "grocery"
+                  ? gItems.map((it, ix) => (
+                      <div key={`${it.id}-${ix}`} style={itemCard}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
+                            {it.name || "Item"}
+                          </div>
+                          <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
+                            {money(it.price)} each • Line: <b>{money(Number(it.qty || 0) * Number(it.price || 0))}</b>
+                          </div>
                         </div>
-                      ) : null}
-                    </div>
 
-                    <div style={itemActions}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                          −
-                        </button>
-                        <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
-                        <button onClick={() => incQty(ix)} style={btnSmallGhost}>
-                          +
+                        <div style={itemActions}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <button onClick={() => decQty(ix)} style={btnSmallGhost}>
+                              −
+                            </button>
+                            <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
+                            <button onClick={() => incQty(ix)} style={btnSmallGhost}>
+                              +
+                            </button>
+                          </div>
+
+                          <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  : items.map((it, ix) => (
+                      <div key={`${it.menu_item_id}-${ix}`} style={itemCard}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
+                            {it.name || "Item"}
+                          </div>
+                          <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
+                            {money(it.price_each)} each • Line: <b>{money(Number(it.qty || 0) * Number(it.price_each || 0))}</b>
+                          </div>
+                          {it.note ? (
+                            <div style={{ marginTop: 6, color: "rgba(17,24,39,0.62)", fontWeight: 850, fontSize: 12 }}>
+                              Note: {it.note}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div style={itemActions}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <button onClick={() => decQty(ix)} style={btnSmallGhost}>
+                              −
+                            </button>
+                            <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
+                            <button onClick={() => incQty(ix)} style={btnSmallGhost}>
+                              +
+                            </button>
+                          </div>
+
+                          <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+              </div>
+
+              {cartMode === "restaurant" ? (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                  <div>
+                    <div style={sectionTitle}>Offers</div>
+                    <div style={helperText}>Enter your coupon code</div>
+                  </div>
+
+                  <div style={offerRow}>
+                    <input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" style={input} />
+                    <button
+                      onClick={applyCoupon}
+                      style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }}
+                      disabled={couponLoading}
+                    >
+                      {couponLoading ? "Checking…" : "Apply"}
+                    </button>
+                  </div>
+
+                  {couponApplied ? (
+                    <div style={{ marginTop: 10, ...alertInfo }}>
+                      ✅ Coupon <b>{couponApplied.code}</b> applied. Discount: <b>{money(discount)}</b>
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          onClick={() => {
+                            setCouponApplied(null);
+                            setCouponDiscountValue(0);
+                            setCoupon("");
+                            setInfoMsg("Coupon removed.");
+                          }}
+                          style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}
+                        >
+                          Remove coupon
                         </button>
                       </div>
-
-                      <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
-                        Remove
-                      </button>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ) : null}
 
-              {/* Offers */}
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
-                <div>
-                  <div style={sectionTitle}>Offers</div>
-                  <div style={helperText}>Enter your coupon code</div>
-                </div>
-
-                <div style={offerRow}>
-                  <input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" style={input} />
-                  <button onClick={applyCoupon} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }} disabled={couponLoading}>
-                    {couponLoading ? "Checking…" : "Apply"}
-                  </button>
-                </div>
-
-                {couponApplied ? (
-                  <div style={{ marginTop: 10, ...alertInfo }}>
-                    ✅ Coupon <b>{couponApplied.code}</b> applied. Discount: <b>{money(discount)}</b>
-                    <div style={{ marginTop: 8 }}>
-                      <button
-                        onClick={() => {
-                          setCouponApplied(null);
-                          setCouponDiscountValue(0);
-                          setCoupon("");
-                          setInfoMsg("Coupon removed.");
-                        }}
-                        style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}
-                      >
-                        Remove coupon
+                  <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Tip delivery partner:</div>
+                    {[0, 10, 20, 30, 50].map((t) => (
+                      <button key={t} onClick={() => setTip(t)} style={tip === t ? chipActive : chip}>
+                        {t === 0 ? "No tip" : `₹${t}`}
                       </button>
-                    </div>
+                    ))}
                   </div>
-                ) : null}
-
-                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Tip delivery partner:</div>
-                  {[0, 10, 20, 30, 50].map((t) => (
-                    <button key={t} onClick={() => setTip(t)} style={tip === t ? chipActive : chip}>
-                      {t === 0 ? "No tip" : `₹${t}`}
-                    </button>
-                  ))}
                 </div>
-              </div>
+              ) : (
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                  <div style={helperText}>Grocery checkout is now wired ✅</div>
+                </div>
+              )}
             </div>
 
-            {/* RIGHT: Delivery Details + Summary */}
             <div ref={deliveryRef} style={cardGlass}>
               <h2 style={sectionTitle}>Delivery Details</h2>
               <div style={helperText}>Enter delivery details to place the order.</div>
@@ -1219,18 +1692,24 @@ export default function CartPage() {
                 </div>
 
                 <div style={{ marginTop: 6 }}>
-                  <div style={inputLabel}>Payment Method (demo)</div>
+                  {/* ✅ CHANGED: removed "(demo)" word */}
+                  <div style={inputLabel}>Payment Method</div>
+
+                  {/* ✅ CHANGED: removed COD + UPI buttons, keep Card only */}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button onClick={() => setPaymentMethod("cod")} style={paymentMethod === "cod" ? chipActive : chip}>
-                      Cash on Delivery
-                    </button>
-                    <button onClick={() => setPaymentMethod("upi")} style={paymentMethod === "upi" ? chipActive : chip}>
-                      UPI
-                    </button>
                     <button onClick={() => setPaymentMethod("card")} style={paymentMethod === "card" ? chipActive : chip}>
                       Card
                     </button>
                   </div>
+
+                  {/* ✅ Stripe hint button (only shows when Card is selected) */}
+                  {paymentMethod === "card" ? (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
+                        Card payments use Stripe Checkout.
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <label style={{ display: "flex", gap: 10, alignItems: "center", fontWeight: 900, marginTop: 6 }}>
@@ -1238,7 +1717,15 @@ export default function CartPage() {
                   Save this address on this device
                 </label>
 
-                <div style={{ marginTop: 6, paddingTop: 10, borderTop: "1px solid rgba(0,0,0,0.08)", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
+                <div
+                  style={{
+                    marginTop: 6,
+                    paddingTop: 10,
+                    borderTop: "1px solid rgba(0,0,0,0.08)",
+                    fontWeight: 900,
+                    color: "rgba(17,24,39,0.75)",
+                  }}
+                >
                   <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0" }}>
                     <span>Total items</span>
                     <span style={{ color: "#0b1220" }}>{itemCount}</span>
@@ -1254,6 +1741,7 @@ export default function CartPage() {
                     <span style={{ color: "#0b1220" }}>{deliveryFee === 0 ? "FREE" : money(deliveryFee)}</span>
                   </div>
 
+                  {/* Leaving GST line untouched except you asked only payment demo removal */}
                   <div style={rowLight}>
                     <span>GST (demo 5%)</span>
                     <span style={{ color: "#0b1220" }}>{money(gst)}</span>
@@ -1273,13 +1761,26 @@ export default function CartPage() {
                     </div>
                   ) : null}
 
-                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 12, fontWeight: 1000, fontSize: 16, color: "#0b1220", borderTop: "1px solid rgba(0,0,0,0.08)", marginTop: 10, paddingBottom: 10 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      paddingTop: 12,
+                      fontWeight: 1000,
+                      fontSize: 16,
+                      color: "#0b1220",
+                      borderTop: "1px solid rgba(0,0,0,0.08)",
+                      marginTop: 10,
+                      paddingBottom: 10,
+                    }}
+                  >
                     <span>Payable</span>
                     <span>{money(payable)}</span>
                   </div>
 
+                  {/* ✅ IMPORTANT: If Card is selected -> Pay with Stripe, else normal Place Order */}
                   <button
-                    onClick={placeOrder}
+                    onClick={paymentMethod === "card" ? payWithStripe : placeOrder}
                     disabled={placing || !isAuthed}
                     style={{
                       ...btnSmallPrimary,
@@ -1292,7 +1793,13 @@ export default function CartPage() {
                       fontSize: 14,
                     }}
                   >
-                    {placing ? "Placing…" : !isAuthed ? "Login to Place Order" : "Place Order"}
+                    {placing
+                      ? "Processing…"
+                      : !isAuthed
+                      ? "Login to Place Order"
+                      : paymentMethod === "card"
+                      ? "Pay with Stripe"
+                      : "Place Order"}
                   </button>
                 </div>
               </div>
@@ -1300,7 +1807,7 @@ export default function CartPage() {
           </div>
         )}
 
-        {items.length > 0 ? (
+        {activeItems.length > 0 ? (
           <div style={sticky}>
             <div style={{ fontWeight: 1000 }}>
               {itemCount} item{itemCount === 1 ? "" : "s"} • Payable <b>{money(payable)}</b>

@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
 // NOTE:
-// - We keep DELIVERY_FEE as fallback ONLY (if some old orders have no delivery_payout yet).
-// - New DB fields: orders.delivery_fee, tip_amount, delivery_payout, delivery_earning_status, delivered_at, etc.
-// - New profile field: profiles.is_delivery_online
-// - Optional table: delivery_events (timeline + GPS)
+// - Restaurant orders table: orders
+// - Grocery orders table: grocery_orders
+// - Optional grocery items table: grocery_order_items (not required here; owner page already shows items)
+// - Optional store table: grocery_stores (for pickup lat/lng, store name)
+// - We unify both sources into ONE delivery dashboard list with a `_source` field.
+
 const DELIVERY_FEE = 40;
 
 function normalizeRole(r) {
@@ -18,15 +20,12 @@ function normalizeRole(r) {
     .replace(/\s+/g, "_");
 }
 
-// ✅ NEW: normalize delivery status (admin approval system)
 function normalizeDeliveryStatus(s) {
   const x = String(s || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
-  // treat empty as pending (safe default)
   if (!x) return "pending";
-  // common variants
   if (x === "approve") return "approved";
   if (x === "approved") return "approved";
   if (x === "reject" || x === "rejected") return "rejected";
@@ -42,7 +41,6 @@ function deliveryGateReason(status) {
     return "Your delivery account is DISABLED by admin. You cannot go online or accept orders.";
   if (s === "rejected")
     return "Your delivery account is REJECTED by admin. You cannot go online or accept orders.";
-  // pending / unknown
   return "Your delivery account is PENDING approval. You cannot go online or accept orders yet.";
 }
 
@@ -88,7 +86,7 @@ function statusBadge(status) {
 }
 
 /* =========================
-   Earnings helpers (Weekly + Charts)
+   Earnings helpers
    ========================= */
 
 function startOfDay(d) {
@@ -103,11 +101,10 @@ function addDays(d, n) {
   return x;
 }
 
-// Week starts Monday
 function startOfWeekMonday(d) {
   const x = startOfDay(d);
-  const day = x.getDay(); // 0 Sun, 1 Mon, ...
-  const diffToMonday = (day + 6) % 7; // Mon->0, Tue->1 ... Sun->6
+  const day = x.getDay();
+  const diffToMonday = (day + 6) % 7;
   x.setDate(x.getDate() - diffToMonday);
   return x;
 }
@@ -145,7 +142,6 @@ function buildGoogleMapsUrl(address) {
   return `https://www.google.com/maps/search/?api=1&query=${q}`;
 }
 
-/** ✅ prefer exact lat/lng in Maps when available */
 function buildGoogleMapsUrlLatLng(lat, lng) {
   const la = Number(lat);
   const ln = Number(lng);
@@ -153,15 +149,12 @@ function buildGoogleMapsUrlLatLng(lat, lng) {
   return `https://www.google.com/maps/search/?api=1&query=${la},${ln}`;
 }
 
-/** ✅ NEW: Directions link (Route) using lat/lng (origin -> destination) */
 function buildGoogleMapsDirectionsUrl(originLat, originLng, destLat, destLng) {
   const ola = Number(originLat);
   const oln = Number(originLng);
   const dla = Number(destLat);
   const dln = Number(destLng);
-
   if (![ola, oln, dla, dln].every((x) => isFinite(x))) return "";
-  // driving by default
   return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
     `${ola},${oln}`
   )}&destination=${encodeURIComponent(`${dla},${dln}`)}&travelmode=driving`;
@@ -206,8 +199,7 @@ function downloadCSV(rows, filename = "export.csv") {
 }
 
 /* =========================
-   ✅ FIX: Build full address from real DB columns
-   orders.address_line1, address_line2, landmark
+   Address helper
    ========================= */
 function buildFullAddress(o) {
   const a1 = pick(o, ["address_line1"], "");
@@ -219,11 +211,17 @@ function buildFullAddress(o) {
     .filter((x) => x && x !== "-");
 
   const joined = parts.join(", ");
-  // fallback to older schemas if any:
   if (joined) return joined;
 
   const old = pick(o, ["customer_address", "address", "delivery_address"], "-");
   return old;
+}
+
+/* =========================
+   ✅ Unified source tagging
+   ========================= */
+function tagSource(rows, source) {
+  return (rows || []).map((r) => ({ ...r, _source: source }));
 }
 
 export default function DeliveryHomePage() {
@@ -232,22 +230,26 @@ export default function DeliveryHomePage() {
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
 
-  const [profile, setProfile] = useState(null); // { full_name, phone, role, avatar_url?, is_delivery_online?, delivery_status? }
+  const [profile, setProfile] = useState(null);
   const [userEmail, setUserEmail] = useState("");
   const [userId, setUserId] = useState("");
 
+  // Unified lists: both restaurant + grocery
   const [availableOrders, setAvailableOrders] = useState([]);
   const [myOrders, setMyOrders] = useState([]);
 
   const [busyId, setBusyId] = useState("");
 
   // Premium UI states
-  const [chartDays, setChartDays] = useState(7); // 7 | 30 | 90
+  const [chartDays, setChartDays] = useState(7);
   const [tab, setTab] = useState("available"); // available | my | completed
   const [searchText, setSearchText] = useState("");
-  const [sortMode, setSortMode] = useState("newest"); // newest | oldest | amount_high | amount_low
+  const [sortMode, setSortMode] = useState("newest");
 
-  // ✅ now online/offline is stored in DB (profiles.is_delivery_online)
+  // ✅ NEW: source filter (All / Restaurant / Grocery)
+  const [sourceFilter, setSourceFilter] = useState("all"); // all | restaurant | grocery
+
+  // Online/offline stored in DB
   const [isOnline, setIsOnline] = useState(true);
   const [savingOnline, setSavingOnline] = useState(false);
 
@@ -255,30 +257,29 @@ export default function DeliveryHomePage() {
   const toastTimer = useRef(null);
 
   // Realtime channels (prevent duplicates)
-  const readyChannelRef = useRef(null);
-  const myChannelRef = useRef(null);
+  const readyRestaurantChannelRef = useRef(null);
+  const readyGroceryChannelRef = useRef(null);
+  const myRestaurantChannelRef = useRef(null);
+  const myGroceryChannelRef = useRef(null);
 
   const lastAvailableCountRef = useRef(0);
 
-  // Timeline UI
-  const [timelineOpen, setTimelineOpen] = useState({}); // { [orderId]: bool }
-  const [timelineLoading, setTimelineLoading] = useState({}); // { [orderId]: bool }
-  const [timelineData, setTimelineData] = useState({}); // { [orderId]: events[] }
-  const [timelineError, setTimelineError] = useState({}); // { [orderId]: string }
+  // Timeline UI (shared)
+  const [timelineOpen, setTimelineOpen] = useState({});
+  const [timelineLoading, setTimelineLoading] = useState({});
+  const [timelineData, setTimelineData] = useState({});
+  const [timelineError, setTimelineError] = useState({});
 
   // Rating UI
   const [ratingBusyId, setRatingBusyId] = useState("");
-  const [ratingLocal, setRatingLocal] = useState({}); // { [orderId]: number }
+  const [ratingLocal, setRatingLocal] = useState({});
 
-  /* =========================
-     ✅ GPS Tracking (per-order)
-     ========================= */
+  // GPS Tracking
+  const gpsWatchRef = useRef({});
+  const gpsLastSaveRef = useRef({});
+  const [gpsState, setGpsState] = useState({});
 
-  const gpsWatchRef = useRef({}); // { [orderId]: watchId }
-  const gpsLastSaveRef = useRef({}); // { [orderId]: ms }
-  const [gpsState, setGpsState] = useState({}); // { [orderId]: { on, lastLat, lastLng, lastSavedAt, err, saving } }
-
-  // ✅ NEW: approval gate states
+  // Approval gate
   const [deliveryStatus, setDeliveryStatus] = useState("pending");
   const deliveryAllowed = useMemo(() => normalizeDeliveryStatus(deliveryStatus) === "approved", [deliveryStatus]);
   const deliveryBlockedReason = useMemo(() => deliveryGateReason(deliveryStatus), [deliveryStatus]);
@@ -293,12 +294,11 @@ export default function DeliveryHomePage() {
     }
   }
 
-  // Delivery payout helper (fee + tip) stored in DB as delivery_payout
+  // Payout helpers (works for both tables if columns exist)
   function orderPayout(o) {
     const p = nnum(o?.delivery_payout, NaN);
     if (Number.isFinite(p) && p > 0) return p;
 
-    // fallback for old data
     const fee = nnum(o?.delivery_fee, DELIVERY_FEE);
     const tip = nnum(o?.tip_amount, 0);
     const computed = fee + tip;
@@ -322,14 +322,12 @@ export default function DeliveryHomePage() {
     return "unpaid";
   }
 
-  async function loadAvailable() {
-    // ✅ BLOCK: not approved => no available orders
-    if (!deliveryAllowed) {
-      setAvailableOrders([]);
-      return;
-    }
+  // ✅ IMPORTANT:
+  // Restaurant pickup lat/lng normally stored on order as restaurant_lat/restaurant_lng.
+  // Grocery pickup lat/lng should come from grocery_stores (if you saved store gps there).
+  // If you don't have store lat/lng yet, pickup will show "Not saved" but order still appears.
 
-    // ✅ only show orders that are READY and NOT assigned yet
+  async function loadAvailableRestaurant() {
     const { data, error } = await supabase
       .from("orders")
       .select("*")
@@ -338,7 +336,118 @@ export default function DeliveryHomePage() {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    setAvailableOrders(data || []);
+    return tagSource(data || [], "restaurant");
+  }
+
+  async function loadAvailableGrocery() {
+    const { data, error } = await supabase
+      .from("grocery_orders")
+      .select("*")
+      .eq("status", "ready")
+      .is("delivery_user_id", null)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const rows = tagSource(data || [], "grocery");
+
+    // Enrich with store pickup coords/name (best effort)
+    try {
+      const storeIds = Array.from(new Set(rows.map((r) => r.store_id).filter(Boolean)));
+      if (storeIds.length > 0) {
+        const { data: stores, error: sErr } = await supabase
+          .from("grocery_stores")
+          .select("id, name, store_name, lat, lng, location_lat, location_lng, store_lat, store_lng")
+          .in("id", storeIds);
+
+        if (!sErr && stores) {
+          const map = {};
+          for (const s of stores) map[s.id] = s;
+
+          for (const r of rows) {
+            const st = map[r.store_id];
+            if (st) {
+              r._store_name = pick(st, ["name", "store_name"], "");
+              // try multiple column possibilities for gps
+              r._pickup_lat = pick(st, ["lat", "location_lat", "store_lat"], null);
+              r._pickup_lng = pick(st, ["lng", "location_lng", "store_lng"], null);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return rows;
+  }
+
+  async function loadMyRestaurant() {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("delivery_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return tagSource(data || [], "restaurant");
+  }
+
+  async function loadMyGrocery() {
+    const { data, error } = await supabase
+      .from("grocery_orders")
+      .select("*")
+      .eq("delivery_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    const rows = tagSource(data || [], "grocery");
+
+    // Enrich with store pickup coords/name (best effort)
+    try {
+      const storeIds = Array.from(new Set(rows.map((r) => r.store_id).filter(Boolean)));
+      if (storeIds.length > 0) {
+        const { data: stores, error: sErr } = await supabase
+          .from("grocery_stores")
+          .select("id, name, store_name, lat, lng, location_lat, location_lng, store_lat, store_lng")
+          .in("id", storeIds);
+
+        if (!sErr && stores) {
+          const map = {};
+          for (const s of stores) map[s.id] = s;
+
+          for (const r of rows) {
+            const st = map[r.store_id];
+            if (st) {
+              r._store_name = pick(st, ["name", "store_name"], "");
+              r._pickup_lat = pick(st, ["lat", "location_lat", "store_lat"], null);
+              r._pickup_lng = pick(st, ["lng", "location_lng", "store_lng"], null);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return rows;
+  }
+
+  async function loadAvailable() {
+    if (!deliveryAllowed) {
+      setAvailableOrders([]);
+      return;
+    }
+
+    const [r, g] = await Promise.all([loadAvailableRestaurant(), loadAvailableGrocery()]);
+    const merged = [...r, ...g].sort((a, b) => {
+      const da = safeDate(a.created_at || a.updated_at)?.getTime() || 0;
+      const db = safeDate(b.created_at || b.updated_at)?.getTime() || 0;
+      return db - da;
+    });
+
+    setAvailableOrders(merged);
   }
 
   async function loadMy() {
@@ -347,88 +456,105 @@ export default function DeliveryHomePage() {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("delivery_user_id", userId)
-      .order("created_at", { ascending: false });
+    const [r, g] = await Promise.all([loadMyRestaurant(), loadMyGrocery()]);
+    const merged = [...r, ...g].sort((a, b) => {
+      const da = safeDate(a.created_at || a.updated_at)?.getTime() || 0;
+      const db = safeDate(b.created_at || b.updated_at)?.getTime() || 0;
+      return db - da;
+    });
 
-    if (error) throw error;
-    setMyOrders(data || []);
+    setMyOrders(merged);
   }
 
   function setupRealtime() {
     if (!userId) return;
-
-    // ✅ BLOCK: not approved => no realtime subscriptions
     if (!deliveryAllowed) return;
 
-    // Ready orders channel
-    if (!readyChannelRef.current) {
-      const chReady = supabase
-        .channel("delivery_ready_orders")
+    // Restaurant ready
+    if (!readyRestaurantChannelRef.current) {
+      const ch = supabase
+        .channel("delivery_ready_restaurant_orders")
         .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: "status=eq.ready" }, async () => {
           try {
             await loadAvailable();
-          } catch {
-            // ignore
-          }
+          } catch {}
         })
         .subscribe();
 
-      readyChannelRef.current = chReady;
+      readyRestaurantChannelRef.current = ch;
     }
 
-    // My orders channel
-    if (!myChannelRef.current) {
-      const chMy = supabase
-        .channel(`delivery_my_orders_${userId}`)
+    // Grocery ready
+    if (!readyGroceryChannelRef.current) {
+      const ch = supabase
+        .channel("delivery_ready_grocery_orders")
+        .on("postgres_changes", { event: "*", schema: "public", table: "grocery_orders", filter: "status=eq.ready" }, async () => {
+          try {
+            await loadAvailable();
+          } catch {}
+        })
+        .subscribe();
+
+      readyGroceryChannelRef.current = ch;
+    }
+
+    // My restaurant orders
+    if (!myRestaurantChannelRef.current) {
+      const ch = supabase
+        .channel(`delivery_my_restaurant_${userId}`)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "orders", filter: `delivery_user_id=eq.${userId}` },
           async () => {
             try {
               await loadMy();
-            } catch {
-              // ignore
-            }
+            } catch {}
           }
         )
         .subscribe();
 
-      myChannelRef.current = chMy;
+      myRestaurantChannelRef.current = ch;
+    }
+
+    // My grocery orders
+    if (!myGroceryChannelRef.current) {
+      const ch = supabase
+        .channel(`delivery_my_grocery_${userId}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "grocery_orders", filter: `delivery_user_id=eq.${userId}` },
+          async () => {
+            try {
+              await loadMy();
+            } catch {}
+          }
+        )
+        .subscribe();
+
+      myGroceryChannelRef.current = ch;
     }
   }
 
   async function saveOnlineToDB(nextValue) {
     if (!userId) return;
 
-    // ✅ BLOCK: not approved => force offline only
     const allowed = deliveryAllowed;
     const finalValue = allowed ? !!nextValue : false;
 
     setSavingOnline(true);
     try {
       const { error } = await supabase.from("profiles").update({ is_delivery_online: !!finalValue }).eq("user_id", userId);
-
       if (error) throw error;
-
       setProfile((p) => ({ ...(p || {}), is_delivery_online: !!finalValue }));
-    } catch (e) {
+    } catch {
       showToast("Could not save online status");
-      // keep UI but don't crash
     } finally {
       setSavingOnline(false);
     }
   }
 
-  // ✅ IMPORTANT CHANGE:
-  // We no longer silently ignore delivery_events errors.
-  // We will show the REAL error in toast so you can fix RLS quickly.
   async function tryInsertDeliveryEvent({ orderId, eventType, note, lat, lng }) {
     if (!orderId || !userId) return { ok: false, error: "Missing orderId or userId" };
-
-    // ✅ BLOCK: not approved => no events
     if (!deliveryAllowed) return { ok: false, error: "Delivery account not approved." };
 
     const payload = {
@@ -441,16 +567,12 @@ export default function DeliveryHomePage() {
     };
 
     const { error } = await supabase.from("delivery_events").insert(payload);
-    if (error) {
-      return { ok: false, error: error.message || String(error) };
-    }
+    if (error) return { ok: false, error: error.message || String(error) };
     return { ok: true, error: "" };
   }
 
   async function loadTimeline(orderId) {
     if (!orderId || !userId) return;
-
-    // ✅ BLOCK: not approved => no timeline
     if (!deliveryAllowed) {
       setTimelineData((m) => ({ ...m, [orderId]: [] }));
       setTimelineError((m) => ({ ...m, [orderId]: "Delivery account not approved." }));
@@ -461,12 +583,13 @@ export default function DeliveryHomePage() {
     setTimelineError((m) => ({ ...m, [orderId]: "" }));
 
     try {
-      const { data, error } = await supabase.from("delivery_events").select("*").eq("order_id", orderId).order("created_at", {
-        ascending: false,
-      });
+      const { data, error } = await supabase
+        .from("delivery_events")
+        .select("*")
+        .eq("order_id", orderId)
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
-
       setTimelineData((m) => ({ ...m, [orderId]: data || [] }));
     } catch (e) {
       setTimelineError((m) => ({ ...m, [orderId]: e?.message || "Timeline not available" }));
@@ -508,15 +631,11 @@ export default function DeliveryHomePage() {
 
   async function startTracking(orderId, silent = false) {
     if (!orderId) return;
-
-    // ✅ BLOCK: not approved => no tracking
     if (!deliveryAllowed) {
       setGpsFor(orderId, { on: false, saving: false, err: "Delivery account not approved." });
       if (!silent) showToast("Account not approved");
       return;
     }
-
-    // if already ON, do nothing
     if (gpsState?.[orderId]?.on) return;
 
     if (!("geolocation" in navigator)) {
@@ -525,7 +644,6 @@ export default function DeliveryHomePage() {
       return;
     }
 
-    // Reset state
     setGpsFor(orderId, { on: true, err: "" });
     if (!silent) showToast("GPS Tracking ON");
 
@@ -536,38 +654,20 @@ export default function DeliveryHomePage() {
         const lat = pos?.coords?.latitude;
         const lng = pos?.coords?.longitude;
 
-        setGpsFor(orderId, {
-          on: true,
-          lastLat: lat,
-          lastLng: lng,
-          err: "",
-        });
+        setGpsFor(orderId, { on: true, lastLat: lat, lastLng: lng, err: "" });
 
-        // throttle saving
         const nowMs = Date.now();
         const lastMs = gpsLastSaveRef.current?.[orderId] || 0;
         if (nowMs - lastMs < saveEveryMs) return;
         gpsLastSaveRef.current = { ...(gpsLastSaveRef.current || {}), [orderId]: nowMs };
 
-        // Insert GPS event
         setGpsFor(orderId, { saving: true });
 
-        const res = await tryInsertDeliveryEvent({
-          orderId,
-          eventType: "gps",
-          note: null,
-          lat,
-          lng,
-        });
+        const res = await tryInsertDeliveryEvent({ orderId, eventType: "gps", note: null, lat, lng });
 
         if (!res.ok) {
           setGpsFor(orderId, { err: res.error || "Insert failed", saving: false });
-
-          // avoid spamming toast
-          const prevErr = (gpsState?.[orderId]?.err || "").trim();
-          if (prevErr !== String(res.error || "").trim()) {
-            showToast(`GPS save failed: ${res.error || "unknown error"}`);
-          }
+          showToast(`GPS save failed: ${res.error || "unknown error"}`);
           return;
         }
 
@@ -584,34 +684,22 @@ export default function DeliveryHomePage() {
     gpsWatchRef.current = { ...(gpsWatchRef.current || {}), [orderId]: wid };
   }
 
-  // ✅ AUTO helper: start GPS when order becomes assigned to me and is active
   async function autoStartIfNeeded(order) {
     try {
       if (!order?.id) return;
       const st = String(order.status || "").toLowerCase();
       if (st === "delivered" || st === "rejected") return;
-
-      // only auto for MY active orders
       if (String(order.delivery_user_id || "") !== String(userId || "")) return;
-
-      // if already on, skip
       if (gpsState?.[order.id]?.on) return;
-
-      // silent auto
       await startTracking(order.id, true);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
-  // ✅ AUTO helper: stop GPS when delivered
   function autoStopIfDelivered(orderId) {
     try {
       if (!orderId) return;
       if (gpsState?.[orderId]?.on) stopTracking(orderId, true);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   useEffect(() => {
@@ -634,7 +722,6 @@ export default function DeliveryHomePage() {
         setUserEmail(user.email || "");
         setUserId(user.id || "");
 
-        // ✅ include avatar_url + is_delivery_online + delivery_status
         const { data: prof, error: profErr } = await supabase
           .from("profiles")
           .select("full_name, phone, role, avatar_url, is_delivery_online, delivery_status")
@@ -644,34 +731,27 @@ export default function DeliveryHomePage() {
         if (profErr) throw profErr;
 
         const role = normalizeRole(prof?.role);
-
-        // 🔒 Protect this page: only delivery_partner can open
         if (role !== "delivery_partner") {
           router.push("/");
           return;
         }
 
         const dStatus = normalizeDeliveryStatus(prof?.delivery_status);
+
         if (!cancelled) {
           setProfile(prof || null);
           setDeliveryStatus(dStatus);
 
-          // ✅ load online from DB, default true if null (ONLY if approved)
           const dbOnline =
             prof?.is_delivery_online === null || prof?.is_delivery_online === undefined
               ? true
               : !!prof?.is_delivery_online;
 
           if (dStatus !== "approved") {
-            // Force UI offline
             setIsOnline(false);
-
-            // Best-effort: force DB offline too (no crash if policy blocks)
             try {
               await supabase.from("profiles").update({ is_delivery_online: false }).eq("user_id", user.id);
-            } catch {
-              // ignore
-            }
+            } catch {}
           } else {
             setIsOnline(dbOnline);
           }
@@ -691,7 +771,6 @@ export default function DeliveryHomePage() {
     };
   }, [router]);
 
-  // Load orders + realtime once userId is ready
   useEffect(() => {
     if (!userId) return;
 
@@ -699,7 +778,6 @@ export default function DeliveryHomePage() {
 
     async function loadAll() {
       try {
-        // ✅ BLOCK: not approved => clear lists and stop realtime
         if (!deliveryAllowed) {
           setAvailableOrders([]);
           setMyOrders([]);
@@ -718,30 +796,38 @@ export default function DeliveryHomePage() {
 
     return () => {
       cancelled = true;
-      if (readyChannelRef.current) {
-        supabase.removeChannel(readyChannelRef.current);
-        readyChannelRef.current = null;
-      }
-      if (myChannelRef.current) {
-        supabase.removeChannel(myChannelRef.current);
-        myChannelRef.current = null;
+
+      // remove channels
+      const chans = [
+        readyRestaurantChannelRef.current,
+        readyGroceryChannelRef.current,
+        myRestaurantChannelRef.current,
+        myGroceryChannelRef.current,
+      ].filter(Boolean);
+
+      for (const ch of chans) {
+        try {
+          supabase.removeChannel(ch);
+        } catch {}
       }
 
-      // stop all gps watches
+      readyRestaurantChannelRef.current = null;
+      readyGroceryChannelRef.current = null;
+      myRestaurantChannelRef.current = null;
+      myGroceryChannelRef.current = null;
+
+      // stop gps watches
       try {
         const keys = Object.keys(gpsWatchRef.current || {});
         for (const k of keys) {
           const wid = gpsWatchRef.current[k];
           if (wid) navigator.geolocation.clearWatch(wid);
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, deliveryAllowed]);
 
-  // ✅ AUTO: whenever my active orders list changes, auto-start GPS for them (if needed)
   useEffect(() => {
     try {
       if (!userId) return;
@@ -750,23 +836,16 @@ export default function DeliveryHomePage() {
       const list = myOrders || [];
       for (const o of list) {
         const st = String(o.status || "").toLowerCase();
-        if (st !== "delivered") {
-          autoStartIfNeeded(o);
-        } else {
-          autoStopIfDelivered(o.id);
-        }
+        if (st !== "delivered") autoStartIfNeeded(o);
+        else autoStopIfDelivered(o.id);
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myOrders, userId, deliveryAllowed]);
 
-  // Toast: new available orders
   useEffect(() => {
     const current = (availableOrders || []).length;
     const prev = lastAvailableCountRef.current;
-
     lastAvailableCountRef.current = current;
 
     if (!loading && isOnline && tab === "available" && current > prev && prev !== 0) {
@@ -778,12 +857,9 @@ export default function DeliveryHomePage() {
   async function handleLogout() {
     try {
       await supabase.auth.signOut();
-    } catch (e) {
-      // ignore
-    } finally {
-      router.push("/");
-      router.refresh();
-    }
+    } catch {}
+    router.push("/");
+    router.refresh();
   }
 
   async function hardRefresh() {
@@ -803,28 +879,24 @@ export default function DeliveryHomePage() {
     }
   }
 
-  async function acceptOrder(orderId) {
-    if (!deliveryAllowed) {
-      showToast("Account not approved");
-      return;
-    }
+  // ✅ Accept order (restaurant OR grocery)
+  async function acceptOrder(orderRow) {
+    const orderId = orderRow?.id;
+    const src = orderRow?._source;
 
-    if (!isOnline) {
-      showToast("Go Online to accept orders");
-      return;
-    }
+    if (!deliveryAllowed) return showToast("Account not approved");
+    if (!isOnline) return showToast("Go Online to accept orders");
+    if (!orderId || !src) return;
 
     setErrMsg("");
     setBusyId(orderId);
 
     try {
-      // ✅ LOCK: only accept if order is READY and NOT assigned (delivery_user_id is null)
+      const table = src === "grocery" ? "grocery_orders" : "orders";
+
       const { data, error } = await supabase
-        .from("orders")
-        .update({
-          delivery_user_id: userId,
-          status: "delivering",
-        })
+        .from(table)
+        .update({ delivery_user_id: userId, status: "delivering" })
         .eq("id", orderId)
         .eq("status", "ready")
         .is("delivery_user_id", null)
@@ -832,7 +904,6 @@ export default function DeliveryHomePage() {
 
       if (error) throw error;
 
-      // ✅ if no rows updated -> someone else already took it
       if (!data || data.length === 0) {
         setErrMsg("❌ This order was already taken by another delivery partner.");
         await loadAvailable();
@@ -840,14 +911,12 @@ export default function DeliveryHomePage() {
         return;
       }
 
-      // ✅ timeline
-      const res = await tryInsertDeliveryEvent({ orderId, eventType: "accepted", note: null });
+      const res = await tryInsertDeliveryEvent({ orderId, eventType: `accepted_${src}`, note: null });
       if (!res.ok) showToast(`delivery_events insert failed: ${res.error}`);
 
-      showToast("Order accepted ✅");
+      showToast(`${src === "grocery" ? "Grocery" : "Restaurant"} order accepted ✅`);
       setTab("my");
 
-      // ✅ AUTO: start GPS immediately after accept (silent = true, no spam)
       await startTracking(orderId, true);
 
       await loadAvailable();
@@ -859,35 +928,37 @@ export default function DeliveryHomePage() {
     }
   }
 
-  async function updateMyStatus(orderId, status) {
-    if (!deliveryAllowed) {
-      showToast("Account not approved");
-      return;
-    }
+  // ✅ Update status (restaurant OR grocery)
+  async function updateMyStatus(orderRow, status) {
+    const orderId = orderRow?.id;
+    const src = orderRow?._source;
+    if (!orderId || !src) return;
+
+    if (!deliveryAllowed) return showToast("Account not approved");
 
     setErrMsg("");
     setBusyId(orderId);
 
     try {
+      const table = src === "grocery" ? "grocery_orders" : "orders";
       const patch = { status };
 
-      // ✅ optionally store delivered_at (if your orders table has this column)
       if (String(status).toLowerCase() === "delivered") {
         patch.delivered_at = new Date().toISOString();
       }
 
-      const { error } = await supabase.from("orders").update(patch).eq("id", orderId).eq("delivery_user_id", userId);
+      const { error } = await supabase
+        .from(table)
+        .update(patch)
+        .eq("id", orderId)
+        .eq("delivery_user_id", userId);
 
       if (error) throw error;
 
-      // ✅ timeline
-      const res = await tryInsertDeliveryEvent({ orderId, eventType: status, note: null });
+      const res = await tryInsertDeliveryEvent({ orderId, eventType: `${status}_${src}`, note: null });
       if (!res.ok) showToast(`delivery_events insert failed: ${res.error}`);
 
-      // ✅ AUTO: stop GPS when delivered
-      if (String(status).toLowerCase() === "delivered") {
-        stopTracking(orderId, true);
-      }
+      if (String(status).toLowerCase() === "delivered") stopTracking(orderId, true);
 
       await loadMy();
 
@@ -900,21 +971,27 @@ export default function DeliveryHomePage() {
     }
   }
 
-  async function saveRating(orderId, ratingValue) {
-    if (!orderId) return;
+  async function saveRating(orderRow, ratingValue) {
+    const orderId = orderRow?.id;
+    const src = orderRow?._source;
+    if (!orderId || !src) return;
+
     const val = nnum(ratingValue, 0);
     if (val < 1 || val > 5) return;
 
-    if (!deliveryAllowed) {
-      showToast("Account not approved");
-      return;
-    }
+    if (!deliveryAllowed) return showToast("Account not approved");
 
     setRatingBusyId(orderId);
     setErrMsg("");
 
     try {
-      const { error } = await supabase.from("orders").update({ delivery_rating: val }).eq("id", orderId).eq("delivery_user_id", userId);
+      const table = src === "grocery" ? "grocery_orders" : "orders";
+
+      const { error } = await supabase
+        .from(table)
+        .update({ delivery_rating: val })
+        .eq("id", orderId)
+        .eq("delivery_user_id", userId);
 
       if (error) throw error;
 
@@ -1089,7 +1166,6 @@ export default function DeliveryHomePage() {
       label: { color: "rgba(17,24,39,0.6)", fontWeight: 900, fontSize: 12, marginBottom: 4 },
       val: { fontWeight: 950, color: "#0b1220" },
 
-      // Earnings section
       weekWrap: {
         marginTop: 14,
         borderRadius: 16,
@@ -1164,7 +1240,6 @@ export default function DeliveryHomePage() {
       barValue: { fontSize: 11, fontWeight: 950, color: "rgba(17,24,39,0.70)" },
       barLabel: { fontSize: 11, fontWeight: 950, color: "rgba(17,24,39,0.65)" },
 
-      // Tabs & controls
       tabsRow: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 12 },
       tabBtn: (active) => ({
         padding: "8px 10px",
@@ -1194,7 +1269,6 @@ export default function DeliveryHomePage() {
         fontWeight: 900,
       },
 
-      // Toggle
       toggleWrap: {
         display: "flex",
         alignItems: "center",
@@ -1213,7 +1287,6 @@ export default function DeliveryHomePage() {
       }),
       toggleText: { fontWeight: 950, fontSize: 12, color: "#0b1220" },
 
-      // Toast
       toast: {
         position: "fixed",
         bottom: 18,
@@ -1230,7 +1303,6 @@ export default function DeliveryHomePage() {
         maxWidth: 420,
       },
 
-      // Profile avatar
       avatar: {
         width: 44,
         height: 44,
@@ -1245,7 +1317,6 @@ export default function DeliveryHomePage() {
       },
       avatarImg: { width: "100%", height: "100%", objectFit: "cover" },
 
-      // Timeline
       timelineBox: {
         marginTop: 10,
         borderRadius: 14,
@@ -1266,7 +1337,6 @@ export default function DeliveryHomePage() {
         fontSize: 12,
       }),
 
-      // GPS box
       gpsBox: {
         marginTop: 10,
         borderRadius: 14,
@@ -1286,7 +1356,6 @@ export default function DeliveryHomePage() {
         fontSize: 12,
       },
 
-      // NEW: pickup/drop pill
       locPill: {
         display: "inline-flex",
         alignItems: "center",
@@ -1300,7 +1369,6 @@ export default function DeliveryHomePage() {
         color: "rgba(17,24,39,0.80)",
       },
 
-      // ✅ NEW: account status badge
       gateBadge: (status) => {
         const s = normalizeDeliveryStatus(status);
         if (s === "approved") {
@@ -1338,17 +1406,35 @@ export default function DeliveryHomePage() {
           textTransform: "uppercase",
         };
       },
+
+      sourceBtn: (active) => ({
+        padding: "8px 10px",
+        borderRadius: 999,
+        border: "1px solid rgba(0,0,0,0.12)",
+        background: active ? "#111" : "rgba(255,255,255,0.85)",
+        color: active ? "#fff" : "#111",
+        cursor: "pointer",
+        fontWeight: 950,
+        fontSize: 12,
+      }),
     };
   }, [deliveryStatus]);
 
   const availableCount = isOnline && deliveryAllowed ? availableOrders.length : 0;
 
+  const availableRestaurantCount = useMemo(() => {
+    if (!isOnline || !deliveryAllowed) return 0;
+    return (availableOrders || []).filter((o) => o._source === "restaurant").length;
+  }, [availableOrders, isOnline, deliveryAllowed]);
+
+  const availableGroceryCount = useMemo(() => {
+    if (!isOnline || !deliveryAllowed) return 0;
+    return (availableOrders || []).filter((o) => o._source === "grocery").length;
+  }, [availableOrders, isOnline, deliveryAllowed]);
+
   const myActiveOrders = useMemo(() => {
     const list = myOrders || [];
-    return list.filter((o) => {
-      const st = String(o.status || "").toLowerCase();
-      return st !== "delivered";
-    });
+    return list.filter((o) => String(o.status || "").toLowerCase() !== "delivered");
   }, [myOrders]);
 
   const completedOrders = useMemo(() => {
@@ -1356,7 +1442,6 @@ export default function DeliveryHomePage() {
     return list.filter((o) => String(o.status || "").toLowerCase() === "delivered");
   }, [myOrders]);
 
-  // 💰 Earnings time buckets
   const now = new Date();
   const todayKey = toISOKey(now);
   const weekStart = startOfWeekMonday(now);
@@ -1375,7 +1460,6 @@ export default function DeliveryHomePage() {
     let monthE = 0;
     let lifeE = 0;
 
-    // for chart buckets
     const rangeStart = startOfDay(addDays(now, -(chartDays - 1)));
     const rangeDays = Array.from({ length: chartDays }, (_, i) => startOfDay(addDays(rangeStart, i)));
     const byKeyCount = {};
@@ -1386,7 +1470,6 @@ export default function DeliveryHomePage() {
       byKeyE[k] = 0;
     }
 
-    // weekly top day (Mon..Sun)
     const weekDays = Array.from({ length: 7 }, (_, i) => startOfDay(addDays(weekStart, i)));
     const weekByCount = {};
     const weekByE = {};
@@ -1436,11 +1519,14 @@ export default function DeliveryHomePage() {
       return { key, label: shortDayLabel(d), count, earnings };
     });
 
-    const topWeekDay = weekChart.reduce((best, cur) => (cur.earnings > best.earnings ? cur : best), { label: "—", earnings: 0, count: 0 });
+    const topWeekDay = weekChart.reduce((best, cur) => (cur.earnings > best.earnings ? cur : best), {
+      label: "—",
+      earnings: 0,
+      count: 0,
+    });
 
     const avgPerDayWeek = Math.round(weekE / 7);
 
-    // Chart data for 7/30 (daily)
     const dailyChart = rangeDays.map((d) => {
       const key = toISOKey(d);
       const count = byKeyCount[key] || 0;
@@ -1454,7 +1540,6 @@ export default function DeliveryHomePage() {
       };
     });
 
-    // Chart data for 90 (compressed weekly = 13 bars)
     let displayChart = dailyChart;
     let displayMax = Math.max(1, ...dailyChart.map((x) => x.earnings));
     let displayNote = chartDays === 7 ? "Chart shows last 7 days." : "Chart shows daily earnings for last 30 days (scroll).";
@@ -1510,7 +1595,6 @@ export default function DeliveryHomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completedOrders, chartDays, todayKey, weekStart, monthStartDate]);
 
-  // Filtering / sorting
   function orderTotal(o) {
     const t = pick(o, ["total", "amount", "grand_total"], "0");
     const n = Number(t);
@@ -1530,6 +1614,8 @@ export default function DeliveryHomePage() {
       pick(o, ["address_line1", "address_line2", "landmark"], ""),
       pick(o, ["id"], ""),
       pick(o, ["status"], ""),
+      pick(o, ["_source"], ""),
+      pick(o, ["_store_name"], ""),
     ]
       .join(" ")
       .toLowerCase();
@@ -1548,29 +1634,36 @@ export default function DeliveryHomePage() {
     if (sortMode === "oldest") arr.sort((a, b) => byDate(a) - byDate(b));
     else if (sortMode === "amount_high") arr.sort((a, b) => orderTotal(b) - orderTotal(a));
     else if (sortMode === "amount_low") arr.sort((a, b) => orderTotal(a) - orderTotal(b));
-    else arr.sort((a, b) => byDate(b) - byDate(a)); // newest
+    else arr.sort((a, b) => byDate(b) - byDate(a));
 
     return arr;
+  }
+
+  function applySourceFilter(list) {
+    if (sourceFilter === "restaurant") return (list || []).filter((o) => o._source === "restaurant");
+    if (sourceFilter === "grocery") return (list || []).filter((o) => o._source === "grocery");
+    return list || [];
   }
 
   const visibleAvailable = useMemo(() => {
     if (!isOnline) return [];
     if (!deliveryAllowed) return [];
-    return sortList((availableOrders || []).filter(matchesSearch));
-  }, [availableOrders, searchText, sortMode, isOnline, deliveryAllowed]);
+    return sortList(applySourceFilter((availableOrders || []).filter(matchesSearch)));
+  }, [availableOrders, searchText, sortMode, isOnline, deliveryAllowed, sourceFilter]);
 
   const visibleMyActive = useMemo(() => {
     if (!deliveryAllowed) return [];
-    return sortList((myActiveOrders || []).filter(matchesSearch));
-  }, [myActiveOrders, searchText, sortMode, deliveryAllowed]);
+    return sortList(applySourceFilter((myActiveOrders || []).filter(matchesSearch)));
+  }, [myActiveOrders, searchText, sortMode, deliveryAllowed, sourceFilter]);
 
   const visibleCompleted = useMemo(() => {
     if (!deliveryAllowed) return [];
-    return sortList((completedOrders || []).filter(matchesSearch));
-  }, [completedOrders, searchText, sortMode, deliveryAllowed]);
+    return sortList(applySourceFilter((completedOrders || []).filter(matchesSearch)));
+  }, [completedOrders, searchText, sortMode, deliveryAllowed, sourceFilter]);
 
   function renderOrderCard(o, type) {
-    // ✅ FIX: use real DB columns
+    const src = o._source || "restaurant";
+
     const customerName = pick(o, ["customer_name", "name", "full_name"]);
     const customerPhone = pick(o, ["phone", "customer_phone", "mobile", "customer_mobile"]);
     const customerAddress = buildFullAddress(o);
@@ -1580,18 +1673,26 @@ export default function DeliveryHomePage() {
     const total = orderTotal(o);
     const st = String(o.status || "").toLowerCase();
 
-    // ✅ DROP location
+    // Drop coords (both)
     const dropLat = pick(o, ["customer_lat", "drop_lat", "delivery_lat"], null);
     const dropLng = pick(o, ["customer_lng", "drop_lng", "delivery_lng"], null);
     const dropMapsUrlLatLng = buildGoogleMapsUrlLatLng(dropLat, dropLng);
     const dropMapsUrl = dropMapsUrlLatLng || buildGoogleMapsUrl(customerAddress);
 
-    // ✅ PICKUP location (restaurant)
-    const pickLat = pick(o, ["restaurant_lat", "pickup_lat"], null);
-    const pickLng = pick(o, ["restaurant_lng", "pickup_lng"], null);
-    const pickupMapsUrlLatLng = buildGoogleMapsUrlLatLng(pickLat, pickLng);
+    // Pickup coords
+    let pickLat = null;
+    let pickLng = null;
 
-    // ✅ Route: Restaurant -> Customer
+    if (src === "restaurant") {
+      pickLat = pick(o, ["restaurant_lat", "pickup_lat"], null);
+      pickLng = pick(o, ["restaurant_lng", "pickup_lng"], null);
+    } else {
+      // grocery: from enriched store gps (if exists) or possible columns on order
+      pickLat = pick(o, ["_pickup_lat", "store_lat", "pickup_lat"], null);
+      pickLng = pick(o, ["_pickup_lng", "store_lng", "pickup_lng"], null);
+    }
+
+    const pickupMapsUrlLatLng = buildGoogleMapsUrlLatLng(pickLat, pickLng);
     const routeUrl = buildGoogleMapsDirectionsUrl(pickLat, pickLng, dropLat, dropLng);
 
     const telUrl = `tel:${String(customerPhone || "").replace(/\s+/g, "")}`;
@@ -1616,9 +1717,12 @@ export default function DeliveryHomePage() {
     const lastLng = gps.lastLng;
 
     return (
-      <div key={o.id} style={styles.orderCard}>
+      <div key={`${src}_${o.id}`} style={styles.orderCard}>
         <div style={styles.row}>
           <span style={styles.badge(o.status)}>{o.status || "unknown"}</span>
+
+          <span style={styles.subBadge}>{src === "grocery" ? "GROCERY" : "RESTAURANT"}</span>
+          {src === "grocery" && o._store_name ? <span style={styles.subBadge}>{o._store_name}</span> : null}
 
           {type !== "available" ? <span style={styles.paidBadge(paid)}>{paid ? "PAID" : "UNPAID"}</span> : null}
 
@@ -1636,7 +1740,6 @@ export default function DeliveryHomePage() {
 
         <div style={styles.split}>
           <div>
-            {/* ✅ Pickup + Drop overview */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <span style={styles.locPill}>
                 Pickup:{" "}
@@ -1683,7 +1786,6 @@ export default function DeliveryHomePage() {
               </div>
             ) : null}
 
-            {/* ✅ GPS Tracking Box appears only on MY active orders */}
             {type === "my" ? (
               <div style={styles.gpsBox}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -1718,7 +1820,6 @@ export default function DeliveryHomePage() {
               </div>
             ) : null}
 
-            {/* Timeline toggle */}
             {type !== "available" ? (
               <div style={{ marginTop: 10 }}>
                 <button
@@ -1727,9 +1828,7 @@ export default function DeliveryHomePage() {
                   onClick={async () => {
                     const next = !timelineIsOpen;
                     setTimelineOpen((m) => ({ ...m, [o.id]: next }));
-                    if (next) {
-                      await loadTimeline(o.id);
-                    }
+                    if (next) await loadTimeline(o.id);
                   }}
                 >
                   {timelineIsOpen ? "Hide Timeline" : "View Timeline"}
@@ -1758,7 +1857,11 @@ export default function DeliveryHomePage() {
                             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                               <span style={styles.subBadge}>{String(ev.event_type || "event")}</span>
                               <div style={{ color: "#666", fontSize: 12, fontWeight: 850 }}>{formatWhen(ev.created_at)}</div>
-                              {ev.lat !== null && ev.lng !== null ? <span style={styles.subBadge}>{ev.lat}, {ev.lng}</span> : null}
+                              {ev.lat !== null && ev.lng !== null ? (
+                                <span style={styles.subBadge}>
+                                  {ev.lat}, {ev.lng}
+                                </span>
+                              ) : null}
                             </div>
                             {ev.event_note ? (
                               <div style={{ marginTop: 6, color: "rgba(17,24,39,0.75)", fontWeight: 850 }}>{ev.event_note}</div>
@@ -1776,7 +1879,6 @@ export default function DeliveryHomePage() {
           <div>
             <div style={styles.label}>Quick Actions</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {/* ✅ Pickup Maps */}
               <a
                 href={pickupMapsUrlLatLng || "#"}
                 target="_blank"
@@ -1787,17 +1889,15 @@ export default function DeliveryHomePage() {
                   opacity: pickupMapsUrlLatLng ? 1 : 0.55,
                   pointerEvents: pickupMapsUrlLatLng ? "auto" : "none",
                 }}
-                title={pickupMapsUrlLatLng ? "Open Restaurant Pickup in Maps" : "Restaurant pickup location not saved"}
+                title={pickupMapsUrlLatLng ? "Open Pickup in Maps" : "Pickup location not saved"}
               >
                 Pickup Maps
               </a>
 
-              {/* ✅ Drop Maps */}
               <a href={dropMapsUrl} target="_blank" rel="noreferrer" style={{ ...styles.btnGhost, textDecoration: "none" }}>
                 Drop Maps
               </a>
 
-              {/* ✅ Route */}
               <a
                 href={routeUrl || "#"}
                 target="_blank"
@@ -1808,7 +1908,7 @@ export default function DeliveryHomePage() {
                   opacity: routeUrl ? 1 : 0.55,
                   pointerEvents: routeUrl ? "auto" : "none",
                 }}
-                title={routeUrl ? "Open Route: Restaurant → Customer" : "Route needs both pickup and drop coordinates"}
+                title={routeUrl ? "Open Route: Pickup → Customer" : "Route needs both pickup and drop coordinates"}
               >
                 Route →
               </a>
@@ -1842,7 +1942,6 @@ export default function DeliveryHomePage() {
                 Copy Phone
               </button>
 
-              {/* ✅ copy coordinates quick */}
               <button
                 type="button"
                 style={styles.btnSoft}
@@ -1857,13 +1956,12 @@ export default function DeliveryHomePage() {
               </button>
             </div>
 
-            {/* Status controls */}
             <div style={{ marginTop: 12 }}>
               <div style={styles.label}>Progress</div>
 
               {type === "available" ? (
                 <button
-                  onClick={() => acceptOrder(o.id)}
+                  onClick={() => acceptOrder(o)}
                   disabled={busyId === o.id || !isOnline || !deliveryAllowed}
                   style={styles.btn}
                   title={!deliveryAllowed ? "Account not approved" : !isOnline ? "Go Online to accept" : "Accept this order"}
@@ -1875,19 +1973,19 @@ export default function DeliveryHomePage() {
               {type === "my" ? (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {st === "delivering" ? (
-                    <button onClick={() => updateMyStatus(o.id, "picked_up")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
+                    <button onClick={() => updateMyStatus(o, "picked_up")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
                       {busyId === o.id ? "Updating…" : "Picked Up"}
                     </button>
                   ) : null}
 
                   {st === "picked_up" ? (
-                    <button onClick={() => updateMyStatus(o.id, "on_the_way")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
+                    <button onClick={() => updateMyStatus(o, "on_the_way")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
                       {busyId === o.id ? "Updating…" : "On The Way"}
                     </button>
                   ) : null}
 
                   {st === "on_the_way" ? (
-                    <button onClick={() => updateMyStatus(o.id, "delivered")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btn}>
+                    <button onClick={() => updateMyStatus(o, "delivered")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btn}>
                       {busyId === o.id ? "Updating…" : "Delivered"}
                     </button>
                   ) : null}
@@ -1896,7 +1994,6 @@ export default function DeliveryHomePage() {
                 </div>
               ) : null}
 
-              {/* Completed: show payout + rating */}
               {type === "completed" ? (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ color: "rgba(17,24,39,0.7)", fontWeight: 900, fontSize: 12 }}>
@@ -1912,7 +2009,7 @@ export default function DeliveryHomePage() {
                           type="button"
                           style={styles.starBtn(currentRating === x)}
                           disabled={ratingBusyId === o.id || !deliveryAllowed}
-                          onClick={() => saveRating(o.id, x)}
+                          onClick={() => saveRating(o, x)}
                           title={`Rate ${x} star`}
                         >
                           {x} ⭐
@@ -1949,7 +2046,6 @@ export default function DeliveryHomePage() {
       {toast.show ? <div style={styles.toast}>{toast.text}</div> : null}
 
       <div style={styles.wrap}>
-        {/* Header */}
         <div style={styles.row}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -1966,15 +2062,12 @@ export default function DeliveryHomePage() {
                 <h1 style={styles.title}>Delivery Dashboard</h1>
                 <div style={styles.sub}>Welcome{headerName ? `, ${headerName}` : ""} — ready to deliver.</div>
 
-                {/* ✅ NEW: Status badge */}
                 <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={styles.gateBadge(deliveryStatus)}>
                     {normalizeDeliveryStatus(deliveryStatus) === "approved" ? "APPROVED" : normalizeDeliveryStatus(deliveryStatus)}
                   </span>
                   {!deliveryAllowed ? (
-                    <span style={{ fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.70)" }}>
-                      {deliveryBlockedReason}
-                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.70)" }}>{deliveryBlockedReason}</span>
                   ) : null}
                 </div>
               </div>
@@ -2006,13 +2099,14 @@ export default function DeliveryHomePage() {
             </div>
 
             <span style={styles.pill}>Available: {availableCount}</span>
+            <span style={styles.pill}>Restaurant: {availableRestaurantCount}</span>
+            <span style={styles.pill}>Grocery: {availableGroceryCount}</span>
             <span style={styles.pill}>Active: {deliveryAllowed ? myActiveOrders.length : 0}</span>
 
             <button onClick={hardRefresh} style={styles.btnGhost}>
               Refresh
             </button>
 
-            {/* ✅ FIXED: Home stays on delivery dashboard */}
             <button onClick={() => router.push("/delivery")} style={styles.btnGhost}>
               Home
             </button>
@@ -2026,7 +2120,6 @@ export default function DeliveryHomePage() {
         {loading ? <div style={styles.loading}>Loading delivery profile…</div> : null}
         {errMsg ? <div style={styles.error}>{errMsg}</div> : null}
 
-        {/* ✅ NEW: if blocked, show message but keep page stable (no crash) */}
         {!loading && !errMsg && !deliveryAllowed ? (
           <div style={styles.card}>
             <div style={{ fontWeight: 1000, fontSize: 16 }}>Account Locked</div>
@@ -2040,7 +2133,6 @@ export default function DeliveryHomePage() {
 
         {!loading && !errMsg && deliveryAllowed ? (
           <>
-            {/* Account */}
             <div style={styles.card}>
               <div style={styles.row}>
                 <div style={{ flex: 1 }}>
@@ -2055,6 +2147,7 @@ export default function DeliveryHomePage() {
                   style={styles.btnSoft}
                   onClick={() => {
                     const rows = completedOrders.slice(0, 500).map((o) => ({
+                      source: o._source || "",
                       order_id: o.id,
                       status: o.status,
                       created_at: o.created_at,
@@ -2068,8 +2161,8 @@ export default function DeliveryHomePage() {
                       customer: pick(o, ["customer_name", "name", "full_name"], ""),
                       phone: pick(o, ["phone", "customer_phone", "mobile", "customer_mobile"], ""),
                       address: buildFullAddress(o),
-                      pickup_lat: pick(o, ["restaurant_lat"], ""),
-                      pickup_lng: pick(o, ["restaurant_lng"], ""),
+                      pickup_lat: pick(o, ["restaurant_lat", "_pickup_lat"], ""),
+                      pickup_lng: pick(o, ["restaurant_lng", "_pickup_lng"], ""),
                       drop_lat: pick(o, ["customer_lat"], ""),
                       drop_lng: pick(o, ["customer_lng"], ""),
                     }));
@@ -2082,7 +2175,6 @@ export default function DeliveryHomePage() {
               </div>
             </div>
 
-            {/* Earnings KPIs */}
             <div style={styles.card}>
               <div style={styles.row}>
                 <div style={{ flex: 1 }}>
@@ -2113,7 +2205,6 @@ export default function DeliveryHomePage() {
                 </div>
               </div>
 
-              {/* Weekly summary + chart */}
               <div style={styles.weekWrap}>
                 <div style={styles.weekTop}>
                   <div style={{ minWidth: 280 }}>
@@ -2151,7 +2242,6 @@ export default function DeliveryHomePage() {
                   </div>
                 </div>
 
-                {/* Chart */}
                 {chartDays === 7 ? (
                   <div style={styles.chart7}>
                     {earningsStats.displayChart.map((d) => {
@@ -2199,12 +2289,13 @@ export default function DeliveryHomePage() {
               </div>
             </div>
 
-            {/* Controls */}
             <div style={styles.card}>
               <div style={styles.row}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 950, fontSize: 14 }}>Orders</div>
-                  <div style={{ color: "#666", marginTop: 4, fontSize: 13 }}>Search, sort and manage deliveries fast.</div>
+                  <div style={{ color: "#666", marginTop: 4, fontSize: 13 }}>
+                    Home shows all orders, but you can filter Grocery vs Restaurant.
+                  </div>
                 </div>
 
                 <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Search name / phone / address / id…" style={styles.input} />
@@ -2228,6 +2319,18 @@ export default function DeliveryHomePage() {
                   Completed ({visibleCompleted.length})
                 </button>
 
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button type="button" style={styles.sourceBtn(sourceFilter === "all")} onClick={() => setSourceFilter("all")}>
+                    All
+                  </button>
+                  <button type="button" style={styles.sourceBtn(sourceFilter === "restaurant")} onClick={() => setSourceFilter("restaurant")}>
+                    Restaurant
+                  </button>
+                  <button type="button" style={styles.sourceBtn(sourceFilter === "grocery")} onClick={() => setSourceFilter("grocery")}>
+                    Grocery
+                  </button>
+                </div>
+
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button
                     type="button"
@@ -2235,6 +2338,7 @@ export default function DeliveryHomePage() {
                     onClick={() => {
                       const list = tab === "available" ? visibleAvailable : tab === "my" ? visibleMyActive : visibleCompleted;
                       const rows = (list || []).map((o) => ({
+                        source: o._source || "",
                         order_id: o.id,
                         status: o.status,
                         created_at: o.created_at,
@@ -2246,8 +2350,8 @@ export default function DeliveryHomePage() {
                         customer: pick(o, ["customer_name", "name", "full_name"], ""),
                         phone: pick(o, ["phone", "customer_phone", "mobile", "customer_mobile"], ""),
                         address: buildFullAddress(o),
-                        pickup_lat: pick(o, ["restaurant_lat"], ""),
-                        pickup_lng: pick(o, ["restaurant_lng"], ""),
+                        pickup_lat: pick(o, ["restaurant_lat", "_pickup_lat"], ""),
+                        pickup_lng: pick(o, ["restaurant_lng", "_pickup_lng"], ""),
                         drop_lat: pick(o, ["customer_lat"], ""),
                         drop_lng: pick(o, ["customer_lng"], ""),
                       }));
@@ -2260,7 +2364,6 @@ export default function DeliveryHomePage() {
                 </div>
               </div>
 
-              {/* Lists */}
               <div style={{ marginTop: 10 }}>
                 {tab === "available" ? (
                   !isOnline ? (

@@ -33,12 +33,24 @@ async function redirectByRole(router) {
     return;
   }
 
+  if (role === "grocery_owner") {
+    router.push("/groceries/owner/settings");
+    return;
+  }
+
   if (role === "delivery_partner") {
     router.push("/delivery");
     return;
   }
 
   router.push("/");
+}
+
+// ✅ helper: email confirmed check
+function isEmailConfirmed(user) {
+  const a = user?.email_confirmed_at;
+  const b = user?.confirmed_at;
+  return !!(a || b);
 }
 
 export default function SignupPage() {
@@ -71,7 +83,13 @@ export default function SignupPage() {
       try {
         const { data } = await supabase.auth.getSession();
         if (!cancelled && data?.session?.user) {
-          await redirectByRole(router);
+          // if already logged in but email not confirmed, sign out for safety
+          const u = data.session.user;
+          if (!isEmailConfirmed(u)) {
+            await supabase.auth.signOut();
+          } else {
+            await redirectByRole(router);
+          }
         }
       } catch (e) {
         // ignore
@@ -105,47 +123,53 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
+      const emailRedirectTo =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/auth/callback`
+          : undefined;
+
+      // ✅ A) Signup that requires email confirmation (if enabled in Supabase)
       const { data: signData, error: signErr } = await supabase.auth.signUp({
         email: email.trim(),
         password: password.trim(),
+        options: emailRedirectTo ? { emailRedirectTo } : undefined,
       });
       if (signErr) throw signErr;
 
       const createdUser = signData?.user;
 
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
+      // If confirm email is ON, sometimes there is no session yet — that’s OK.
+      // We still create the profile if we have a user id.
+      if (createdUser?.id) {
+        const profilePayload = {
+          user_id: createdUser.id,
+          role,
+          full_name: fullName.trim(),
+          phone: phone.trim(),
+          address_line1: address1.trim(),
+          address_line2: address2.trim(),
+          city: city.trim(),
+          state: stateProv.trim(),
+          postal_code: postal.trim(),
+          country: country.trim(),
+        };
 
-      const user = createdUser || userData?.user;
+        const { error: profErr } = await supabase
+          .from("profiles")
+          .upsert(profilePayload, { onConflict: "user_id" });
 
-      if (!user) {
-        setInfoMsg("✅ Account created. Please confirm your email, then login.");
-        return;
+        if (profErr) throw profErr;
       }
 
-      // IMPORTANT: your profiles table may not have `email` column, so we do NOT write it
-      const profilePayload = {
-        user_id: user.id,
-        role,
-        full_name: fullName.trim(),
-        phone: phone.trim(),
-        address_line1: address1.trim(),
-        address_line2: address2.trim(),
-        city: city.trim(),
-        state: stateProv.trim(),
-        postal_code: postal.trim(),
-        country: country.trim(),
-      };
+      // ✅ If email confirmation required, user must verify before login
+      setInfoMsg(
+        "✅ Account created! Please check your email and click the verification link. After verifying, come back and login."
+      );
 
-      const { error: profErr } = await supabase
-        .from("profiles")
-        .upsert(profilePayload, { onConflict: "user_id" });
-
-      if (profErr) throw profErr;
-
-      setInfoMsg("✅ Signup successful. Redirecting...");
-      await redirectByRole(router);
-      router.refresh();
+      // Optional: auto redirect to login after short delay
+      setTimeout(() => {
+        router.push("/login");
+      }, 1200);
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -185,7 +209,7 @@ export default function SignupPage() {
             Create your account
           </h1>
           <div style={{ color: "#666", marginTop: 6 }}>
-            Customer, Restaurant Owner, or Delivery Partner — all supported
+            Customer, Restaurant Owner, Grocery Owner, or Delivery Partner — all supported
           </div>
         </div>
 
@@ -241,13 +265,10 @@ export default function SignupPage() {
               <label style={{ fontWeight: 900, display: "block", marginBottom: 6 }}>
                 Account Type
               </label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                style={inputStyle}
-              >
+              <select value={role} onChange={(e) => setRole(e.target.value)} style={inputStyle}>
                 <option value="customer">Customer</option>
                 <option value="restaurant_owner">Restaurant Owner</option>
+                <option value="grocery_owner">Grocery Owner</option>
                 <option value="delivery_partner">Delivery Partner</option>
               </select>
             </div>
@@ -396,6 +417,7 @@ export default function SignupPage() {
               cursor: "pointer",
               fontWeight: 950,
               fontSize: 15,
+              opacity: loading ? 0.85 : 1,
             }}
           >
             {loading ? "Creating…" : "Create Account"}
@@ -409,6 +431,10 @@ export default function SignupPage() {
             >
               Login
             </span>
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#777", lineHeight: 1.5 }}>
+            After signup, we’ll email you a verification link. You must confirm your email before you can log in and place orders.
           </div>
         </form>
       </div>

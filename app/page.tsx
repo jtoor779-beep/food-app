@@ -35,6 +35,35 @@ type MenuItem = {
   description?: string | null;
 };
 
+/* ===========================
+   ✅ Groceries types (NEW)
+   =========================== */
+
+type GroceryStore = {
+  id: string;
+  name: string | null;
+  image_url?: string | null;
+
+  // optional flags if you have them
+  is_enabled?: boolean | null;
+  approval_status?: string | null;
+  is_approved?: boolean | null;
+  approved?: boolean | null;
+};
+
+type GroceryItem = {
+  id: string;
+  store_id: string;
+  name: string | null;
+  price: number | null;
+  image_url?: string | null;
+
+  // optional
+  in_stock?: boolean | null;
+  is_best_seller?: boolean | null;
+  description?: string | null;
+};
+
 function normalizeRole(r: unknown) {
   return String(r || "")
     .trim()
@@ -142,6 +171,13 @@ function niceDesc(it: MenuItem, restaurantName: string) {
   return base;
 }
 
+function niceGroceryDesc(it: GroceryItem, storeName: string) {
+  const base =
+    it.description?.trim() ||
+    `Fresh ${it.name || "item"} from ${storeName}. Carefully packed and ready for delivery.`;
+  return base;
+}
+
 /**
  * ✅ Approval / enabled inference (works with multiple schemas)
  */
@@ -162,6 +198,20 @@ function isRestaurantApproved(r: Restaurant) {
   return true;
 }
 
+// ✅ Reuse same logic for grocery stores (safe)
+function isGroceryStoreEnabled(r: GroceryStore) {
+  if (typeof r.is_enabled === "boolean") return r.is_enabled;
+  return true;
+}
+function isGroceryStoreApproved(r: GroceryStore) {
+  if (typeof r.approval_status === "string") {
+    return String(r.approval_status || "").toLowerCase() === "approved";
+  }
+  if (typeof r.is_approved === "boolean") return r.is_approved;
+  if (typeof (r as any).approved === "boolean") return (r as any).approved;
+  return true;
+}
+
 export default function CustomerHomeDashboard() {
   const router = useRouter();
 
@@ -171,6 +221,10 @@ export default function CustomerHomeDashboard() {
 
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
+
+  // ✅ NEW grocery state
+  const [groceryStores, setGroceryStores] = useState<GroceryStore[]>([]);
+  const [groceryItems, setGroceryItems] = useState<GroceryItem[]>([]);
 
   const [q, setQ] = useState("");
   const [activeCat, setActiveCat] = useState<string>("recommended");
@@ -193,6 +247,9 @@ export default function CustomerHomeDashboard() {
   const [cartMap, setCartMap] = useState<Record<string, number>>({});
 
   const [selected, setSelected] = useState<MenuItem | null>(null);
+
+  // ✅ NEW grocery modal (optional, but safe)
+  const [selectedGrocery, setSelectedGrocery] = useState<GroceryItem | null>(null);
 
   function refreshCartState() {
     const c = getCart();
@@ -227,6 +284,16 @@ export default function CustomerHomeDashboard() {
 
   function getRestaurantName(rid: string) {
     return restaurantMap.get(rid) || "Restaurant";
+  }
+
+  const groceryStoreMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of groceryStores) m.set(s.id, s.name || "Grocery Store");
+    return m;
+  }, [groceryStores]);
+
+  function getGroceryStoreName(sid: string) {
+    return groceryStoreMap.get(sid) || "Grocery Store";
   }
 
   function enforceSingleRestaurantOrConfirm(targetRestaurantId: string) {
@@ -313,6 +380,20 @@ export default function CustomerHomeDashboard() {
       lastErr = res.error;
     }
     return { data: null as any, error: lastErr };
+  }
+
+  /**
+   * ✅ SAFE SELECT across table name options (NEW)
+   * We try multiple possible table/view names so your app doesn't crash if naming differs.
+   */
+  async function safeSelectFromTables(tables: string[], attempts: string[]) {
+    let lastErr: any = null;
+    for (const t of tables) {
+      const res = await safeSelect(t, attempts);
+      if (!res.error) return { ...res, tableUsed: t };
+      lastErr = res.error;
+    }
+    return { data: null as any, error: lastErr, tableUsed: null as any };
   }
 
   /**
@@ -425,11 +506,63 @@ export default function CustomerHomeDashboard() {
       setRestaurants(restList);
       setItems(safeItems);
 
+      /* ===========================
+         ✅ NEW: Load groceries (safe)
+         =========================== */
+
+      let gStores: GroceryStore[] = [];
+      let gItems: GroceryItem[] = [];
+
+      try {
+        const gsRes = await safeSelectFromTables(
+          ["grocery_stores_public", "groceries_stores_public", "grocery_stores", "groceries_stores"],
+          [
+            "id, name, image_url, is_enabled, approval_status, is_approved, approved",
+            "id, name, image_url, is_enabled",
+            "id, name, image_url",
+            "id, name",
+          ]
+        );
+
+        if (!gsRes.error) {
+          const raw = (gsRes.data || []) as GroceryStore[];
+          gStores = raw.filter((s) => isGroceryStoreEnabled(s) && isGroceryStoreApproved(s));
+        }
+
+        const storeIds = new Set(gStores.map((s) => s.id));
+
+        const giRes = await safeSelectFromTables(
+          ["grocery_items_public", "groceries_items_public", "grocery_items", "groceries_items"],
+          [
+            "id, store_id, name, price, image_url, in_stock, is_best_seller, description",
+            "id, store_id, name, price, image_url, in_stock",
+            "id, store_id, name, price, image_url",
+            "id, store_id, name, price",
+          ]
+        );
+
+        if (!giRes.error) {
+          const raw = (giRes.data || []) as GroceryItem[];
+
+          if (storeIds.size > 0) gItems = raw.filter((it) => storeIds.has(it.store_id));
+          else gItems = raw;
+
+          gItems = [...gItems].sort((a, b) => String(b.id).localeCompare(String(a.id)));
+        }
+      } catch (gErr: any) {
+        console.warn("Groceries load warning:", gErr?.message || String(gErr));
+      }
+
+      setGroceryStores(gStores);
+      setGroceryItems(gItems);
+
       refreshCartState();
     } catch (e: any) {
       setErr(e?.message || String(e));
       setRestaurants([]);
       setItems([]);
+      setGroceryStores([]);
+      setGroceryItems([]);
     } finally {
       setLoading(false);
     }
@@ -453,7 +586,10 @@ export default function CustomerHomeDashboard() {
     window.addEventListener("storage", onStorage);
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelected(null);
+      if (e.key === "Escape") {
+        setSelected(null);
+        setSelectedGrocery(null);
+      }
     };
     window.addEventListener("keydown", onKey);
 
@@ -508,6 +644,42 @@ export default function CustomerHomeDashboard() {
 
     return base.slice(0, 12);
   }, [items, q, activeCat, restaurantMap, vegOnly, bestsellerOnly, under199, inStockOnly]);
+
+  const featuredGroceryItems = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    let base = groceryItems;
+
+    if (s) {
+      base = base.filter((it) => {
+        const itemName = (it.name || "").toLowerCase();
+        const storeName = (groceryStoreMap.get(it.store_id) || "").toLowerCase();
+        return itemName.includes(s) || storeName.includes(s);
+      });
+    }
+
+    const next = [...base];
+    next.sort((a, b) => {
+      const as = a.in_stock === false ? 1 : 0;
+      const bs = b.in_stock === false ? 1 : 0;
+      if (as !== bs) return as - bs;
+
+      const ab = a.is_best_seller ? 0 : 1;
+      const bb = b.is_best_seller ? 0 : 1;
+      if (ab !== bb) return ab - bb;
+
+      return String(b.id).localeCompare(String(a.id));
+    });
+
+    return next.slice(0, 8);
+  }, [groceryItems, q, groceryStoreMap]);
+
+  const filteredGroceryStores = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    let base = groceryStores;
+
+    if (s) base = base.filter((r) => (r.name || "").toLowerCase().includes(s));
+    return base.slice(0, 12);
+  }, [groceryStores, q]);
 
   const filteredRestaurants = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -637,7 +809,73 @@ export default function CustomerHomeDashboard() {
         </div>
       ) : null}
 
-      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+      {/* ✅ Grocery Details Modal (NEW, safe + optional) */}
+      {selectedGrocery ? (
+        <div
+          style={modalOverlay}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSelectedGrocery(null);
+          }}
+        >
+          <div style={modalCard}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+              <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }}>Grocery Item</div>
+              <button onClick={() => setSelectedGrocery(null)} style={btnTiny}>
+                ✕ Close
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+              <div style={{ ...imgWrap, height: 240 }}>
+                {selectedGrocery.image_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={selectedGrocery.image_url} alt={selectedGrocery.name || "item"} style={img} />
+                ) : (
+                  <div style={imgPlaceholder}>No image</div>
+                )}
+                <div style={cardTopBadges}>
+                  <span style={badgeDark}>⭐ {demoRating(selectedGrocery.store_id)}</span>
+                  <span style={badgeLight}>{demoEta(selectedGrocery.store_id)} mins</span>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 1000, color: "#0b1220" }}>
+                  {selectedGrocery.name || "Item"}
+                </div>
+                <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
+                  {getGroceryStoreName(selectedGrocery.store_id)}
+                </div>
+
+                <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {selectedGrocery.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
+                  {selectedGrocery.in_stock === false ? <span style={badgeOut}>OUT</span> : null}
+                  <span style={badgeLight}>{money(selectedGrocery.price)}</span>
+                </div>
+
+                <div style={{ marginTop: 10, color: "rgba(17,24,39,0.72)", fontWeight: 800, lineHeight: 1.5 }}>
+                  {niceGroceryDesc(selectedGrocery, getGroceryStoreName(selectedGrocery.store_id))}
+                </div>
+
+                <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Link href="/groceries" style={btnSmallOutline}>
+                    Open Groceries
+                  </Link>
+                  <Link href={`/groceries?store=${encodeURIComponent(selectedGrocery.store_id)}`} style={btnSmallOutline}>
+                    Open Store
+                  </Link>
+                </div>
+
+                <div style={{ marginTop: 10, color: "rgba(17,24,39,0.55)", fontWeight: 800, fontSize: 12 }}>
+                  Note: Groceries uses a separate cart/dashboard (no mixing).
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div style={{ width: "100%", margin: 0 }}>
         <div style={topBar}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={locPill}>📍 Location</span>
@@ -700,6 +938,12 @@ export default function CustomerHomeDashboard() {
             <Link href="/menu" style={btnGhost}>
               Open Menu
             </Link>
+
+            {/* ✅ NEW: Groceries quick button */}
+            <Link href="/groceries" style={btnGhost}>
+              Groceries
+            </Link>
+
             <Link href="/cart" style={btnPrimary}>
               Cart ({cartCount})
             </Link>
@@ -879,6 +1123,119 @@ export default function CustomerHomeDashboard() {
               </div>
             )}
 
+            {/* ===========================
+                ✅ NEW SECTION: Groceries row
+               =========================== */}
+            <div style={rowTitle}>
+              <h2 style={sectionTitle}>Groceries for you</h2>
+              <span style={subtle}>{featuredGroceryItems.length > 0 ? "Fresh picks" : "No grocery items yet"}</span>
+            </div>
+
+            {featuredGroceryItems.length === 0 ? (
+              <div style={emptyBox}>
+                No grocery items found. Once your grocery tables/views are connected, they will show here.
+              </div>
+            ) : (
+              <div style={grid}>
+                {featuredGroceryItems.map((it) => {
+                  const out = it.in_stock === false;
+
+                  return (
+                    <div key={it.id} style={cardGlass}>
+                      <div
+                        style={{ ...imgWrap, cursor: "pointer" }}
+                        onClick={() => setSelectedGrocery(it)}
+                        title="Click to view details"
+                      >
+                        {it.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={it.image_url} alt={it.name || "item"} style={img} />
+                        ) : (
+                          <div style={imgPlaceholder}>No image</div>
+                        )}
+
+                        <div style={cardTopBadges}>
+                          <span style={badgeDark}>⭐ {demoRating(it.store_id)}</span>
+                          <span style={badgeLight}>{demoEta(it.store_id)} mins</span>
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
+                        <button onClick={() => setSelectedGrocery(it)} style={titleBtn} title="Open details">
+                          {it.name || "Item"}
+                        </button>
+                        <div style={{ fontWeight: 950, color: "#111827" }}>{money(it.price)}</div>
+                      </div>
+
+                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
+                        {getGroceryStoreName(it.store_id)}
+                      </div>
+
+                      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
+                        {out ? <span style={badgeOut}>OUT</span> : null}
+                        <span style={tag}>grocery</span>
+                      </div>
+
+                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <Link href="/groceries" style={btnSmallOutline}>
+                          Open Groceries
+                        </Link>
+                        <Link href={`/groceries?store=${encodeURIComponent(it.store_id)}`} style={btnSmallOutline}>
+                          Open Store
+                        </Link>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={rowTitle}>
+              <h2 style={sectionTitle}>Grocery Stores</h2>
+              <span style={subtle}>{filteredGroceryStores.length > 0 ? "Nearby stores" : "No stores yet"}</span>
+            </div>
+
+            {filteredGroceryStores.length === 0 ? (
+              <div style={emptyBox}>No grocery stores found yet.</div>
+            ) : (
+              <div style={grid}>
+                {filteredGroceryStores.slice(0, 12).map((s) => (
+                  <div key={s.id} style={cardGlass}>
+                    <div style={{ ...imgWrap, height: 130 }}>
+                      {s.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={s.image_url} alt={s.name || "store"} style={img} />
+                      ) : (
+                        <div style={imgPlaceholder}>No image</div>
+                      )}
+                      <div style={cardTopBadges}>
+                        <span style={badgeDark}>⭐ {demoRating(s.id)}</span>
+                        <span style={badgeLight}>{demoEta(s.id)} mins</span>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ fontWeight: 950, fontSize: 16, color: "#111827" }}>{s.name || "Grocery Store"}</div>
+                    </div>
+
+                    <div style={{ marginTop: 8, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
+                      Fresh groceries • Quick delivery
+                    </div>
+
+                    <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                      <Link href={`/groceries?store=${encodeURIComponent(s.id)}`} style={btnSmallOutline}>
+                        Open Store
+                      </Link>
+                      <Link href="/groceries" style={btnSmallOutline}>
+                        Browse Groceries
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div style={rowTitle}>
               <h2 style={sectionTitle}>Restaurants</h2>
 
@@ -898,7 +1255,6 @@ export default function CustomerHomeDashboard() {
               <div style={grid}>
                 {filteredRestaurants.slice(0, 12).map((r) => (
                   <div key={r.id} style={cardGlass}>
-                    {/* ✅ Restaurant profile pic (if available) */}
                     <div style={{ ...imgWrap, height: 130 }}>
                       {r.image_url ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -919,9 +1275,7 @@ export default function CustomerHomeDashboard() {
                     <div style={{ marginTop: 8, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
                       Fast delivery • Highly rated
                     </div>
-
-                    {/* ✅ Only ONE button now (no duplicate) */}
-                    <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                  <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
                       <Link href={`/restaurants/${r.id}`} style={btnSmallOutline}>
                         Open Menu
                       </Link>
@@ -1143,10 +1497,12 @@ const subtle: React.CSSProperties = {
   fontWeight: 900,
 };
 
+/** ✅ ONLY CHANGE IS HERE: fixed-width grid like restaurant cards, no stretching */
 const grid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 260px))",
   gap: 12,
+  justifyContent: "start",
 };
 
 const cardGlass: React.CSSProperties = {

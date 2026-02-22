@@ -15,6 +15,205 @@ function normalizeRole(r) {
 const BUCKET = "restaurant-images";
 
 /* =========================
+   PREMIUM THEME (customer profile style)
+   ========================= */
+
+const pageBg = {
+  minHeight: "calc(100vh - 64px)",
+  padding: 20,
+  background:
+    "radial-gradient(1200px 600px at 20% 10%, rgba(255,140,0,0.18), transparent 62%), radial-gradient(900px 520px at 80% 18%, rgba(80,160,255,0.16), transparent 58%), linear-gradient(180deg, #f7f7fb, #ffffff)",
+};
+
+const shell = {
+  width: "min(1200px, 100%)",
+  margin: "0 auto",
+};
+
+const heroGlass = {
+  borderRadius: 20,
+  padding: 18,
+  background: "rgba(255,255,255,0.80)",
+  border: "1px solid rgba(0,0,0,0.08)",
+  boxShadow: "0 14px 44px rgba(0,0,0,0.09)",
+  backdropFilter: "blur(10px)",
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "space-between",
+  gap: 12,
+  flexWrap: "wrap",
+};
+
+const heroTitle = {
+  margin: "10px 0 0 0",
+  fontSize: 32,
+  fontWeight: 1000,
+  color: "#0b1220",
+  letterSpacing: -0.2,
+};
+
+const subText = {
+  marginTop: 8,
+  color: "rgba(17,24,39,0.7)",
+  fontWeight: 850,
+};
+
+const pill = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.72)",
+  fontSize: 12,
+  fontWeight: 950,
+  color: "rgba(17,24,39,0.85)",
+};
+
+const grid2 = {
+  marginTop: 12,
+  display: "grid",
+  gridTemplateColumns: "1fr 1.25fr",
+  gap: 12,
+};
+
+const cardGlass = {
+  borderRadius: 18,
+  padding: 14,
+  background: "rgba(255,255,255,0.80)",
+  border: "1px solid rgba(0,0,0,0.08)",
+  boxShadow: "0 12px 36px rgba(0,0,0,0.08)",
+  backdropFilter: "blur(10px)",
+};
+
+const cardTitle = {
+  fontWeight: 1000,
+  color: "#0b1220",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const cardHint = {
+  marginTop: 6,
+  fontSize: 12,
+  fontWeight: 850,
+  color: "rgba(17,24,39,0.65)",
+};
+
+const btnDark = {
+  border: "1px solid rgba(17,24,39,0.95)",
+  background: "rgba(17,24,39,0.95)",
+  color: "#fff",
+  fontWeight: 950,
+  padding: "10px 14px",
+  borderRadius: 12,
+  cursor: "pointer",
+  boxShadow: "0 12px 30px rgba(17,24,39,0.18)",
+};
+
+const btnLight = {
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.92)",
+  color: "#111",
+  fontWeight: 900,
+  padding: "10px 14px",
+  borderRadius: 12,
+  cursor: "pointer",
+};
+
+const btnSmall = {
+  ...btnLight,
+  padding: "9px 12px",
+  borderRadius: 12,
+  fontWeight: 950,
+};
+
+const inputStyle = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.92)",
+  outline: "none",
+  fontWeight: 850,
+};
+
+const label = {
+  fontWeight: 950,
+  fontSize: 12,
+  marginBottom: 6,
+  color: "rgba(17,24,39,0.75)",
+};
+
+const alertErr = {
+  marginTop: 12,
+  padding: 12,
+  border: "1px solid #fecaca",
+  background: "rgba(254,242,242,0.9)",
+  borderRadius: 14,
+  color: "#7f1d1d",
+  fontWeight: 900,
+};
+
+const alertOk = {
+  marginTop: 12,
+  padding: 12,
+  border: "1px solid rgba(16,185,129,0.25)",
+  background: "rgba(236,253,245,0.9)",
+  borderRadius: 14,
+  color: "#065f46",
+  fontWeight: 900,
+};
+
+const divider = {
+  height: 1,
+  background: "rgba(0,0,0,0.08)",
+  margin: "12px 0",
+};
+
+const imgWrap = {
+  width: "100%",
+  height: 210,
+  borderRadius: 16,
+  border: "1px solid rgba(0,0,0,0.08)",
+  overflow: "hidden",
+  background: "rgba(0,0,0,0.03)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const img = { width: "100%", height: "100%", objectFit: "cover" };
+
+const metaRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  alignItems: "center",
+};
+
+const tiny = {
+  fontSize: 12,
+  fontWeight: 850,
+  color: "rgba(17,24,39,0.65)",
+};
+
+function toFixed6(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "";
+  return String(Number(x.toFixed(6)));
+}
+
+function googleMapsLink(lat, lng) {
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return "";
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+/* =========================
    Leaflet Map Picker (SSR-safe)
    ========================= */
 const LocationPickerMap = dynamic(
@@ -43,23 +242,12 @@ const LocationPickerMap = dynamic(
       defaultCenter = { lat: 35.3733, lng: -119.0187 }, // Bakersfield-ish default
       defaultZoom = 12,
     }) {
-      const center =
-        value?.lat && value?.lng
-          ? { lat: value.lat, lng: value.lng }
-          : defaultCenter;
+      const center = value?.lat && value?.lng ? { lat: value.lat, lng: value.lng } : defaultCenter;
 
       return (
-        <div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid #e5e7eb" }}>
-          <MapContainer
-            center={[center.lat, center.lng]}
-            zoom={defaultZoom}
-            style={{ width: "100%", height }}
-            scrollWheelZoom
-          >
-            <TileLayer
-              attribution='&copy; OpenStreetMap'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+        <div style={{ borderRadius: 16, overflow: "hidden", border: "1px solid rgba(0,0,0,0.10)", background: "rgba(255,255,255,0.8)" }}>
+          <MapContainer center={[center.lat, center.lng]} zoom={defaultZoom} style={{ width: "100%", height }} scrollWheelZoom>
+            <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
             <ClickMarker value={value} onChange={onChange} />
           </MapContainer>
         </div>
@@ -68,17 +256,6 @@ const LocationPickerMap = dynamic(
   },
   { ssr: false }
 );
-
-function toFixed6(n) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return "";
-  return String(Number(x.toFixed(6)));
-}
-
-function googleMapsLink(lat, lng) {
-  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return "";
-  return `https://www.google.com/maps?q=${lat},${lng}`;
-}
 
 export default function RestaurantSettingsPage() {
   const router = useRouter();
@@ -135,9 +312,7 @@ export default function RestaurantSettingsPage() {
     const safeName = String(fileToUpload.name || "image").replace(/\s+/g, "_");
     const path = `${uid}/${Date.now()}-${safeName}`;
 
-    const { error: upErr } = await supabase.storage
-      .from(BUCKET)
-      .upload(path, fileToUpload, { upsert: true });
+    const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, fileToUpload, { upsert: true });
 
     if (upErr) throw upErr;
 
@@ -147,10 +322,7 @@ export default function RestaurantSettingsPage() {
 
   async function setActiveRestaurantOnProfile(restId, uid) {
     if (!restId || !uid) return;
-    const { error } = await supabase
-      .from("profiles")
-      .update({ active_restaurant_id: restId })
-      .eq("user_id", uid);
+    const { error } = await supabase.from("profiles").update({ active_restaurant_id: restId }).eq("user_id", uid);
     if (error) throw error;
   }
 
@@ -450,459 +622,348 @@ export default function RestaurantSettingsPage() {
   }, []);
 
   return (
-    <main style={{ maxWidth: 900, margin: "0 auto", padding: 16 }}>
-      <h2 style={{ marginBottom: 6 }}>
-        {isNewOwnerNoRestaurant ? "Create Restaurant" : "Restaurant Settings"}
-      </h2>
-      <div style={{ color: "#666", marginBottom: 12 }}>
-        {isNewOwnerNoRestaurant
-          ? "First time setup: add your kitchen name, city, image & location"
-          : "Edit restaurant name, city, image & location • Add multiple restaurants"}
+    <main style={pageBg}>
+      <div style={shell}>
+        {/* HERO */}
+        <div style={heroGlass}>
+          <div style={{ minWidth: 260 }}>
+            <div style={pill}>{isNewOwnerNoRestaurant ? "Owner • Setup" : "Owner • Restaurant Settings"}</div>
+            <h1 style={heroTitle}>{isNewOwnerNoRestaurant ? "Create Restaurant" : "Restaurant Settings"}</h1>
+            <div style={subText}>
+              {isNewOwnerNoRestaurant
+                ? "First time setup: name, city, image & location"
+                : "Edit name, city, image & location • Add multiple restaurants"}
+            </div>
+          </div>
+
+          <div style={metaRow}>
+            <span style={pill}>Owner: {ownerEmail || "-"}</span>
+            <span style={pill}>Active: {restaurantId ? String(restaurantId).slice(0, 8) + "…" : "-"}</span>
+            <button
+              onClick={loadAll}
+              style={btnLight}
+              disabled={loading || saving || switching}
+              title="Reload everything"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+
+        {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
+        {infoMsg ? <div style={alertOk}>{infoMsg}</div> : null}
+        {loading ? <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>Loading…</div> : null}
+
+        {!loading ? (
+          <>
+            {/* Switch + Add New controls (only when owner already has restaurants) */}
+            {!isNewOwnerNoRestaurant ? (
+              <div style={{ ...cardGlass, marginTop: 12 }}>
+                <div style={cardTitle}>
+                  <div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant selector</div>
+                    <div style={cardHint}>Switch between your restaurants, or add a new one.</div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowAddNew((v) => !v);
+                      setErrMsg("");
+                      setInfoMsg("");
+                    }}
+                    style={btnLight}
+                    disabled={saving || switching}
+                  >
+                    {showAddNew ? "Close Add New" : "+ Add New Restaurant"}
+                  </button>
+                </div>
+
+                <div style={divider} />
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
+                  <div>
+                    <div style={label}>Select Restaurant</div>
+                    <select
+                      value={restaurantId || ""}
+                      onChange={(e) => switchRestaurant(e.target.value)}
+                      disabled={switching}
+                      style={inputStyle}
+                    >
+                      {restaurants.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name || "Restaurant"} {r.city ? `(${r.city})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ marginTop: 6, ...tiny }}>
+                      Tip: Active restaurant saves into <b>profiles.active_restaurant_id</b>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <div style={{ ...pill, background: "rgba(255,255,255,0.9)" }}>
+                      {switching ? "Switching…" : "Ready"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* ADD NEW Restaurant (new owner or add another) */}
+            {(isNewOwnerNoRestaurant || showAddNew) ? (
+              <div style={{ ...cardGlass, marginTop: 12 }}>
+                <div style={cardTitle}>
+                  <div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>
+                      {isNewOwnerNoRestaurant ? "Create your first restaurant" : "Add another restaurant"}
+                    </div>
+                    <div style={cardHint}>Location is required. Use GPS or click the map to drop the pin.</div>
+                  </div>
+                  <span style={pill}>Bucket: {BUCKET}</span>
+                </div>
+
+                <div style={divider} />
+
+                <div style={grid2}>
+                  {/* LEFT (form) */}
+                  <div style={{ ...cardGlass, boxShadow: "none" }}>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant details</div>
+                    <div style={{ marginTop: 12 }}>
+                      <div style={label}>Restaurant Name</div>
+                      <input
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        placeholder="e.g. Toor Kitchen"
+                        style={inputStyle}
+                      />
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <div style={label}>City</div>
+                      <input
+                        value={newCity}
+                        onChange={(e) => setNewCity(e.target.value)}
+                        placeholder="e.g. Bakersfield"
+                        style={inputStyle}
+                      />
+                    </div>
+
+                    <div style={{ marginTop: 12 }}>
+                      <div style={label}>Restaurant Image (optional)</div>
+                      <input type="file" accept="image/*" onChange={(e) => setNewFile(e.target.files?.[0] || null)} />
+                      <div style={{ marginTop: 8, ...tiny }}>
+                        Upload will store image in <b>{BUCKET}</b> and save its public URL.
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setErrMsg("");
+                          setInfoMsg("");
+                          try {
+                            await getBrowserGPS(setNewLat, setNewLng);
+                            setInfoMsg("✅ GPS captured. Now you can fine-tune pin on map.");
+                          } catch (e) {
+                            setErrMsg(e?.message || String(e));
+                          }
+                        }}
+                        style={btnLight}
+                        disabled={saving}
+                      >
+                        Use my current GPS
+                      </button>
+
+                      <button onClick={createRestaurantFromAddForm} disabled={saving} style={btnDark}>
+                        {saving ? "Creating…" : isNewOwnerNoRestaurant ? "Create Restaurant" : "Create New Restaurant"}
+                      </button>
+                    </div>
+
+                    <div style={{ marginTop: 10, ...tiny }}>
+                      Lat: <b>{toFixed6(newLat) || "-"}</b> • Lng: <b>{toFixed6(newLng) || "-"}</b>
+                      {newLat && newLng ? (
+                        <>
+                          {" "}
+                          •{" "}
+                          <a href={googleMapsLink(newLat, newLng)} target="_blank" rel="noreferrer" style={{ fontWeight: 950, color: "#0b1220" }}>
+                            Open in Google Maps
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div style={{ marginTop: 10, ...tiny }}>
+                      Storage bucket: <b>{BUCKET}</b>
+                    </div>
+                  </div>
+
+                  {/* RIGHT (map) */}
+                  <div style={{ ...cardGlass, boxShadow: "none" }}>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant location (Required)</div>
+                    <div style={{ marginTop: 8, ...tiny }}>Click on map to drop/adjust the pin.</div>
+                    <div style={{ marginTop: 10 }}>
+                      <LocationPickerMap
+                        value={newLocation}
+                        onChange={({ lat: la, lng: ln }) => {
+                          setNewLat(la);
+                          setNewLng(ln);
+                        }}
+                        height={320}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* EDIT Selected Restaurant */}
+            {!isNewOwnerNoRestaurant ? (
+              <div style={{ marginTop: 12, ...grid2 }}>
+                {/* LEFT: Account/Restaurant card (customer-like) */}
+                <div style={cardGlass}>
+                  <div style={cardTitle}>
+                    <div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant profile</div>
+                      <div style={cardHint}>Update name, city and image for the selected restaurant.</div>
+                    </div>
+                    <span style={pill}>ID: {restaurantId ? String(restaurantId).slice(0, 8) + "…" : "-"}</span>
+                  </div>
+
+                  <div style={{ marginTop: 12 }}>
+                    <div style={imgWrap}>
+                      {imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={imageUrl} alt="Restaurant" style={img} />
+                      ) : (
+                        <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.55)" }}>No image uploaded yet</div>
+                      )}
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <label style={{ ...btnLight, display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontWeight: 950 }}>Choose Image</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => setFile(e.target.files?.[0] || null)}
+                          style={{ display: "none" }}
+                        />
+                      </label>
+
+                      <div style={tiny}>{file ? `Selected: ${file?.name || "image"}` : "Tip: Use wide image for best look."}</div>
+                    </div>
+                  </div>
+
+                  <div style={divider} />
+
+                  <div>
+                    <div style={label}>Restaurant Name</div>
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Toor Kitchen" style={inputStyle} />
+                  </div>
+
+                  <div style={{ marginTop: 12 }}>
+                    <div style={label}>City</div>
+                    <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Bakersfield" style={inputStyle} />
+                  </div>
+
+                  <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button onClick={saveChanges} disabled={saving} style={btnDark}>
+                      {saving ? "Saving…" : "Save Changes"}
+                    </button>
+
+                    <button onClick={loadAll} disabled={saving} style={btnLight}>
+                      Reload
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: 10, ...tiny }}>
+                    Storage bucket: <b>{BUCKET}</b>
+                  </div>
+                </div>
+
+                {/* RIGHT: Location card (customer-like) */}
+                <div style={cardGlass}>
+                  <div style={cardTitle}>
+                    <div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant location</div>
+                      <div style={cardHint}>Use GPS or click map to place your pin. Save it to enable delivery tracking.</div>
+                    </div>
+                    <span style={pill}>Secure • Saved in Supabase</span>
+                  </div>
+
+                  <div style={divider} />
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setErrMsg("");
+                        setInfoMsg("");
+                        try {
+                          await getBrowserGPS(setLat, setLng);
+                          setInfoMsg("✅ GPS captured. Now you can fine-tune pin on map.");
+                        } catch (e) {
+                          setErrMsg(e?.message || String(e));
+                        }
+                      }}
+                      style={btnLight}
+                      disabled={saving}
+                    >
+                      Use my current GPS
+                    </button>
+
+                    <button type="button" onClick={saveSelectedRestaurantLocation} disabled={saving} style={btnDark}>
+                      {saving ? "Saving…" : "Save Location"}
+                    </button>
+
+                    <div style={tiny}>
+                      Lat: <b>{toFixed6(lat) || "-"}</b> • Lng: <b>{toFixed6(lng) || "-"}</b>
+                      {lat && lng ? (
+                        <>
+                          {" "}
+                          •{" "}
+                          <a href={googleMapsLink(lat, lng)} target="_blank" rel="noreferrer" style={{ fontWeight: 950, color: "#0b1220" }}>
+                            Open in Google Maps
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 10, ...tiny }}>Click on map to drop/adjust the pin.</div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <LocationPickerMap
+                      value={selectedLocation}
+                      onChange={({ lat: la, lng: ln }) => {
+                        setLat(la);
+                        setLng(ln);
+                      }}
+                      height={360}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: 10, ...tiny }}>
+                    Tip: If you don’t see a marker, set GPS once or click map to drop it.
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ height: 24 }} />
+          </>
+        ) : null}
       </div>
 
-      {errMsg ? (
-        <div
-          style={{
-            background: "#ffe7e7",
-            border: "1px solid #ffb3b3",
-            padding: 10,
-            borderRadius: 8,
-            color: "#8a1f1f",
-            marginBottom: 12,
-          }}
-        >
-          {errMsg}
-        </div>
-      ) : null}
-
-      {infoMsg ? (
-        <div
-          style={{
-            background: "#e9fff0",
-            border: "1px solid #a8f0bf",
-            padding: 10,
-            borderRadius: 8,
-            color: "#0f5b2a",
-            marginBottom: 12,
-          }}
-        >
-          {infoMsg}
-        </div>
-      ) : null}
-
-      {loading ? <div>Loading…</div> : null}
-
-      {!loading ? (
-        <>
-          {/* Switch + Add New controls */}
-          {!isNewOwnerNoRestaurant ? (
-            <div
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 12,
-                background: "#fff",
-                padding: 14,
-                marginBottom: 12,
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 10,
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <div style={{ color: "#666", fontSize: 13 }}>
-                <b>Owner:</b> {ownerEmail || "-"} <br />
-                <b>Active Restaurant ID:</b> {restaurantId || "-"}
-              </div>
-
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 900 }}>Select Restaurant</div>
-                <select
-                  value={restaurantId || ""}
-                  onChange={(e) => switchRestaurant(e.target.value)}
-                  disabled={switching}
-                  style={{
-                    padding: 10,
-                    borderRadius: 10,
-                    border: "1px solid #ddd",
-                    minWidth: 260,
-                    fontWeight: 800,
-                  }}
-                >
-                  {restaurants.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name || "Restaurant"} {r.city ? `(${r.city})` : ""}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  onClick={() => {
-                    setShowAddNew((v) => !v);
-                    setErrMsg("");
-                    setInfoMsg("");
-                  }}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 10,
-                    border: "1px solid #ddd",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontWeight: 900,
-                  }}
-                >
-                  {showAddNew ? "Close Add New" : "+ Add New Restaurant"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Add New Restaurant form */}
-          {(isNewOwnerNoRestaurant || showAddNew) ? (
-            <div
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 12,
-                background: "#fff",
-                padding: 14,
-                marginBottom: 12,
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>
-                {isNewOwnerNoRestaurant ? "Create Your First Restaurant" : "Add Another Restaurant"}
-              </h3>
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                Restaurant Name
-              </label>
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Toor Kitchen"
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  marginBottom: 12,
-                }}
-              />
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                City
-              </label>
-              <input
-                value={newCity}
-                onChange={(e) => setNewCity(e.target.value)}
-                placeholder="e.g. Bakersfield"
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  marginBottom: 12,
-                }}
-              />
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                Restaurant Image (optional)
-              </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setNewFile(e.target.files?.[0] || null)}
-                style={{ marginBottom: 12 }}
-              />
-
-              {/* ✅ NEW: Location picker for new restaurant */}
-              <div style={{ marginTop: 10, marginBottom: 10 }}>
-                <div style={{ fontWeight: 950, marginBottom: 6 }}>
-                  Restaurant Location (Required)
-                </div>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setErrMsg("");
-                      setInfoMsg("");
-                      try {
-                        await getBrowserGPS(setNewLat, setNewLng);
-                        setInfoMsg("✅ GPS captured. Now you can fine-tune pin on map.");
-                      } catch (e) {
-                        setErrMsg(e?.message || String(e));
-                      }
-                    }}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 10,
-                      border: "1px solid #ddd",
-                      background: "#fff",
-                      cursor: "pointer",
-                      fontWeight: 900,
-                    }}
-                  >
-                    Use my current GPS
-                  </button>
-
-                  <div style={{ fontSize: 13, color: "#666" }}>
-                    Lat: <b>{toFixed6(newLat) || "-"}</b> • Lng: <b>{toFixed6(newLng) || "-"}</b>
-                    {newLat && newLng ? (
-                      <>
-                        {" "}
-                        •{" "}
-                        <a
-                          href={googleMapsLink(newLat, newLng)}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontWeight: 900 }}
-                        >
-                          Open in Google Maps
-                        </a>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                    Click on map to drop/adjust the pin.
-                  </div>
-                  <LocationPickerMap
-                    value={newLocation}
-                    onChange={({ lat: la, lng: ln }) => {
-                      setNewLat(la);
-                      setNewLng(ln);
-                    }}
-                    height={260}
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={createRestaurantFromAddForm}
-                disabled={saving}
-                style={{
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#111",
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontWeight: 900,
-                }}
-              >
-                {saving
-                  ? "Creating…"
-                  : isNewOwnerNoRestaurant
-                  ? "Create Restaurant"
-                  : "Create New Restaurant"}
-              </button>
-
-              <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-                Storage bucket: <b>{BUCKET}</b>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Edit Selected Restaurant form */}
-          {!isNewOwnerNoRestaurant ? (
-            <div
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 12,
-                background: "#fff",
-                padding: 14,
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>Edit Selected Restaurant</h3>
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                Restaurant Name
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Toor Kitchen"
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  marginBottom: 12,
-                }}
-              />
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                City
-              </label>
-              <input
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                placeholder="e.g. Bakersfield"
-                style={{
-                  width: "100%",
-                  padding: 10,
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  marginBottom: 14,
-                }}
-              />
-
-              <label style={{ display: "block", fontWeight: 900, marginBottom: 6 }}>
-                Restaurant Image
-              </label>
-
-              {imageUrl ? (
-                <div style={{ marginBottom: 10 }}>
-                  <img
-                    src={imageUrl}
-                    alt="Restaurant"
-                    style={{
-                      width: "100%",
-                      maxWidth: 420,
-                      height: 220,
-                      objectFit: "cover",
-                      borderRadius: 12,
-                      border: "1px solid #eee",
-                    }}
-                  />
-                  <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
-                    Current image
-                  </div>
-                </div>
-              ) : (
-                <div style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>
-                  No image uploaded yet.
-                </div>
-              )}
-
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-                style={{ marginBottom: 14 }}
-              />
-
-              {/* ✅ NEW: Location section (edit) */}
-              <div style={{ marginTop: 10, marginBottom: 14 }}>
-                <div style={{ fontWeight: 950, marginBottom: 6 }}>Restaurant Location</div>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setErrMsg("");
-                      setInfoMsg("");
-                      try {
-                        await getBrowserGPS(setLat, setLng);
-                        setInfoMsg("✅ GPS captured. Now you can fine-tune pin on map.");
-                      } catch (e) {
-                        setErrMsg(e?.message || String(e));
-                      }
-                    }}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 10,
-                      border: "1px solid #ddd",
-                      background: "#fff",
-                      cursor: "pointer",
-                      fontWeight: 900,
-                    }}
-                  >
-                    Use my current GPS
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={saveSelectedRestaurantLocation}
-                    disabled={saving}
-                    style={{
-                      padding: "10px 14px",
-                      borderRadius: 10,
-                      border: "1px solid #ddd",
-                      background: "#111",
-                      color: "#fff",
-                      cursor: "pointer",
-                      fontWeight: 900,
-                    }}
-                  >
-                    {saving ? "Saving…" : "Save Location"}
-                  </button>
-
-                  <div style={{ fontSize: 13, color: "#666" }}>
-                    Lat: <b>{toFixed6(lat) || "-"}</b> • Lng: <b>{toFixed6(lng) || "-"}</b>
-                    {lat && lng ? (
-                      <>
-                        {" "}
-                        •{" "}
-                        <a
-                          href={googleMapsLink(lat, lng)}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontWeight: 900 }}
-                        >
-                          Open in Google Maps
-                        </a>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                    Click on map to drop/adjust the pin.
-                  </div>
-                  <LocationPickerMap
-                    value={selectedLocation}
-                    onChange={({ lat: la, lng: ln }) => {
-                      setLat(la);
-                      setLng(ln);
-                    }}
-                    height={260}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  onClick={saveChanges}
-                  disabled={saving}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 10,
-                    border: "1px solid #ddd",
-                    background: "#111",
-                    color: "#fff",
-                    cursor: "pointer",
-                    fontWeight: 900,
-                  }}
-                >
-                  {saving ? "Saving…" : "Save Changes"}
-                </button>
-
-                <button
-                  onClick={loadAll}
-                  style={{
-                    padding: "10px 14px",
-                    borderRadius: 10,
-                    border: "1px solid #ddd",
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontWeight: 800,
-                  }}
-                >
-                  Reload
-                </button>
-              </div>
-
-              <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-                Storage bucket: <b>{BUCKET}</b>
-              </div>
-            </div>
-          ) : null}
-        </>
-      ) : null}
+      {/* responsive fix */}
+      <style jsx>{`
+        @media (max-width: 980px) {
+          div[style*="grid-template-columns: 1fr 1.25fr"] {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
     </main>
   );
 }

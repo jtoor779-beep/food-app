@@ -149,11 +149,14 @@ const label = {
   color: "rgba(17,24,39,0.75)",
 };
 
+/* ✅ UI FIX: customer-like grid (fixed card width, no stretch) */
 const grid = {
   marginTop: 14,
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 320px))",
   gap: 12,
+  justifyContent: "start",
+  alignItems: "start",
 };
 
 const imgWrap = {
@@ -710,8 +713,7 @@ export default function RestaurantManageMenuPage() {
   return (
     <main style={pageBg}>
       {toast ? <div style={toastBox}>{toast}</div> : null}
-
-      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ width: "100%", margin: "0 auto" }}>
         {/* HERO (NO DUPLICATES HERE) */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>

@@ -26,6 +26,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { href: "/admin/restaurants", label: "Restaurants" },
       { href: "/admin/orders", label: "Orders" },
 
+      // ✅ NEW: Groceries management (approve/disable/accepting orders)
+      { href: "/admin/groceries", label: "Groceries" },
+
       // ✅ NEW: Delivery partners management (approve/reject/edit/disable)
       { href: "/admin/delivery-partners", label: "Delivery Partners" },
 
@@ -244,14 +247,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     color: "#0F172A",
     fontWeight: 800,
     cursor: "pointer",
-  };
-
-  const buttonPrimary: React.CSSProperties = {
-    ...buttonBase,
-    border: "1px solid rgba(255,140,0,0.35)",
-    background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
-    color: "#0B1220",
-    boxShadow: "0 16px 40px rgba(255,140,0,0.14)",
   };
 
   if (checking) {

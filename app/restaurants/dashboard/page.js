@@ -421,6 +421,10 @@ export default function RestaurantOwnerDashboard() {
   const [restaurantName, setRestaurantName] = useState("");
   const [restaurantId, setRestaurantId] = useState("");
 
+  // ✅ NEW: multi-restaurant switch
+  const [ownerRestaurants, setOwnerRestaurants] = useState([]); // full rows
+  const [activeRestaurantId, setActiveRestaurantId] = useState(""); // selected
+
   const [orders, setOrders] = useState([]); // merged orders with items
 
   // dashboard controls
@@ -445,6 +449,7 @@ export default function RestaurantOwnerDashboard() {
 
   // ✅ keep one realtime channel only (prevents duplicates)
   const channelRef = useRef(null);
+  const currentRealtimeRidRef = useRef("");
 
   // track new orders
   const knownOrderIdsRef = useRef(new Set());
@@ -452,7 +457,6 @@ export default function RestaurantOwnerDashboard() {
   const refreshTimerRef = useRef(null);
 
   async function tryUpdateRestaurantField(rid, fieldCandidates, value) {
-    // tries each field name; returns true if any worked
     for (const field of fieldCandidates) {
       try {
         const { error } = await supabase.from("restaurants").update({ [field]: value }).eq("id", rid);
@@ -464,45 +468,45 @@ export default function RestaurantOwnerDashboard() {
     return false;
   }
 
-  async function load() {
-    setErr("");
-    setInfo("");
-    setRestaurantSettingsNote("");
-    setLoading(true);
-
-    const { data } = await supabase.auth.getSession();
-    const session = data?.session;
-
-    if (!session?.user) {
-      setErr("Not logged in.");
-      setLoading(false);
-      return;
-    }
-
-    setOwnerEmail(session.user.email || "");
-
-    // restaurant owned by this user
-    // ✅ select("*") so it still works even if you add new columns later
-    const { data: r, error: rErr } = await supabase
+  // ✅ NEW: fetch all restaurants for owner (so we can switch)
+  async function fetchOwnerRestaurantsList(userId) {
+    const res = await supabase
       .from("restaurants")
       .select("*")
-      .eq("owner_user_id", session.user.id)
-      .maybeSingle();
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false });
 
-    if (rErr) {
-      setErr(rErr.message);
-      setLoading(false);
-      return;
-    }
+    if (res.error) throw res.error;
+    return res.data || [];
+  }
 
-    if (!r?.id) {
-      setErr("No restaurant found for this owner.");
-      setLoading(false);
-      return;
-    }
+  // ✅ NEW: safely fetch profile role even if duplicate rows exist
+  async function fetchProfileRoleSafe(userId) {
+    const firstTry = await supabase.from("profiles").select("role").eq("user_id", userId).maybeSingle();
+    if (!firstTry?.error) return firstTry.data || null;
+
+    const msg = String(firstTry.error?.message || "");
+    const isMultiple = msg.toLowerCase().includes("multiple") || msg.toLowerCase().includes("json object requested");
+
+    if (!isMultiple) return null;
+
+    const fallback = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (fallback.error) return null;
+    return fallback.data && fallback.data[0] ? fallback.data[0] : null;
+  }
+
+  function applyRestaurantRow(r) {
+    if (!r?.id) return;
 
     setRestaurantId(r.id);
     setRestaurantName(r.name || "");
+    setActiveRestaurantId(r.id);
 
     // read restaurant toggles if your table already has columns (otherwise fallback)
     const accepting = pick(r, ["accepting_orders", "is_accepting_orders", "is_open", "open", "active"], null);
@@ -516,28 +520,44 @@ export default function RestaurantOwnerDashboard() {
 
     const prep = pick(r, ["prep_time_mins", "prep_minutes", "default_prep_mins"], null);
     if (prep !== null) setPrepTimeMins(safeNumber(prep, 20));
+  }
 
-    // role
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("user_id", session.user.id)
-      .maybeSingle();
+  function setupRealtime(rid) {
+    if (!rid) return;
 
-    setRole(prof?.role || "restaurant_owner");
+    // ✅ if restaurant changed, remove old channel and create new one
+    if (currentRealtimeRidRef.current && currentRealtimeRidRef.current !== rid && channelRef.current) {
+      try {
+        supabase.removeChannel(channelRef.current);
+      } catch {
+        // ignore
+      }
+      channelRef.current = null;
+      currentRealtimeRidRef.current = "";
+    }
 
+    if (channelRef.current) return;
+
+    const ch = supabase
+      .channel(`owner_dash_${rid}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `restaurant_id=eq.${rid}` }, () => {
+        load();
+      })
+      .subscribe();
+
+    channelRef.current = ch;
+    currentRealtimeRidRef.current = rid;
+  }
+
+  async function loadOrdersForRestaurant(rid) {
     // orders
     const { data: o, error: oErr } = await supabase
       .from("orders")
       .select("*")
-      .eq("restaurant_id", r.id)
+      .eq("restaurant_id", rid)
       .order("created_at", { ascending: false });
 
-    if (oErr) {
-      setErr(oErr.message);
-      setLoading(false);
-      return;
-    }
+    if (oErr) throw oErr;
 
     const baseOrders = o || [];
     const orderIds = baseOrders.map((x) => x.id).filter(Boolean);
@@ -566,43 +586,119 @@ export default function RestaurantOwnerDashboard() {
       items: itemsByOrder[ord.id] || [],
     }));
 
-    // detect NEW orders (only "insert" detection by seeing unknown ids)
+    // detect NEW orders
     const known = knownOrderIdsRef.current;
     const newIds = [];
     for (const ord of merged) {
       if (ord?.id && !known.has(ord.id)) newIds.push(ord.id);
     }
-    // Update known
     known.clear();
     for (const ord of merged) if (ord?.id) known.add(ord.id);
 
-    // Store highlight ids briefly
     justNewIdsRef.current = new Set(newIds);
 
     setOrders(merged);
-    setLoading(false);
 
     const nowTxt = new Date().toLocaleTimeString();
     setLastRefreshed(nowTxt);
-    setInfo(`Updated ✅ (${nowTxt})`);
 
     if (newIds.length > 0 && soundOnNew) beepOnce();
 
-    // realtime after restaurant id
-    setupRealtime(r.id);
+    setupRealtime(rid);
   }
 
-  function setupRealtime(rid) {
-    if (channelRef.current) return;
+  async function load() {
+    setErr("");
+    setInfo("");
+    setRestaurantSettingsNote("");
+    setLoading(true);
 
-    const ch = supabase
-      .channel(`owner_dash_${rid}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `restaurant_id=eq.${rid}` }, () => {
-        load();
-      })
-      .subscribe();
+    const { data } = await supabase.auth.getSession();
+    const session = data?.session;
 
-    channelRef.current = ch;
+    if (!session?.user) {
+      setErr("Not logged in.");
+      setLoading(false);
+      return;
+    }
+
+    setOwnerEmail(session.user.email || "");
+
+    // ✅ role
+    const prof = await fetchProfileRoleSafe(session.user.id);
+    setRole(prof?.role || "restaurant_owner");
+
+    // ✅ fetch all restaurants for switch dropdown
+    let list = [];
+    try {
+      list = await fetchOwnerRestaurantsList(session.user.id);
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setLoading(false);
+      return;
+    }
+
+    setOwnerRestaurants(list);
+
+    if (!list || list.length === 0) {
+      setErr("No restaurant found for this owner.");
+      setLoading(false);
+      return;
+    }
+
+    // ✅ decide active restaurant:
+    // 1) if activeRestaurantId exists and still in list, keep it
+    // 2) else pick latest (list[0])
+    const stillExists = activeRestaurantId && list.some((r) => r.id === activeRestaurantId);
+    const activeRow = stillExists ? list.find((r) => r.id === activeRestaurantId) : list[0];
+
+    applyRestaurantRow(activeRow);
+
+    if (list.length > 1) {
+      setInfo("Select restaurant from dropdown ✅");
+    }
+
+    try {
+      await loadOrdersForRestaurant(activeRow.id);
+      setLoading(false);
+      const nowTxt = new Date().toLocaleTimeString();
+      setInfo((prev) => prev || `Updated ✅ (${nowTxt})`);
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setLoading(false);
+      return;
+    }
+  }
+
+  // ✅ when user changes restaurant from dropdown
+  async function switchRestaurant(nextId) {
+    setErr("");
+    setInfo("");
+    setRestaurantSettingsNote("");
+    setLoading(true);
+
+    const row = ownerRestaurants.find((r) => r.id === nextId);
+    if (!row) {
+      setErr("Restaurant not found in list.");
+      setLoading(false);
+      return;
+    }
+
+    // clear new-order highlight for new restaurant context
+    knownOrderIdsRef.current = new Set();
+    justNewIdsRef.current = new Set();
+
+    applyRestaurantRow(row);
+
+    try {
+      await loadOrdersForRestaurant(row.id);
+      setLoading(false);
+      const nowTxt = new Date().toLocaleTimeString();
+      setInfo(`Switched ✅ (${nowTxt})`);
+    } catch (e) {
+      setErr(e?.message || String(e));
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -610,9 +706,14 @@ export default function RestaurantOwnerDashboard() {
 
     return () => {
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+        try {
+          supabase.removeChannel(channelRef.current);
+        } catch {
+          // ignore
+        }
         channelRef.current = null;
       }
+      currentRealtimeRidRef.current = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -635,7 +736,7 @@ export default function RestaurantOwnerDashboard() {
       refreshTimerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, soundOnNew]);
+  }, [autoRefresh, soundOnNew, activeRestaurantId]);
 
   async function updateStatus(orderId, newStatus) {
     setErr("");
@@ -769,20 +870,14 @@ export default function RestaurantOwnerDashboard() {
     }
     const dayMap = Object.fromEntries(days.map((x) => [x.key, x]));
 
-    const hourCount = {}; // { "10": 2, ...}
-    let weekRevenueCount = 0;
+    const hourCount = {};
+    let rejectedOrCancelled = 0;
 
-    // best sellers
-    const itemAgg = {}; // today
+    const itemAgg = {};
     const itemAggWeek = {};
-
-    // customer repeat in 7d (by phone)
     const phoneCount7d = {};
 
-    // late orders calc
     const eta = safeNumber(prepTimeMins, 20) + (busyMode ? safeNumber(extraPrepMins, 0) : 0);
-
-    let rejectedOrCancelled = 0;
 
     for (const o of orders) {
       const s = String(o.status || "").toLowerCase();
@@ -792,7 +887,6 @@ export default function RestaurantOwnerDashboard() {
       const created = o.created_at || o.createdAt || o.created;
       const createdMs = created ? new Date(created).getTime() : null;
 
-      // amount fallback
       const items = o.items || [];
       const calcTotal = items.reduce((sum, it) => {
         const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
@@ -803,16 +897,13 @@ export default function RestaurantOwnerDashboard() {
       const amtRaw = pick(o, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], calcTotal);
       const amt = safeNumber(amtRaw, 0);
 
-      // today
       if (createdMs && createdMs >= todayStart) {
         totals.todayOrders += 1;
         totals.todayRevenue += amt;
 
-        // peak hour
         const h = String(new Date(createdMs).getHours());
         hourCount[h] = (hourCount[h] || 0) + 1;
 
-        // items today
         for (const it of items) {
           const name = toText(pick(it, ["item_name", "name", "title"], "Item"));
           const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
@@ -823,7 +914,6 @@ export default function RestaurantOwnerDashboard() {
         }
       }
 
-      // last 7 days
       if (createdMs) {
         const k = dayKey(createdMs);
         if (dayMap[k]) {
@@ -831,12 +921,10 @@ export default function RestaurantOwnerDashboard() {
           dayMap[k].orders += 1;
           totals.weekRevenue += amt;
           totals.weekOrders += 1;
-          if (amt > 0) weekRevenueCount += 1;
 
           const ph = toText(pick(o, ["customer_phone", "phone", "mobile", "customer_mobile"], ""));
           if (ph) phoneCount7d[ph] = (phoneCount7d[ph] || 0) + 1;
 
-          // items week
           for (const it of items) {
             const name = toText(pick(it, ["item_name", "name", "title"], "Item"));
             const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
@@ -847,7 +935,6 @@ export default function RestaurantOwnerDashboard() {
           }
         }
 
-        // late order: pending/preparing and older than ETA
         if ((s === "pending" || s === "preparing") && eta > 0) {
           const ageMins = (now - createdMs) / 60000;
           if (ageMins > eta) totals.lateCount += 1;
@@ -859,7 +946,6 @@ export default function RestaurantOwnerDashboard() {
     totals.avgOrderValueWeek = totals.weekOrders > 0 ? totals.weekRevenue / totals.weekOrders : 0;
     totals.cancelRate = totals.all > 0 ? Math.round((rejectedOrCancelled / totals.all) * 100) : 0;
 
-    // peak hour today
     let bestH = null;
     let bestC = 0;
     for (const k of Object.keys(hourCount)) {
@@ -870,12 +956,10 @@ export default function RestaurantOwnerDashboard() {
     }
     if (bestH !== null) totals.peakHourToday = `${bestH}:00`;
 
-    // repeat customers in 7d
     totals.repeatCustomers7d = Object.values(phoneCount7d).filter((c) => c >= 2).length;
 
     const maxRevenue = Math.max(1, ...days.map((d) => d.revenue));
     const maxOrders = Math.max(1, ...days.map((d) => d.orders));
-    const latest = orders.slice(0, 10);
 
     const topItemsToday = Object.entries(itemAgg)
       .map(([name, v]) => ({ name, qty: v.qty, revenue: v.revenue }))
@@ -887,14 +971,12 @@ export default function RestaurantOwnerDashboard() {
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 6);
 
-    return { totals, days, maxRevenue, maxOrders, latest, topItemsToday, topItemsWeek };
+    return { totals, days, maxRevenue, maxOrders, topItemsToday, topItemsWeek };
   }, [orders, prepTimeMins, extraPrepMins, busyMode]);
 
-  // filter/search/sort orders for the table
   const filteredOrders = useMemo(() => {
     let rows = [...orders];
 
-    // late only filter
     if (onlyLate) {
       const now = Date.now();
       const eta = safeNumber(prepTimeMins, 20) + (busyMode ? safeNumber(extraPrepMins, 0) : 0);
@@ -908,12 +990,10 @@ export default function RestaurantOwnerDashboard() {
       });
     }
 
-    // status filter
     if (filterStatus !== "all") {
       rows = rows.filter((o) => String(o.status || "").toLowerCase() === filterStatus);
     }
 
-    // search
     const q = search.trim().toLowerCase();
     if (q) {
       rows = rows.filter((o) => {
@@ -925,7 +1005,6 @@ export default function RestaurantOwnerDashboard() {
       });
     }
 
-    // sort
     rows.sort((a, b) => {
       const aTime = new Date(a.created_at || a.createdAt || a.created || 0).getTime() || 0;
       const bTime = new Date(b.created_at || b.createdAt || b.created || 0).getTime() || 0;
@@ -955,7 +1034,6 @@ export default function RestaurantOwnerDashboard() {
       return bTime - aTime;
     });
 
-    // kitchen view: keep only important statuses first
     if (kitchenView) {
       const priority = (s) => {
         const st = String(s || "").toLowerCase();
@@ -1032,7 +1110,6 @@ export default function RestaurantOwnerDashboard() {
   }, [derived.totals]);
 
   const quickIdsForBulk = useMemo(() => {
-    // default bulk list: pending + preparing (max 20) based on current filtered view
     const ids = filteredOrders
       .filter((o) => ["pending", "preparing"].includes(String(o.status || "").toLowerCase()))
       .slice(0, 20)
@@ -1043,7 +1120,7 @@ export default function RestaurantOwnerDashboard() {
 
   return (
     <main style={pageBg}>
-      <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+      <div style={{ width: "100%", margin: 0 }}>
         {/* HERO */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
@@ -1070,7 +1147,27 @@ export default function RestaurantOwnerDashboard() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <span style={pill}>Owner: {ownerEmail || "-"}</span>
             <span style={pill}>Role: {role || "-"}</span>
-            <span style={pill}>Restaurant: {restaurantName || "-"}</span>
+
+            {/* ✅ NEW: Restaurant switch dropdown (shows only if multiple) */}
+            {ownerRestaurants.length > 1 ? (
+              <span style={{ ...pill, gap: 10 }}>
+                Restaurant:
+                <select
+                  value={activeRestaurantId || ""}
+                  onChange={(e) => switchRestaurant(e.target.value)}
+                  style={{ ...selectStyle, padding: "6px 10px", borderRadius: 999, width: 260 }}
+                >
+                  {ownerRestaurants.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name || "Unnamed Restaurant"} ({String(r.id).slice(0, 6)}…)
+                    </option>
+                  ))}
+                </select>
+              </span>
+            ) : (
+              <span style={pill}>Restaurant: {restaurantName || "-"}</span>
+            )}
+
             <span style={pill}>Restaurant ID: {restaurantId || "-"}</span>
             <span style={miniTag}>Last refreshed: {lastRefreshed || "-"}</span>
             <span style={miniTag}>Late: {derived.totals.lateCount}</span>
@@ -1250,7 +1347,6 @@ export default function RestaurantOwnerDashboard() {
 
                         const isNew = justNewIdsRef.current?.has?.(o.id);
 
-                        // late calc (display)
                         const eta = prepTimeMins + (busyMode ? extraPrepMins : 0);
                         const createdMs = when ? new Date(when).getTime() : 0;
                         const ageMins = createdMs ? (Date.now() - createdMs) / 60000 : 0;
@@ -1331,9 +1427,8 @@ export default function RestaurantOwnerDashboard() {
                                 <button onClick={() => updateStatus(o.id, "ready")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
                                   Ready
                                 </button>
-                                <button onClick={() => updateStatus(o.id, "delivered")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
-                                  Delivered
-                                </button>
+
+                                {/* ✅ Removed Delivered action button as you asked */}
                                 <button onClick={() => updateStatus(o.id, "rejected")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
                                   Reject
                                 </button>
@@ -1375,7 +1470,7 @@ export default function RestaurantOwnerDashboard() {
                   <div style={{ fontSize: 12, fontWeight: 950, color: "rgba(17,24,39,0.72)", marginBottom: 6 }}>Prep Time (mins)</div>
                   <input
                     value={prepTimeMins}
-                    onChange={(e) => setPrepTimeMins(safeNumber(e.target.value, 20))} // keep your original behavior
+                    onChange={(e) => setPrepTimeMins(safeNumber(e.target.value, 20))}
                     style={inputStyle}
                     type="number"
                     min="0"
@@ -1416,15 +1511,7 @@ export default function RestaurantOwnerDashboard() {
                     Weekly {chartMode === "revenue" ? "Earnings" : "Orders"}
                   </div>
                   <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 12 }}>
-                    {chartMode === "revenue" ? (
-                      <>
-                        Total: {moneyINR(derived.totals.weekRevenue)}
-                      </>
-                    ) : (
-                      <>
-                        Total: {derived.totals.weekOrders}
-                      </>
-                    )}
+                    {chartMode === "revenue" ? <>Total: {moneyINR(derived.totals.weekRevenue)}</> : <>Total: {derived.totals.weekOrders}</>}
                   </div>
                 </div>
 
@@ -1559,7 +1646,6 @@ export default function RestaurantOwnerDashboard() {
           </div>
         </div>
 
-        {/* Bottom spacing */}
         <div style={{ height: 20 }} />
       </div>
     </main>

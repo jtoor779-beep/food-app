@@ -20,6 +20,33 @@ function initials(name) {
   return (a + b).toUpperCase() || "U";
 }
 
+function safeMoneyINR(v) {
+  const n = Number(v || 0);
+  return `₹${n.toFixed(0)}`;
+}
+
+function formatTime(ts) {
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return String(ts || "");
+  }
+}
+
+function maskEmail(email) {
+  const s = String(email || "");
+  const [u, d] = s.split("@");
+  if (!u || !d) return s;
+  if (u.length <= 2) return `${u[0] || "*"}*@${d}`;
+  return `${u.slice(0, 2)}***@${d}`;
+}
+
+function clampText(s, max = 46) {
+  const str = String(s ?? "");
+  if (str.length <= max) return str;
+  return str.slice(0, max - 1) + "…";
+}
+
 export default function ProfilePage() {
   const router = useRouter();
 
@@ -35,18 +62,142 @@ export default function ProfilePage() {
     full_name: "",
     phone: "",
     address_line1: "",
+    city: "",
+    state: "",
+    zip: "",
     avatar_url: "",
   });
 
-  // ✅ NEW (UI/UX): editable fields (does not break old logic)
+  // ✅ editable fields (does not break old logic)
   const [edit, setEdit] = useState({
     full_name: "",
     phone: "",
     address_line1: "",
+    city: "",
+    state: "",
+    zip: "",
   });
 
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // ✅ NEW: pro stats
+  const [stats, setStats] = useState({
+    restaurantOrders: 0,
+    groceryOrders: 0,
+    totalSpend: 0,
+    lastOrderAt: "",
+    lastOrderLabel: "",
+  });
+
+  // ✅ NEW: preferences (localStorage only; safe)
+  const [prefs, setPrefs] = useState({
+    emailUpdates: true,
+    smsUpdates: false,
+    marketing: false,
+  });
+
+  async function loadPrefs() {
+    try {
+      const emailUpdates = localStorage.getItem("pref_email_updates");
+      const smsUpdates = localStorage.getItem("pref_sms_updates");
+      const marketing = localStorage.getItem("pref_marketing");
+
+      setPrefs({
+        emailUpdates: emailUpdates == null ? true : emailUpdates === "1",
+        smsUpdates: smsUpdates == null ? false : smsUpdates === "1",
+        marketing: marketing == null ? false : marketing === "1",
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  function savePrefs(next) {
+    setPrefs(next);
+    try {
+      localStorage.setItem("pref_email_updates", next.emailUpdates ? "1" : "0");
+      localStorage.setItem("pref_sms_updates", next.smsUpdates ? "1" : "0");
+      localStorage.setItem("pref_marketing", next.marketing ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }
+
+  async function loadStats(userId) {
+    // This is optional UI/UX: counts + spend + last order time across restaurant + grocery
+    try {
+      // Counts (fast)
+      const rCount = await supabase
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      const gCount = await supabase
+        .from("grocery_orders")
+        .select("id", { count: "exact", head: true })
+        .eq("customer_user_id", userId);
+
+      const restaurantOrders = Number(rCount?.count || 0);
+      const groceryOrders = Number(gCount?.count || 0);
+
+      // Spend + last order (limit fetch to stay fast)
+      const rList = await supabase
+        .from("orders")
+        .select("id,total_amount,total,created_at")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      const gList = await supabase
+        .from("grocery_orders")
+        .select("id,total_amount,created_at")
+        .eq("customer_user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(200);
+
+      const rSpend = (rList.data || []).reduce(
+        (s, o) => s + Number(o.total_amount || o.total || 0),
+        0
+      );
+      const gSpend = (gList.data || []).reduce(
+        (s, o) => s + Number(o.total_amount || 0),
+        0
+      );
+      const totalSpend = rSpend + gSpend;
+
+      const rLast = (rList.data || [])[0]?.created_at || "";
+      const gLast = (gList.data || [])[0]?.created_at || "";
+
+      let lastOrderAt = "";
+      let lastOrderLabel = "";
+      if (rLast && gLast) {
+        if (new Date(rLast).getTime() >= new Date(gLast).getTime()) {
+          lastOrderAt = rLast;
+          lastOrderLabel = "Restaurant";
+        } else {
+          lastOrderAt = gLast;
+          lastOrderLabel = "Grocery";
+        }
+      } else if (rLast) {
+        lastOrderAt = rLast;
+        lastOrderLabel = "Restaurant";
+      } else if (gLast) {
+        lastOrderAt = gLast;
+        lastOrderLabel = "Grocery";
+      }
+
+      setStats({
+        restaurantOrders,
+        groceryOrders,
+        totalSpend,
+        lastOrderAt,
+        lastOrderLabel,
+      });
+    } catch {
+      // Don't block profile page if stats fail
+      setStats((s) => ({ ...s }));
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -63,7 +214,7 @@ export default function ProfilePage() {
 
       const { data: prof, error: profErr } = await supabase
         .from("profiles")
-        .select("role, full_name, phone, address_line1, avatar_url")
+        .select("role, full_name, phone, address_line1, city, state, zip, avatar_url")
         .eq("user_id", user.id)
         .maybeSingle();
 
@@ -76,6 +227,9 @@ export default function ProfilePage() {
         full_name: prof?.full_name || "",
         phone: prof?.phone || "",
         address_line1: prof?.address_line1 || "",
+        city: prof?.city || "",
+        state: prof?.state || "",
+        zip: prof?.zip || "",
         avatar_url: prof?.avatar_url || "",
       };
 
@@ -84,7 +238,14 @@ export default function ProfilePage() {
         full_name: next.full_name,
         phone: next.phone,
         address_line1: next.address_line1,
+        city: next.city,
+        state: next.state,
+        zip: next.zip,
       });
+
+      // ✅ NEW: pro extras
+      await loadPrefs();
+      await loadStats(user.id);
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -151,7 +312,6 @@ export default function ProfilePage() {
     }
   }
 
-  // ✅ NEW: Save profile edits (safe add-on)
   async function saveProfileEdits() {
     setErr("");
     setOk("");
@@ -165,11 +325,13 @@ export default function ProfilePage() {
         return;
       }
 
-      // Only update editable fields
       const payload = {
         full_name: String(edit.full_name || "").trim(),
         phone: String(edit.phone || "").trim(),
         address_line1: String(edit.address_line1 || "").trim(),
+        city: String(edit.city || "").trim(),
+        state: String(edit.state || "").trim(),
+        zip: String(edit.zip || "").trim(),
       };
 
       const { error } = await supabase.from("profiles").update(payload).eq("user_id", user.id);
@@ -195,6 +357,75 @@ export default function ProfilePage() {
     }
   }
 
+  // ✅ NEW: send password reset email (pro feature)
+  async function sendPasswordReset() {
+    setErr("");
+    setOk("");
+    setBusy(true);
+
+    try {
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user;
+      if (!user?.email) throw new Error("No email found for this account.");
+
+      // redirect back to your app after reset (works even if page doesn't exist yet)
+      const redirectTo =
+        typeof window !== "undefined" ? `${window.location.origin}/reset-password` : undefined;
+
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        user.email,
+        redirectTo ? { redirectTo } : undefined
+      );
+      if (error) throw error;
+
+      setOk("✅ Password reset email sent. Check your inbox.");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ✅ NEW: logout
+  async function logout() {
+    setErr("");
+    setOk("");
+    setBusy(true);
+    try {
+      await supabase.auth.signOut();
+      router.push("/login");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ✅ NEW: download user data JSON (client-only)
+  function downloadMyData() {
+    try {
+      const payload = {
+        profile,
+        preferences: prefs,
+        stats,
+        exported_at: new Date().toISOString(),
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `homyfod_profile_${String(profile.user_id || "user").slice(0, 8)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setOk("✅ Download started.");
+    } catch {
+      setErr("Could not export data.");
+    }
+  }
+
   /* =========================
      PREMIUM UI (inline + safe)
      ========================= */
@@ -213,7 +444,7 @@ export default function ProfilePage() {
 
     const container = {
       width: "100%",
-      maxWidth: 980,
+      maxWidth: 1120,
       position: "relative",
       zIndex: 2,
     };
@@ -278,6 +509,11 @@ export default function ProfilePage() {
       color: "rgba(2,6,23,0.78)",
       letterSpacing: 0.2,
       marginBottom: 10,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
     };
 
     const alertBase = {
@@ -382,6 +618,16 @@ export default function ProfilePage() {
       color: "rgba(2,6,23,0.78)",
     };
 
+    const btnDanger = {
+      padding: "10px 12px",
+      borderRadius: 14,
+      border: "1px solid rgba(239,68,68,0.22)",
+      background: "rgba(254,242,242,0.85)",
+      cursor: "pointer",
+      fontWeight: 950,
+      color: "#7f1d1d",
+    };
+
     const hint = {
       marginTop: 8,
       color: "rgba(15,23,42,0.62)",
@@ -456,6 +702,99 @@ export default function ProfilePage() {
       lineHeight: 1.35,
     };
 
+    const statGrid = {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginTop: 10,
+    };
+
+    const statCard = {
+      borderRadius: 16,
+      border: "1px solid rgba(15,23,42,0.10)",
+      background: "rgba(255,255,255,0.78)",
+      padding: 12,
+    };
+
+    const statNum = {
+      fontWeight: 1000,
+      fontSize: 18,
+      color: "#0b1220",
+      letterSpacing: -0.2,
+    };
+
+    const statLabel = {
+      marginTop: 4,
+      fontWeight: 900,
+      fontSize: 12,
+      color: "rgba(15,23,42,0.62)",
+    };
+
+    const divider = {
+      height: 1,
+      background: "rgba(15,23,42,0.08)",
+      margin: "12px 0",
+    };
+
+    const toggleRow = {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+      padding: "10px 12px",
+      borderRadius: 16,
+      border: "1px solid rgba(15,23,42,0.10)",
+      background: "rgba(255,255,255,0.75)",
+      marginTop: 8,
+    };
+
+    const toggleBtn = (on) => ({
+      width: 52,
+      height: 30,
+      borderRadius: 999,
+      border: "1px solid rgba(0,0,0,0.10)",
+      background: on ? "rgba(17,24,39,0.95)" : "rgba(0,0,0,0.10)",
+      position: "relative",
+      cursor: "pointer",
+      flexShrink: 0,
+    });
+
+    const toggleKnob = (on) => ({
+      width: 24,
+      height: 24,
+      borderRadius: 999,
+      background: "rgba(255,255,255,0.95)",
+      position: "absolute",
+      top: 2.5,
+      left: on ? 26 : 2.5,
+      transition: "left 140ms ease",
+      boxShadow: "0 10px 22px rgba(0,0,0,0.12)",
+    });
+
+    const progressWrap = {
+      marginTop: 10,
+      borderRadius: 16,
+      border: "1px solid rgba(15,23,42,0.10)",
+      background: "rgba(255,255,255,0.75)",
+      padding: 12,
+    };
+
+    const progressBar = (pct) => ({
+      height: 10,
+      borderRadius: 999,
+      background: "rgba(0,0,0,0.10)",
+      overflow: "hidden",
+      marginTop: 8,
+    });
+
+    const progressFill = (pct) => ({
+      height: "100%",
+      width: `${Math.max(0, Math.min(100, pct))}%`,
+      borderRadius: 999,
+      background:
+        "linear-gradient(90deg, rgba(17,24,39,0.95), rgba(59,130,246,0.85))",
+    });
+
     return {
       page,
       container,
@@ -476,6 +815,7 @@ export default function ProfilePage() {
       btnPrimary,
       btnPrimaryDisabled,
       btnGhost,
+      btnDanger,
       hint,
       row,
       field,
@@ -485,12 +825,25 @@ export default function ProfilePage() {
       mono,
       smallBtn,
       roleHint,
+      statGrid,
+      statCard,
+      statNum,
+      statLabel,
+      divider,
+      toggleRow,
+      toggleBtn,
+      toggleKnob,
+      progressWrap,
+      progressBar,
+      progressFill,
     };
   }, []);
 
   const roleLabel =
     profile.role === "restaurant_owner"
       ? "Restaurant Owner"
+      : profile.role === "grocery_owner"
+      ? "Grocery Owner"
       : profile.role === "delivery_partner"
       ? "Delivery Partner"
       : profile.role === "admin"
@@ -500,11 +853,35 @@ export default function ProfilePage() {
   const rolePill =
     profile.role === "restaurant_owner"
       ? "Owner"
+      : profile.role === "grocery_owner"
+      ? "GroceryOwner"
       : profile.role === "delivery_partner"
       ? "Delivery"
       : profile.role === "admin"
       ? "Admin"
       : "Customer";
+
+  const completion = useMemo(() => {
+    const checks = [
+      !!String(profile.full_name || "").trim(),
+      !!String(profile.phone || "").trim(),
+      !!String(profile.address_line1 || "").trim(),
+      !!String(profile.city || "").trim(),
+      !!String(profile.state || "").trim(),
+      !!String(profile.zip || "").trim(),
+      !!String(profile.avatar_url || "").trim(),
+    ];
+    const filled = checks.filter(Boolean).length;
+    return Math.round((filled / checks.length) * 100);
+  }, [
+    profile.full_name,
+    profile.phone,
+    profile.address_line1,
+    profile.city,
+    profile.state,
+    profile.zip,
+    profile.avatar_url,
+  ]);
 
   if (loading) {
     return (
@@ -514,55 +891,28 @@ export default function ProfilePage() {
 
         <div style={ui.container}>
           <div style={ui.card}>
-            <div style={ui.sectionTitle}>Loading profile…</div>
+            <div style={{ fontWeight: 980, color: "rgba(2,6,23,0.78)" }}>
+              Loading profile…
+            </div>
             <div
-              style={{
-                height: 12,
-                borderRadius: 999,
-                background:
-                  "linear-gradient(90deg, rgba(255,255,255,0.15), rgba(0,0,0,0.06), rgba(255,255,255,0.15))",
-                backgroundSize: "200% 100%",
-                animation: "sf_shimmer 1.6s linear infinite",
-                marginBottom: 10,
-                width: "70%",
-              }}
-            />
-            <div
-              style={{
-                height: 12,
-                borderRadius: 999,
-                background:
-                  "linear-gradient(90deg, rgba(255,255,255,0.15), rgba(0,0,0,0.06), rgba(255,255,255,0.15))",
-                backgroundSize: "200% 100%",
-                animation: "sf_shimmer 1.6s linear infinite",
-                marginBottom: 10,
-                width: "92%",
-              }}
-            />
-            <div
-              style={{
-                height: 12,
-                borderRadius: 999,
-                background:
-                  "linear-gradient(90deg, rgba(255,255,255,0.15), rgba(0,0,0,0.06), rgba(255,255,255,0.15))",
-                backgroundSize: "200% 100%",
-                animation: "sf_shimmer 1.6s linear infinite",
-                marginBottom: 0,
-                width: "58%",
-              }}
-            />
+              style={{ marginTop: 10, color: "rgba(15,23,42,0.62)", fontWeight: 850 }}
+            >
+              Please wait…
+            </div>
           </div>
         </div>
 
         <style jsx global>{`
           @keyframes sf_float {
-            0% { transform: translate3d(0,0,0) scale(1); }
-            50% { transform: translate3d(0,-18px,0) scale(1.02); }
-            100% { transform: translate3d(0,0,0) scale(1); }
-          }
-          @keyframes sf_shimmer {
-            0% { background-position: 0% 50%; }
-            100% { background-position: 200% 50%; }
+            0% {
+              transform: translate3d(0, 0, 0) scale(1);
+            }
+            50% {
+              transform: translate3d(0, -18px, 0) scale(1.02);
+            }
+            100% {
+              transform: translate3d(0, 0, 0) scale(1);
+            }
           }
           .sf_blob {
             position: absolute;
@@ -577,12 +927,20 @@ export default function ProfilePage() {
           .sf_blobA {
             left: -120px;
             top: -140px;
-            background: radial-gradient(circle at 30% 30%, rgba(255,140,0,0.55), rgba(255,140,0,0) 60%);
+            background: radial-gradient(
+              circle at 30% 30%,
+              rgba(255, 140, 0, 0.55),
+              rgba(255, 140, 0, 0) 60%
+            );
           }
           .sf_blobB {
             right: -140px;
             bottom: -160px;
-            background: radial-gradient(circle at 30% 30%, rgba(80,160,255,0.55), rgba(80,160,255,0) 60%);
+            background: radial-gradient(
+              circle at 30% 30%,
+              rgba(80, 160, 255, 0.55),
+              rgba(80, 160, 255, 0) 60%
+            );
             animation-delay: -1.8s;
           }
         `}</style>
@@ -601,8 +959,16 @@ export default function ProfilePage() {
             <h1 style={ui.h1}>Profile</h1>
             <div style={ui.sub}>Your account info</div>
           </div>
-          <div style={ui.pill}>
-            {rolePill} • {profile.email ? "Signed in" : "Guest"}
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={ui.pill}>{rolePill} • Signed in</div>
+            <button
+              onClick={logout}
+              disabled={busy || saving}
+              style={busy || saving ? ui.btnPrimaryDisabled : ui.btnPrimary}
+            >
+              Logout
+            </button>
           </div>
         </div>
 
@@ -610,9 +976,14 @@ export default function ProfilePage() {
         {ok ? <div style={ui.alertOk}>{ok}</div> : null}
 
         <div style={ui.grid} className="sf_profile_grid">
-          {/* LEFT: Avatar & basic */}
+          {/* LEFT COLUMN */}
           <section style={ui.card}>
-            <div style={ui.sectionTitle}>Account</div>
+            <div style={ui.sectionTitle}>
+              <span>Account</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Profile completion: {completion}%
+              </span>
+            </div>
 
             <div style={ui.avatarRow}>
               <div style={ui.avatar} title="Profile photo">
@@ -624,9 +995,7 @@ export default function ProfilePage() {
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
                 ) : (
-                  <span style={{ fontSize: 22 }}>
-                    {initials(profile.full_name || profile.email)}
-                  </span>
+                  <span style={{ fontSize: 22 }}>{initials(profile.full_name || profile.email)}</span>
                 )}
               </div>
 
@@ -691,6 +1060,44 @@ export default function ProfilePage() {
               </div>
             </div>
 
+            <div style={ui.progressWrap}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ fontWeight: 1000, color: "#0b1220" }}>Finish setup</div>
+                <div style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                  {completion < 100 ? "Add missing details for smoother checkout." : "All set ✅"}
+                </div>
+              </div>
+
+              <div style={ui.progressBar(completion)}>
+                <div style={ui.progressFill(completion)} />
+              </div>
+
+              {completion < 100 ? (
+                <div style={{ marginTop: 10, color: "rgba(15,23,42,0.66)", fontSize: 12, fontWeight: 850 }}>
+                  Missing:{" "}
+                  {[
+                    !String(profile.full_name || "").trim() ? "name" : null,
+                    !String(profile.phone || "").trim() ? "phone" : null,
+                    !String(profile.address_line1 || "").trim() ? "address" : null,
+                    !String(profile.city || "").trim() ? "city" : null,
+                    !String(profile.state || "").trim() ? "state" : null,
+                    !String(profile.zip || "").trim() ? "zip" : null,
+                    !String(profile.avatar_url || "").trim() ? "photo" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                </div>
+              ) : null}
+            </div>
+
             <div style={ui.metaLine}>
               <div>
                 <b>Role:</b> {roleLabel}
@@ -704,25 +1111,51 @@ export default function ProfilePage() {
               <div style={ui.mono}>{profile.user_id}</div>
             </div>
 
-            {/* Role hint (same text as your old work) */}
+            {/* Role hint */}
             {profile.role === "restaurant_owner" ? (
-              <div style={ui.roleHint}>
-                Owner account detected ✅ (Owner Orders menu is enabled)
-              </div>
+              <div style={ui.roleHint}>Owner account detected ✅ (Owner Orders menu is enabled)</div>
+            ) : profile.role === "grocery_owner" ? (
+              <div style={ui.roleHint}>Grocery owner account detected ✅ (Grocery Owner Orders is enabled)</div>
             ) : profile.role === "delivery_partner" ? (
-              <div style={ui.roleHint}>
-                Delivery account detected ✅ (Delivery Dashboard is enabled)
-              </div>
+              <div style={ui.roleHint}>Delivery account detected ✅ (Delivery Dashboard is enabled)</div>
             ) : (
-              <div style={ui.roleHint}>
-                Customer account detected ✅ (Cart + My Orders menu is enabled)
-              </div>
+              <div style={ui.roleHint}>Customer account detected ✅ (Cart + My Orders menu is enabled)</div>
             )}
+
+            <div style={ui.divider} />
+
+            {/* Quick actions */}
+            <div style={ui.sectionTitle}>
+              <span>Quick actions</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Fast shortcuts
+              </span>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="button" style={ui.btnGhost} onClick={() => router.push("/orders")}>
+                My Restaurant Orders
+              </button>
+              <button type="button" style={ui.btnGhost} onClick={() => router.push("/groceries/orders")}>
+                My Grocery Orders
+              </button>
+              <button type="button" style={ui.btnGhost} onClick={() => router.push("/settings")}>
+                Settings
+              </button>
+              <button type="button" style={ui.btnGhost} onClick={downloadMyData}>
+                Download my data
+              </button>
+            </div>
           </section>
 
-          {/* RIGHT: Editable details */}
+          {/* RIGHT COLUMN */}
           <section style={ui.card}>
-            <div style={ui.sectionTitle}>Profile details</div>
+            <div style={ui.sectionTitle}>
+              <span>Profile details</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Secure • Synced to Supabase
+              </span>
+            </div>
 
             <div style={ui.row} className="sf_fields">
               <div style={ui.field}>
@@ -748,11 +1181,45 @@ export default function ProfilePage() {
               </div>
 
               <div style={ui.field}>
-                <div style={ui.label}>Address</div>
+                <div style={ui.label}>Address line 1</div>
                 <input
                   value={edit.address_line1}
                   onChange={(e) => setEdit((p) => ({ ...p, address_line1: e.target.value }))}
-                  placeholder="Enter address"
+                  placeholder="Street address"
+                  style={ui.input}
+                  disabled={saving || busy}
+                />
+              </div>
+
+              {/* ✅ NEW: City/State/Zip */}
+              <div style={ui.field}>
+                <div style={ui.label}>City</div>
+                <input
+                  value={edit.city}
+                  onChange={(e) => setEdit((p) => ({ ...p, city: e.target.value }))}
+                  placeholder="City"
+                  style={ui.input}
+                  disabled={saving || busy}
+                />
+              </div>
+
+              <div style={ui.field}>
+                <div style={ui.label}>State</div>
+                <input
+                  value={edit.state}
+                  onChange={(e) => setEdit((p) => ({ ...p, state: e.target.value }))}
+                  placeholder="State"
+                  style={ui.input}
+                  disabled={saving || busy}
+                />
+              </div>
+
+              <div style={ui.field}>
+                <div style={ui.label}>Zip code</div>
+                <input
+                  value={edit.zip}
+                  onChange={(e) => setEdit((p) => ({ ...p, zip: e.target.value }))}
+                  placeholder="Zip"
                   style={ui.input}
                   disabled={saving || busy}
                 />
@@ -778,6 +1245,9 @@ export default function ProfilePage() {
                     full_name: profile.full_name,
                     phone: profile.phone,
                     address_line1: profile.address_line1,
+                    city: profile.city,
+                    state: profile.state,
+                    zip: profile.zip,
                   });
                   setOk("✅ Changes reset");
                 }}
@@ -787,18 +1257,134 @@ export default function ProfilePage() {
                 Reset
               </button>
 
-              <button
-                type="button"
-                onClick={load}
-                disabled={saving || busy}
-                style={ui.btnGhost}
-              >
+              <button type="button" onClick={load} disabled={saving || busy} style={ui.btnGhost}>
                 Refresh
               </button>
             </div>
 
             <div style={{ marginTop: 10, color: "rgba(15,23,42,0.62)", fontSize: 12 }}>
-              Note: Save updates <b>full_name</b>, <b>phone</b>, and <b>address_line1</b> in your <b>profiles</b> table.
+              Note: Save updates <b>full_name</b>, <b>phone</b>, <b>address_line1</b>, <b>city</b>, <b>state</b>, <b>zip</b> in your{" "}
+              <b>profiles</b> table.
+            </div>
+
+            <div style={ui.divider} />
+
+            {/* Stats */}
+            <div style={ui.sectionTitle}>
+              <span>Your activity</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Last:{" "}
+                {stats.lastOrderAt
+                  ? `${stats.lastOrderLabel} • ${formatTime(stats.lastOrderAt)}`
+                  : "No orders yet"}
+              </span>
+            </div>
+
+            <div style={ui.statGrid}>
+              <div style={ui.statCard}>
+                <div style={ui.statNum}>{stats.restaurantOrders}</div>
+                <div style={ui.statLabel}>Restaurant orders</div>
+              </div>
+              <div style={ui.statCard}>
+                <div style={ui.statNum}>{stats.groceryOrders}</div>
+                <div style={ui.statLabel}>Grocery orders</div>
+              </div>
+              <div style={{ ...ui.statCard, gridColumn: "1 / -1" }}>
+                <div style={ui.statNum}>{safeMoneyINR(stats.totalSpend)}</div>
+                <div style={ui.statLabel}>Total spend (approx)</div>
+              </div>
+            </div>
+
+            <div style={ui.divider} />
+
+            {/* Preferences */}
+            <div style={ui.sectionTitle}>
+              <span>Preferences</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Stored on this device
+              </span>
+            </div>
+
+            <div style={ui.toggleRow}>
+              <div>
+                <div style={{ fontWeight: 1000, color: "#0b1220" }}>Order updates email</div>
+                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 850, color: "rgba(15,23,42,0.62)" }}>
+                  Receipts + status updates
+                </div>
+              </div>
+              <div
+                style={ui.toggleBtn(prefs.emailUpdates)}
+                onClick={() => savePrefs({ ...prefs, emailUpdates: !prefs.emailUpdates })}
+                role="button"
+                aria-label="toggle email updates"
+              >
+                <div style={ui.toggleKnob(prefs.emailUpdates)} />
+              </div>
+            </div>
+
+            <div style={ui.toggleRow}>
+              <div>
+                <div style={{ fontWeight: 1000, color: "#0b1220" }}>SMS updates</div>
+                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 850, color: "rgba(15,23,42,0.62)" }}>
+                  Delivery alerts (if enabled later)
+                </div>
+              </div>
+              <div
+                style={ui.toggleBtn(prefs.smsUpdates)}
+                onClick={() => savePrefs({ ...prefs, smsUpdates: !prefs.smsUpdates })}
+                role="button"
+                aria-label="toggle sms updates"
+              >
+                <div style={ui.toggleKnob(prefs.smsUpdates)} />
+              </div>
+            </div>
+
+            <div style={ui.toggleRow}>
+              <div>
+                <div style={{ fontWeight: 1000, color: "#0b1220" }}>Offers & marketing</div>
+                <div style={{ marginTop: 4, fontSize: 12, fontWeight: 850, color: "rgba(15,23,42,0.62)" }}>
+                  Deals and announcements
+                </div>
+              </div>
+              <div
+                style={ui.toggleBtn(prefs.marketing)}
+                onClick={() => savePrefs({ ...prefs, marketing: !prefs.marketing })}
+                role="button"
+                aria-label="toggle marketing"
+              >
+                <div style={ui.toggleKnob(prefs.marketing)} />
+              </div>
+            </div>
+
+            <div style={ui.divider} />
+
+            {/* Security */}
+            <div style={ui.sectionTitle}>
+              <span>Security</span>
+              <span style={{ color: "rgba(15,23,42,0.62)", fontWeight: 900, fontSize: 12 }}>
+                Email: {maskEmail(profile.email)}
+              </span>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={busy ? ui.btnPrimaryDisabled : ui.btnPrimary}
+                disabled={busy}
+                onClick={sendPasswordReset}
+              >
+                Send password reset email
+              </button>
+              <button type="button" style={ui.btnGhost} onClick={downloadMyData}>
+                Download my data
+              </button>
+              <button type="button" style={ui.btnDanger} disabled={busy || saving} onClick={logout}>
+                Logout
+              </button>
+            </div>
+
+            <div style={{ marginTop: 10, color: "rgba(15,23,42,0.62)", fontSize: 12 }}>
+              Password reset will email you a secure link. You can later add “Change password inside app” if you want.
             </div>
           </section>
         </div>
@@ -809,10 +1395,6 @@ export default function ProfilePage() {
           0% { transform: translate3d(0,0,0) scale(1); }
           50% { transform: translate3d(0,-18px,0) scale(1.02); }
           100% { transform: translate3d(0,0,0) scale(1); }
-        }
-        @keyframes sf_shimmer {
-          0% { background-position: 0% 50%; }
-          100% { background-position: 200% 50%; }
         }
         .sf_blob {
           position: absolute;
@@ -845,8 +1427,9 @@ export default function ProfilePage() {
           .sf_fields {
             grid-template-columns: 1fr 1fr !important;
           }
-          .sf_fields > div:last-child {
-            grid-column: 1 / -1;
+          /* last row becomes full width if needed */
+          .sf_fields > div:nth-last-child(1) {
+            grid-column: auto;
           }
         }
       `}</style>

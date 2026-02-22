@@ -661,7 +661,7 @@ export default function MenuPage() {
 /* ================== PREMIUM INLINE STYLES ================== */
 
 const pageBg = {
-  maxWidth: 1100,
+  Width: "100",
   margin: "0 auto",
   padding: 16,
   paddingBottom: 100,
@@ -671,6 +671,7 @@ const pageBg = {
 };
 
 const heroGlass = {
+
   background: "rgba(255,255,255,0.78)",
   border: "1px solid rgba(0,0,0,0.08)",
   borderRadius: 18,
@@ -788,22 +789,23 @@ const selectMini = {
 const grid = {
   marginTop: 14,
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-  gap: 12,
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 280px))",
+  gap: 16,
+  justifyContent: "start",   // 👈 LEFT align
 };
 
 const cardGlass = {
   background: "rgba(255,255,255,0.78)",
   border: "1px solid rgba(0,0,0,0.08)",
   borderRadius: 16,
-  padding: 14,
+  padding: 12,
   boxShadow: "0 12px 32px rgba(0,0,0,0.08)",
   backdropFilter: "blur(10px)",
 };
 
 const imgWrapClickable = {
   width: "100%",
-  height: 150,
+  height: 125,
   borderRadius: 14,
   border: "1px solid rgba(0,0,0,0.10)",
   overflow: "hidden",

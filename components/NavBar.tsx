@@ -295,7 +295,7 @@ export default function NavBar() {
     setGlobalCity(city);
     setGlobalCityInput(city);
 
-    const unsub = subscribeGlobalCity((nextCity) => {
+    const unsub = subscribeGlobalCity((nextCity: string) => {
       const normalized = cleanCity(nextCity);
       setGlobalCity(normalized);
       setGlobalCityInput(normalized);
@@ -1812,21 +1812,3 @@ const isLoggedIn = !loading && !!userEmail;
     </>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

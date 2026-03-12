@@ -28,7 +28,6 @@ async function getRoleAndRedirect(router) {
 
   const role = normalizeRole(prof?.role);
 
-  // ✅ Your required redirects
   if (role === "restaurant_owner") {
     router.push("/restaurants/orders");
     return;
@@ -37,28 +36,19 @@ async function getRoleAndRedirect(router) {
     router.push("/admin/orders");
     return;
   }
-
-  // ✅ Grocery Owner redirect
   if (role === "grocery_owner") {
     router.push("/groceries/owner/dashboard");
     return;
   }
-
-  // ✅ Delivery Partner redirect
   if (role === "delivery_partner") {
     router.push("/delivery");
     return;
   }
 
-  // default customer (or unknown) -> Home
   router.push("/");
 }
 
-// ✅ helper: email confirmed check across Supabase versions
 function isEmailConfirmed(user) {
-  // supabase auth user can expose one of these depending on version/settings:
-  // - email_confirmed_at (most common)
-  // - confirmed_at
   const a = user?.email_confirmed_at;
   const b = user?.confirmed_at;
   return !!(a || b);
@@ -75,22 +65,23 @@ export default function LoginPage() {
   const [errMsg, setErrMsg] = useState("");
   const [infoMsg, setInfoMsg] = useState("");
 
-  // ✅ UI: show/hide password
   const [showPass, setShowPass] = useState(false);
-
-  // ✅ forgot password loading
   const [resetLoading, setResetLoading] = useState(false);
 
-  // ✅ NEW: Email OTP login (code)
   const [otpMode, setOtpMode] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [otpLoading, setOtpLoading] = useState(false);
 
-  // ✅ resend verification
   const [resendLoading, setResendLoading] = useState(false);
 
-  // ✅ If already logged in, redirect to correct home
+  // ✅ OPTIONAL: Put your real images here (URL or /public path)
+  // Example:
+  // const HERO_PHOTO = "/images/login-hero.jpg";
+  // const PARTNER_PHOTO = "/images/partner.jpg";
+  const HERO_PHOTO = ""; // <-- add later
+  const PARTNER_PHOTO = ""; // <-- add later
+
   useEffect(() => {
     let cancelled = false;
 
@@ -98,7 +89,6 @@ export default function LoginPage() {
       try {
         const { data } = await supabase.auth.getSession();
         if (!cancelled && data?.session?.user) {
-          // If session exists but email isn't confirmed, sign out for safety
           const u = data.session.user;
           if (!isEmailConfirmed(u)) {
             await supabase.auth.signOut();
@@ -133,10 +123,8 @@ export default function LoginPage() {
         email: email.trim(),
         password: password.trim(),
       });
-
       if (error) throw error;
 
-      // ✅ A) Block access until email is confirmed
       const { data: userData } = await supabase.auth.getUser();
       const user = userData?.user;
 
@@ -146,7 +134,6 @@ export default function LoginPage() {
       }
 
       if (!isEmailConfirmed(user)) {
-        // immediately sign out so unconfirmed accounts can't continue
         await supabase.auth.signOut();
         setErrMsg(
           "✅ Account created, but email is not verified yet. Please check your inbox and confirm your email. Then login again."
@@ -164,7 +151,6 @@ export default function LoginPage() {
     }
   }
 
-  // ✅ Forgot password
   async function handleForgotPassword() {
     setErrMsg("");
     setInfoMsg("");
@@ -198,14 +184,13 @@ export default function LoginPage() {
     }
   }
 
-  // ✅ A) Resend verification email
   async function resendVerificationEmail() {
     setErrMsg("");
     setInfoMsg("");
 
     const em = email.trim();
     if (!em) {
-      setErrMsg("Enter your email first, then click 'Resend verification email'.");
+      setErrMsg("Enter your email first, then click 'Resend verification'.");
       return;
     }
 
@@ -216,8 +201,6 @@ export default function LoginPage() {
           ? `${window.location.origin}/auth/callback`
           : undefined;
 
-      // supabase-js v2 supports resend for signup verification
-      // if your version complains, tell me the exact error and I’ll adapt it.
       const { error } = await supabase.auth.resend({
         type: "signup",
         email: em,
@@ -234,7 +217,6 @@ export default function LoginPage() {
     }
   }
 
-  // ✅ B) Email code login (OTP) - send code
   async function sendLoginCode() {
     setErrMsg("");
     setInfoMsg("");
@@ -268,7 +250,6 @@ export default function LoginPage() {
     }
   }
 
-  // ✅ B) verify OTP code
   async function verifyLoginCode(e) {
     e.preventDefault();
     setErrMsg("");
@@ -292,7 +273,6 @@ export default function LoginPage() {
 
       const user = data?.user;
       if (user && !isEmailConfirmed(user)) {
-        // with OTP flow, email is typically verified, but keep safe
         setErrMsg("Email is not verified yet. Please confirm your email first.");
         return;
       }
@@ -307,459 +287,38 @@ export default function LoginPage() {
     }
   }
 
-  /* =========================
-     PRO UI (inline only) — LOGIC 100% SAME
-     ✅ Added: HomyFod creative 3D/emoji background + hero side panel (desktop)
-     ========================= */
-
-  const page = {
-    minHeight: "calc(100vh - 64px)",
-    padding: 18,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-    overflow: "hidden",
-    background:
-      "radial-gradient(1200px 600px at 20% 10%, rgba(255,140,0,0.25), transparent 60%), radial-gradient(900px 520px at 80% 18%, rgba(80,160,255,0.22), transparent 58%), radial-gradient(900px 520px at 70% 90%, rgba(0,200,120,0.16), transparent 60%), linear-gradient(180deg, #f7f8fb, #eef1f7)",
-  };
-
-  const shell = {
-    width: "100%",
-    maxWidth: 1080,
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 18,
-    alignItems: "stretch",
-    position: "relative",
-    zIndex: 2,
-  };
-
-  const hero = {
-    borderRadius: 26,
-    border: "1px solid rgba(255,255,255,0.55)",
-    background: "rgba(255,255,255,0.55)",
-    boxShadow:
-      "0 18px 55px rgba(16,24,40,0.10), 0 2px 10px rgba(16,24,40,0.05)",
-    backdropFilter: "blur(10px)",
-    padding: 18,
-    overflow: "hidden",
-    position: "relative",
-    minHeight: 360,
-  };
-
-  const heroTop = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    flexWrap: "wrap",
-  };
-
-  const heroBrand = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-  };
-
-  const heroLogo = {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
-    display: "grid",
-    placeItems: "center",
-    background:
-      "linear-gradient(135deg, rgba(255,140,0,0.20), rgba(80,160,255,0.18))",
-    border: "1px solid rgba(0,0,0,0.06)",
-    boxShadow: "0 10px 26px rgba(0,0,0,0.10)",
-    fontSize: 20,
-  };
-
-  const heroTitle = {
-    margin: 0,
-    fontSize: 22,
-    fontWeight: 1000,
-    letterSpacing: -0.5,
-    color: "#0b1220",
-    lineHeight: 1.1,
-  };
-
-  const heroSub = {
-    marginTop: 5,
-    fontSize: 13,
-    color: "rgba(15,23,42,0.72)",
-    lineHeight: 1.35,
-  };
-
-  const heroBadge = {
-    fontSize: 12,
-    padding: "7px 10px",
-    borderRadius: 999,
-    border: "1px solid rgba(0,0,0,0.08)",
-    background: "rgba(255,255,255,0.65)",
-    color: "rgba(15,23,42,0.78)",
-    fontWeight: 900,
-    whiteSpace: "nowrap",
-  };
-
-  const heroBody = {
-    marginTop: 14,
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 12,
-  };
-
-  const heroLine = {
-    borderRadius: 18,
-    border: "1px solid rgba(15,23,42,0.08)",
-    background: "rgba(255,255,255,0.70)",
-    padding: 14,
-    color: "rgba(2,6,23,0.82)",
-    fontWeight: 900,
-    lineHeight: 1.35,
-  };
-
-  const heroMiniRow = {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 10,
-  };
-
-  const heroMini = {
-    borderRadius: 18,
-    border: "1px solid rgba(15,23,42,0.08)",
-    background: "rgba(255,255,255,0.68)",
-    padding: 12,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  };
-
-  const heroMiniLeft = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-  };
-
-  const heroEmoji = {
-    width: 38,
-    height: 38,
-    borderRadius: 16,
-    display: "grid",
-    placeItems: "center",
-    background:
-      "linear-gradient(135deg, rgba(255,140,0,0.12), rgba(80,160,255,0.10))",
-    border: "1px solid rgba(0,0,0,0.06)",
-    boxShadow: "0 10px 24px rgba(0,0,0,0.08)",
-    fontSize: 18,
-  };
-
-  const heroMiniText = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 3,
-  };
-
-  const heroMiniTitle = {
-    fontWeight: 1000,
-    color: "#0b1220",
-    fontSize: 13,
-  };
-
-  const heroMiniSub = {
-    color: "rgba(15,23,42,0.66)",
-    fontSize: 12,
-    fontWeight: 850,
-  };
-
-  const heroPill = {
-    fontSize: 12,
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "1px solid rgba(0,0,0,0.08)",
-    background: "rgba(255,255,255,0.70)",
-    color: "rgba(15,23,42,0.75)",
-    fontWeight: 900,
-  };
-
-  const card = {
-    width: "100%",
-    maxWidth: 520,
-    margin: "0 auto",
-    borderRadius: 22,
-    border: "1px solid rgba(255,255,255,0.55)",
-    background: "rgba(255,255,255,0.72)",
-    boxShadow:
-      "0 18px 55px rgba(16,24,40,0.14), 0 2px 10px rgba(16,24,40,0.06)",
-    backdropFilter: "blur(10px)",
-    padding: 18,
-    position: "relative",
-    overflow: "hidden",
-  };
-
-  const headerRow = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 10,
-  };
-
-  const brand = { display: "flex", alignItems: "center", gap: 10 };
-
-  const logo = {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    display: "grid",
-    placeItems: "center",
-    background:
-      "linear-gradient(135deg, rgba(255,140,0,0.20), rgba(80,160,255,0.18))",
-    border: "1px solid rgba(0,0,0,0.06)",
-    boxShadow: "0 8px 22px rgba(0,0,0,0.10)",
-  };
-
-  const title = {
-    fontSize: 20,
-    fontWeight: 950,
-    margin: 0,
-    letterSpacing: -0.3,
-    color: "#0b1220",
-    lineHeight: 1.2,
-  };
-
-  const subtitle = { marginTop: 2, fontSize: 13, color: "rgba(15,23,42,0.70)" };
-
-  const pill = {
-    fontSize: 12,
-    padding: "6px 10px",
-    borderRadius: 999,
-    border: "1px solid rgba(0,0,0,0.08)",
-    background: "rgba(255,255,255,0.65)",
-    color: "rgba(15,23,42,0.75)",
-    fontWeight: 800,
-    cursor: "pointer",
-    userSelect: "none",
-  };
-
-  const alertBase = {
-    padding: 12,
-    borderRadius: 14,
-    marginTop: 10,
-    marginBottom: 12,
-    fontSize: 13,
-    lineHeight: 1.35,
-  };
-
-  const alertError = {
-    ...alertBase,
-    background: "rgba(255, 231, 231, 0.75)",
-    border: "1px solid rgba(255, 179, 179, 0.9)",
-    color: "#7a1717",
-  };
-
-  const alertInfo = {
-    ...alertBase,
-    background: "rgba(233, 255, 240, 0.75)",
-    border: "1px solid rgba(168, 240, 191, 0.95)",
-    color: "#0f5b2a",
-  };
-
-  const form = {
-    borderRadius: 18,
-    border: "1px solid rgba(0,0,0,0.08)",
-    background: "rgba(255,255,255,0.70)",
-    padding: 14,
-  };
-
-  const field = { marginBottom: 12 };
-
-  const label = {
-    display: "block",
-    fontWeight: 950,
-    marginBottom: 7,
-    fontSize: 13,
-    color: "rgba(2,6,23,0.86)",
-  };
-
-  const inputWrap = { position: "relative", display: "flex", alignItems: "center" };
-
-  const iconLeft = {
-    position: "absolute",
-    left: 12,
-    width: 18,
-    height: 18,
-    opacity: 0.75,
-    pointerEvents: "none",
-  };
-
-  const input = {
-    width: "100%",
-    padding: "11px 12px 11px 40px",
-    borderRadius: 14,
-    border: "1px solid rgba(15,23,42,0.14)",
-    outline: "none",
-    background: "rgba(255,255,255,0.85)",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.9)",
-    fontSize: 14,
-    color: "#0b1220",
-  };
-
-  const passInput = { ...input, paddingRight: 44 };
-
-  const eyeBtn = {
-    position: "absolute",
-    right: 10,
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    border: "1px solid rgba(15,23,42,0.10)",
-    background: "rgba(255,255,255,0.7)",
-    cursor: "pointer",
-    display: "grid",
-    placeItems: "center",
-  };
-
-  const rowBetween = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginTop: 6,
-    marginBottom: 10,
-    flexWrap: "wrap",
-  };
-
-  const linkBtn = {
-    border: "none",
-    background: "transparent",
-    padding: 0,
-    cursor: "pointer",
-    color: "rgba(2,6,23,0.78)",
-    fontWeight: 900,
-    fontSize: 13,
-    textDecoration: "underline",
-    textUnderlineOffset: 3,
-  };
-
-  const submit = {
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 14,
-    border: "1px solid rgba(0,0,0,0.10)",
-    background: "linear-gradient(180deg, #0b0f19, #111827)",
-    color: "#fff",
-    cursor: "pointer",
-    fontWeight: 950,
-    letterSpacing: 0.2,
-    boxShadow: "0 10px 26px rgba(0,0,0,0.22)",
-  };
-
-  const submitDisabled = { ...submit, opacity: 0.75, cursor: "not-allowed" };
-
-  const footer = {
-    marginTop: 12,
-    fontSize: 13,
-    color: "rgba(15,23,42,0.70)",
-    textAlign: "center",
-  };
-
-  const createLink = {
-    color: "#0b0f19",
-    fontWeight: 950,
-    cursor: "pointer",
-    textDecoration: "underline",
-    textUnderlineOffset: 3,
-  };
-
-  function MailIcon() {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" style={iconLeft}>
-        <path
-          d="M4 7.5c0-1.1.9-2 2-2h12c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-        <path
-          d="M5.5 8.2 12 13l6.5-4.8"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
+  function goBecome(role) {
+    router.push(`/signup?role=${encodeURIComponent(role)}`);
   }
-
-  function LockIcon() {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" style={iconLeft}>
-        <path
-          d="M7 11V8.8A5 5 0 0 1 12 4a5 5 0 0 1 5 4.8V11"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M6.5 11h11A2.5 2.5 0 0 1 20 13.5v4A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-4A2.5 2.5 0 0 1 6.5 11Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-      </svg>
-    );
+  function goGetApp() {
+    router.push("/");
   }
+  const emailValid = /\S+@\S+\.\S+/.test(String(email || "").trim());
+  const passValid = String(password || "").trim().length >= 8;
+  const otpValid = String(otpCode || "").trim().length >= 6;
 
-  function EyeIcon({ off }) {
-    return off ? (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-        <path
-          d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-        <path
-          d="M10 10.2a3 3 0 0 0 3.8 3.8"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <path
-          d="M4 4l16 16"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-      </svg>
-    ) : (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-        <path
-          d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-        <path
-          d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-      </svg>
-    );
-  }
-
-  function Spinner() {
+  function FieldState({ status, withEye = false }) {
+    if (status === "neutral") return null;
     return (
-      <svg
-        width="18"
-        height="18"
-        viewBox="0 0 24 24"
-        style={{ marginRight: 8 }}
+      <span
+        className={`hf_stateIcon ${withEye ? "hf_stateIconEye" : ""} ${
+          status === "valid" ? "hf_stateValid" : "hf_stateInvalid"
+        }`}
         aria-hidden="true"
       >
+        {status === "valid" ? "OK" : "!"}
+      </span>
+    );
+  }
+
+  function SpinnerDark() {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
         <circle
           cx="12"
           cy="12"
           r="9"
-          stroke="rgba(255,255,255,0.45)"
+          stroke="rgba(255,255,255,0.35)"
           strokeWidth="3"
           fill="none"
         />
@@ -783,887 +342,1372 @@ export default function LoginPage() {
     );
   }
 
-  // Decorative floating emoji “stickers” (no logic impact)
-  function Sticker({ className, children }) {
+  function ArrowIcon() {
     return (
-      <div className={`hf_sticker ${className || ""}`} aria-hidden="true">
-        <div className="hf_stickerInner">{children}</div>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M9 18l6-6-6-6"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  function SocialIcon({ type }) {
+    if (type === "x") {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M18.8 3H21l-6.7 7.7L22 21h-6.4l-5-6-5.2 6H3.2l7.2-8.3L2 3h6.6l4.5 5.2L18.8 3Z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "ig") {
+      return (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M7.5 3.8h9A3.7 3.7 0 0 1 20.2 7.5v9a3.7 3.7 0 0 1-3.7 3.7h-9A3.7 3.7 0 0 1 3.8 16.5v-9A3.7 3.7 0 0 1 7.5 3.8Z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+          />
+          <path
+            d="M12 16.2a4.2 4.2 0 1 0 0-8.4 4.2 4.2 0 0 0 0 8.4Z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+          />
+          <path
+            d="M17.2 6.8h.01"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M14 8.5V7.2c0-1 .8-1.7 1.8-1.7H18V2.5h-2.6C12.9 2.5 11 4.4 11 6.9v1.6H8.7v3H11V21h3v-9.5h2.4l.4-3H14Z"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  function WaveSvg({ className }) {
+    return (
+      <svg
+        className={className}
+        viewBox="0 0 1200 120"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M0,72 C120,96 240,112 360,100 C480,88 600,48 720,44 C840,40 960,72 1080,84 C1140,90 1170,88 1200,84 L1200,120 L0,120 Z"
+          fill="currentColor"
+        />
+      </svg>
+    );
+  }
+
+  function PhoneMock() {
+    return (
+      <div className="hf_phoneWrap" aria-hidden="true">
+        <div className="hf_phone">
+          <div className="hf_phoneTop">
+            <div className="hf_notch" />
+          </div>
+          <div className="hf_phoneScreen">
+            <div className="hf_phoneHeader">
+              <div className="hf_phoneLogo">🍔</div>
+              <div className="hf_phoneBrand">
+                <div className="hf_phoneName">HomyFod</div>
+                <div className="hf_phoneTag">Fast • Grocery • Food</div>
+              </div>
+            </div>
+
+            <div className="hf_phoneCard">
+              <div className="hf_phoneCardRow">
+                <div className="hf_bubble">🔥</div>
+                <div className="hf_phoneCardText">
+                  <div className="hf_phoneCardTitle">Trending near you</div>
+                  <div className="hf_phoneCardSub">Fresh deals • live orders</div>
+                </div>
+              </div>
+              <div className="hf_phoneBtn">Order now</div>
+            </div>
+
+            <div className="hf_phoneMiniGrid">
+              <div className="hf_phoneMini">
+                <div className="hf_mi">🍕</div>
+                <div className="hf_mt">
+                  <div className="hf_mtt">Restaurants</div>
+                  <div className="hf_mts">Hot & fast</div>
+                </div>
+              </div>
+              <div className="hf_phoneMini">
+                <div className="hf_mi">🛒</div>
+                <div className="hf_mt">
+                  <div className="hf_mtt">Groceries</div>
+                  <div className="hf_mts">Essentials</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="hf_phoneGlow" />
+          </div>
+        </div>
       </div>
     );
   }
 
   if (checkingSession) {
     return (
-      <main style={page}>
-        {/* Background creative layer */}
-        <div className="hf_bg" aria-hidden="true">
-          <div className="hf_wm">HomyFod</div>
-          <div className="hf_glow hf_glowA" />
-          <div className="hf_glow hf_glowB" />
-          <div className="hf_glow hf_glowC" />
-          <Sticker className="hf_s1">🍔</Sticker>
-          <Sticker className="hf_s2">🥗</Sticker>
-          <Sticker className="hf_s3">🍕</Sticker>
-          <Sticker className="hf_s4">🥑</Sticker>
-          <Sticker className="hf_s5">🍗</Sticker>
-          <Sticker className="hf_s6">🧃</Sticker>
-        </div>
+      <main className="hf_page">
+        <section className="hf_hero">
+          <div className="hf_heroDecor hf_dLeft" aria-hidden="true" />
+          <div className="hf_heroDecor hf_dRight" aria-hidden="true" />
+          <WaveSvg className="hf_wave hf_wave1" />
+          <WaveSvg className="hf_wave hf_wave2" />
+          <div className="hf_heroInner">
+            <div className="hf_authCard hf_reveal hf_r2">
+              <div className="hf_authTop">
+                <div className="hf_brand">
+                  <div className="hf_brandLogo">🍔</div>
+                  <div>
+                    <div className="hf_brandName">HomyFod</div>
+                    <div className="hf_brandSub">Preparing your session…</div>
+                  </div>
+                </div>
+                <div className="hf_pillStatic">Secure</div>
+              </div>
 
-        <div style={{ ...card, maxWidth: 520 }}>
-          <div style={headerRow}>
-            <div style={brand}>
-              <div style={logo}>🍔</div>
-              <div>
-                <div style={title}>HomyFod</div>
-                <div style={subtitle}>Preparing your session…</div>
+              <div className="hf_notice">
+                <span className="hf_dot" />
+                Checking session…
               </div>
             </div>
-            <div style={{ ...pill, cursor: "default" }}>Secure</div>
           </div>
+        </section>
 
-          <div
-            style={{
-              marginTop: 10,
-              padding: 14,
-              borderRadius: 16,
-              border: "1px solid rgba(0,0,0,0.08)",
-              background: "rgba(255,255,255,0.75)",
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              color: "rgba(15,23,42,0.75)",
-              fontWeight: 900,
-            }}
-          >
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 999,
-                background: "rgba(255,140,0,0.9)",
-                boxShadow: "0 0 0 4px rgba(255,140,0,0.18)",
-              }}
-            />
-            Checking session…
-          </div>
-        </div>
-
-        <style jsx global>{`
-          @keyframes hf_float {
-            0% {
-              transform: translate3d(0, 0, 0) rotate(0deg);
-            }
-            50% {
-              transform: translate3d(0, -14px, 0) rotate(2deg);
-            }
-            100% {
-              transform: translate3d(0, 0, 0) rotate(0deg);
-            }
-          }
-          @keyframes hf_drift {
-            0% {
-              transform: translate3d(0, 0, 0);
-            }
-            50% {
-              transform: translate3d(18px, -10px, 0);
-            }
-            100% {
-              transform: translate3d(0, 0, 0);
-            }
-          }
-          @keyframes hf_shine {
-            0% {
-              opacity: 0.5;
-              transform: translate3d(0, 0, 0) scale(1);
-            }
-            50% {
-              opacity: 0.75;
-              transform: translate3d(0, 0, 0) scale(1.05);
-            }
-            100% {
-              opacity: 0.5;
-              transform: translate3d(0, 0, 0) scale(1);
-            }
-          }
-
-          .hf_bg {
-            position: absolute;
-            inset: 0;
-            overflow: hidden;
-            pointer-events: none;
-            z-index: 1;
-          }
-
-          .hf_wm {
-            position: absolute;
-            left: 50%;
-            top: 52%;
-            transform: translate(-50%, -50%);
-            font-weight: 1000;
-            letter-spacing: -2px;
-            font-size: clamp(46px, 10vw, 110px);
-            color: rgba(15, 23, 42, 0.06);
-            text-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
-            user-select: none;
-            white-space: nowrap;
-          }
-
-          .hf_glow {
-            position: absolute;
-            width: 520px;
-            height: 520px;
-            border-radius: 999px;
-            filter: blur(36px);
-            opacity: 0.65;
-            animation: hf_shine 6s ease-in-out infinite;
-          }
-          .hf_glowA {
-            left: -180px;
-            top: -220px;
-            background: radial-gradient(
-              circle at 30% 30%,
-              rgba(255, 140, 0, 0.55),
-              rgba(255, 140, 0, 0) 60%
-            );
-          }
-          .hf_glowB {
-            right: -220px;
-            top: 8%;
-            background: radial-gradient(
-              circle at 30% 30%,
-              rgba(80, 160, 255, 0.55),
-              rgba(80, 160, 255, 0) 60%
-            );
-            animation-delay: -1.4s;
-          }
-          .hf_glowC {
-            left: 20%;
-            bottom: -240px;
-            background: radial-gradient(
-              circle at 30% 30%,
-              rgba(0, 200, 120, 0.40),
-              rgba(0, 200, 120, 0) 62%
-            );
-            animation-delay: -2.1s;
-          }
-
-          .hf_sticker {
-            position: absolute;
-            width: 74px;
-            height: 74px;
-            border-radius: 22px;
-            background: rgba(255, 255, 255, 0.65);
-            border: 1px solid rgba(255, 255, 255, 0.55);
-            box-shadow: 0 18px 55px rgba(16, 24, 40, 0.12),
-              0 2px 10px rgba(16, 24, 40, 0.06);
-            backdrop-filter: blur(10px);
-            display: grid;
-            place-items: center;
-            transform-style: preserve-3d;
-            animation: hf_float 5.6s ease-in-out infinite;
-          }
-          .hf_stickerInner {
-            width: 58px;
-            height: 58px;
-            border-radius: 18px;
-            display: grid;
-            place-items: center;
-            background: linear-gradient(
-              135deg,
-              rgba(255, 140, 0, 0.10),
-              rgba(80, 160, 255, 0.10)
-            );
-            border: 1px solid rgba(0, 0, 0, 0.06);
-            font-size: 28px;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-            transform: translateZ(14px);
-          }
-
-          /* Sticker positions */
-          .hf_s1 {
-            left: 6%;
-            top: 14%;
-            animation-delay: -0.6s;
-          }
-          .hf_s2 {
-            left: 14%;
-            bottom: 12%;
-            animation-delay: -1.2s;
-          }
-          .hf_s3 {
-            right: 10%;
-            top: 18%;
-            animation-delay: -1.8s;
-          }
-          .hf_s4 {
-            right: 6%;
-            bottom: 16%;
-            animation-delay: -2.2s;
-          }
-          .hf_s5 {
-            left: 42%;
-            top: 8%;
-            animation-delay: -2.8s;
-          }
-          .hf_s6 {
-            right: 36%;
-            bottom: 8%;
-            animation-delay: -3.3s;
-          }
-
-          @media (max-width: 720px) {
-            .hf_wm {
-              top: 46%;
-            }
-            .hf_sticker {
-              width: 64px;
-              height: 64px;
-              border-radius: 20px;
-            }
-            .hf_stickerInner {
-              width: 50px;
-              height: 50px;
-              border-radius: 16px;
-              font-size: 24px;
-            }
-            .hf_s5,
-            .hf_s6 {
-              display: none;
-            }
-          }
-        `}</style>
+        <style jsx global>{heroCss}</style>
       </main>
     );
   }
 
   return (
-    <main style={page}>
-      {/* Background creative layer */}
-      <div className="hf_bg" aria-hidden="true">
-        <div className="hf_wm">HomyFod</div>
-        <div className="hf_glow hf_glowA" />
-        <div className="hf_glow hf_glowB" />
-        <div className="hf_glow hf_glowC" />
-        <Sticker className="hf_s1">🍔</Sticker>
-        <Sticker className="hf_s2">🥗</Sticker>
-        <Sticker className="hf_s3">🍕</Sticker>
-        <Sticker className="hf_s4">🥑</Sticker>
-        <Sticker className="hf_s5">🍗</Sticker>
-        <Sticker className="hf_s6">🧃</Sticker>
-      </div>
+    <main className="hf_page">
+      <section className="hf_hero">
+        {/* Real photo overlay (optional) */}
+        {HERO_PHOTO ? (
+          <div className="hf_photoLayer" aria-hidden="true">
+            <img src={HERO_PHOTO} alt="" className="hf_photoImg" />
+            <div className="hf_photoShade" />
+          </div>
+        ) : null}
 
-      <div style={shell} className="hf_shell">
-        {/* Desktop hero panel (mobile auto hides) */}
-        <section style={hero} className="hf_hero">
-          <div style={heroTop}>
-            <div style={heroBrand}>
-              <div style={heroLogo}>🍽️</div>
-              <div>
-                <h3 style={heroTitle}>HomyFod</h3>
-                <div style={heroSub}>
-                  Restaurants + Groceries in one place. <br />
-                  Fast delivery. Smooth checkout.
+        <div className="hf_heroDecor hf_dLeft" aria-hidden="true" />
+        <div className="hf_heroDecor hf_dRight" aria-hidden="true" />
+        <div className="hf_heroFood hf_fLeft" aria-hidden="true">
+          🥡
+        </div>
+        <div className="hf_heroFood hf_fRight" aria-hidden="true">
+          🍟
+        </div>
+
+        <WaveSvg className="hf_wave hf_wave1" />
+        <WaveSvg className="hf_wave hf_wave2" />
+        <WaveSvg className="hf_wave hf_wave3" />
+
+        <div className="hf_heroInner">
+          <div className="hf_leftColumn">
+            <div className="hf_heroTitleBlock hf_reveal hf_r1">
+              <div className="hf_heroBrand">HomyFod</div>
+              <h1 className="hf_heroTitle">Sign in to order fast</h1>
+              <p className="hf_heroSubtitle">
+                Restaurants + Groceries • Live updates • Smooth checkout
+              </p>
+              <div className="hf_socialProof hf_reveal hf_r2">
+                <div className="hf_statItem">
+                  <div className="hf_statValue">4.9</div>
+                  <div className="hf_statLabel">App rating</div>
+                </div>
+                <div className="hf_statItem">
+                  <div className="hf_statValue">120k+</div>
+                  <div className="hf_statLabel">Happy users</div>
+                </div>
+                <div className="hf_statItem">
+                  <div className="hf_statValue">28 min</div>
+                  <div className="hf_statLabel">Avg delivery</div>
                 </div>
               </div>
             </div>
-            <div style={heroBadge}>Pro • Secure • Verified</div>
+
+            <div className="hf_reveal hf_r3"><PhoneMock /></div>
           </div>
 
-          <div style={heroBody}>
-            <div style={heroLine}>
-              👋 Welcome! Browse as guest anytime. <br />
-              <span style={{ color: "rgba(15,23,42,0.72)", fontWeight: 850 }}>
-                To place an order, sign in (password) or use email code.
-              </span>
-            </div>
-
-            <div style={heroMiniRow} className="hf_heroMiniRow">
-              <div style={heroMini}>
-                <div style={heroMiniLeft}>
-                  <div style={heroEmoji}>🍛</div>
-                  <div style={heroMiniText}>
-                    <div style={heroMiniTitle}>Restaurant Orders</div>
-                    <div style={heroMiniSub}>Fresh meals • Live updates</div>
-                  </div>
+          <div className="hf_authCard hf_reveal hf_r2">
+            <div className="hf_authTop">
+              <div className="hf_brand">
+                <div className="hf_brandLogo">🍕</div>
+                <div>
+                  <div className="hf_brandName">Welcome back</div>
+                  <div className="hf_brandSub">Sign in to continue</div>
                 </div>
-                <div style={heroPill}>Hot</div>
               </div>
 
-              <div style={heroMini}>
-                <div style={heroMiniLeft}>
-                  <div style={heroEmoji}>🛒</div>
-                  <div style={heroMiniText}>
-                    <div style={heroMiniTitle}>Grocery Delivery</div>
-                    <div style={heroMiniSub}>Weekly essentials • Quick</div>
-                  </div>
-                </div>
-                <div style={heroPill}>Fast</div>
-              </div>
-
-              <div style={heroMini}>
-                <div style={heroMiniLeft}>
-                  <div style={heroEmoji}>🔐</div>
-                  <div style={heroMiniText}>
-                    <div style={heroMiniTitle}>Verified Accounts</div>
-                    <div style={heroMiniSub}>Email confirm + OTP option</div>
-                  </div>
-                </div>
-                <div style={heroPill}>Secure</div>
-              </div>
-            </div>
-          </div>
-
-          {/* extra floating emojis inside hero */}
-          <div className="hf_heroFloat hf_hf1" aria-hidden="true">
-            🍩
-          </div>
-          <div className="hf_heroFloat hf_hf2" aria-hidden="true">
-            🍓
-          </div>
-          <div className="hf_heroFloat hf_hf3" aria-hidden="true">
-            🥙
-          </div>
-        </section>
-
-        <div style={card}>
-          {/* Subtle top shine inside card */}
-          <div className="hf_cardShine" aria-hidden="true" />
-
-          <div style={headerRow}>
-            <div style={brand}>
-              <div style={logo}>🍕</div>
-              <div>
-                <h2 style={title}>Welcome back</h2>
-                <div style={subtitle}>Sign in to continue</div>
-              </div>
+              <button
+                className="hf_modePill"
+                onClick={() => {
+                  setErrMsg("");
+                  setInfoMsg("");
+                  setOtpMode((v) => !v);
+                  setOtpSent(false);
+                  setOtpCode("");
+                }}
+                type="button"
+                title="Switch login method"
+              >
+                {otpMode ? "Password" : "Code"}
+              </button>
             </div>
 
-            {/* Toggle between Password login & Code login */}
-            <div
-              style={pill}
-              onClick={() => {
-                setErrMsg("");
-                setInfoMsg("");
-                setOtpMode((v) => !v);
-                setOtpSent(false);
-                setOtpCode("");
-              }}
-              title="Switch login method"
-            >
-              {otpMode ? "Password" : "Code"}
-            </div>
-          </div>
+            {errMsg ? <div className="hf_alert hf_error">{errMsg}</div> : null}
+            {infoMsg ? <div className="hf_alert hf_info">{infoMsg}</div> : null}
 
-          {errMsg ? <div style={alertError}>{errMsg}</div> : null}
-          {infoMsg ? <div style={alertInfo}>{infoMsg}</div> : null}
-
-          {!otpMode ? (
-            // ===========================
-            // Password Login (existing)
-            // ===========================
-            <form onSubmit={handleLogin} style={form}>
-              <div style={field}>
-                <label style={label}>Email</label>
-                <div style={inputWrap}>
-                  <MailIcon />
+            {!otpMode ? (
+              <form onSubmit={handleLogin} className="hf_form">
+                <label className="hf_label">Email</label>
+                <div className={`hf_inputWrap ${email ? (emailValid ? "hf_valid" : "hf_invalid") : ""}`}>
+                  <span className="hf_icon">✉️</span>
                   <input
+                    className="hf_input"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     autoComplete="email"
-                    style={input}
                   />
+                  <FieldState status={email ? (emailValid ? "valid" : "invalid") : "neutral"} />
                 </div>
-              </div>
 
-              <div style={field}>
-                <label style={label}>Password</label>
-                <div style={inputWrap}>
-                  <LockIcon />
+                <label className="hf_label" style={{ marginTop: 10 }}>
+                  Password
+                </label>
+                <div className={`hf_inputWrap ${password ? (passValid ? "hf_valid" : "hf_invalid") : ""}`}>
+                  <span className="hf_icon">🔒</span>
                   <input
+                    className="hf_input hf_inputPass"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     type={showPass ? "text" : "password"}
                     autoComplete="current-password"
-                    style={passInput}
                   />
+                  <FieldState status={password ? (passValid ? "valid" : "invalid") : "neutral"} withEye />
                   <button
                     type="button"
+                    className="hf_eye"
                     onClick={() => setShowPass((v) => !v)}
-                    style={eyeBtn}
                     aria-label={showPass ? "Hide password" : "Show password"}
-                    title={showPass ? "Hide password" : "Show password"}
                   >
-                    <EyeIcon off={showPass} />
+                    {showPass ? "🙈" : "👁️"}
                   </button>
                 </div>
 
-                <div style={rowBetween}>
+                <div className="hf_linksRow">
                   <button
                     type="button"
+                    className="hf_link"
                     onClick={handleForgotPassword}
                     disabled={resetLoading}
-                    style={{
-                      ...linkBtn,
-                      opacity: resetLoading ? 0.7 : 1,
-                      cursor: resetLoading ? "not-allowed" : "pointer",
-                    }}
                   >
-                    {resetLoading ? "Sending reset email…" : "Forgot password?"}
+                    {resetLoading ? "Sending reset…" : "Forgot password?"}
                   </button>
 
                   <button
                     type="button"
+                    className="hf_link"
                     onClick={resendVerificationEmail}
                     disabled={resendLoading}
-                    style={{
-                      ...linkBtn,
-                      opacity: resendLoading ? 0.7 : 1,
-                      cursor: resendLoading ? "not-allowed" : "pointer",
-                    }}
                     title="If you didn’t receive verification email"
                   >
                     {resendLoading ? "Resending…" : "Resend verification"}
                   </button>
                 </div>
-              </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                style={loading ? submitDisabled : submit}
-              >
-                {loading ? (
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Spinner />
-                    Signing in…
+                <button className="hf_btnPrimary" type="submit" disabled={loading}>
+                  {loading ? (
+                    <span className="hf_btnSpin">
+                      <SpinnerDark /> Signing in…
+                    </span>
+                  ) : (
+                    "Sign In"
+                  )}
+                </button>
+
+                <div className="hf_footer">
+                  Don’t have an account?{" "}
+                  <span className="hf_footerLink" onClick={() => router.push("/signup")}>
+                    Create one
                   </span>
-                ) : (
-                  "Sign In"
-                )}
-              </button>
-
-              <div style={footer}>
-                Don’t have an account?{" "}
-                <span onClick={() => router.push("/signup")} style={createLink}>
-                  Create one
-                </span>
-              </div>
-            </form>
-          ) : (
-            // ===========================
-            // Email Code Login (OTP) — B
-            // ===========================
-            <form onSubmit={verifyLoginCode} style={form}>
-              <div style={field}>
-                <label style={label}>Email</label>
-                <div style={inputWrap}>
-                  <MailIcon />
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={verifyLoginCode} className="hf_form">
+                <label className="hf_label">Email</label>
+                <div className={`hf_inputWrap ${email ? (emailValid ? "hf_valid" : "hf_invalid") : ""}`}>
+                  <span className="hf_icon">✉️</span>
                   <input
+                    className="hf_input"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     autoComplete="email"
-                    style={input}
                   />
+                  <FieldState status={email ? (emailValid ? "valid" : "invalid") : "neutral"} />
                 </div>
-              </div>
 
-              {!otpSent ? (
-                <button
-                  type="button"
-                  onClick={sendLoginCode}
-                  disabled={otpLoading}
-                  style={otpLoading ? submitDisabled : submit}
-                >
-                  {otpLoading ? (
-                    <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Spinner />
-                      Sending code…
-                    </span>
-                  ) : (
-                    "Send code to email"
-                  )}
-                </button>
-              ) : (
-                <>
-                  <div style={field}>
-                    <label style={label}>Enter code</label>
-                    <div style={inputWrap}>
-                      <LockIcon />
+                {!otpSent ? (
+                  <button
+                    className="hf_btnPrimary"
+                    type="button"
+                    onClick={sendLoginCode}
+                    disabled={otpLoading}
+                    style={{ marginTop: 12 }}
+                  >
+                    {otpLoading ? (
+                      <span className="hf_btnSpin">
+                        <SpinnerDark /> Sending code…
+                      </span>
+                    ) : (
+                      "Send code to email"
+                    )}
+                  </button>
+                ) : (
+                  <>
+                    <label className="hf_label" style={{ marginTop: 12 }}>
+                      Enter code
+                    </label>
+                    <div className={`hf_inputWrap ${otpCode ? (otpValid ? "hf_valid" : "hf_invalid") : ""}`}>
+                      <span className="hf_icon">🔑</span>
                       <input
+                        className="hf_input"
                         value={otpCode}
                         onChange={(e) => setOtpCode(e.target.value)}
                         placeholder="6-digit code"
                         autoComplete="one-time-code"
-                        style={input}
                       />
+                      <FieldState status={otpCode ? (otpValid ? "valid" : "invalid") : "neutral"} />
                     </div>
 
-                    <div style={rowBetween}>
+                    <div className="hf_linksRow">
                       <button
                         type="button"
+                        className="hf_link"
                         onClick={sendLoginCode}
                         disabled={otpLoading}
-                        style={{
-                          ...linkBtn,
-                          opacity: otpLoading ? 0.7 : 1,
-                          cursor: otpLoading ? "not-allowed" : "pointer",
-                        }}
                       >
                         {otpLoading ? "Resending…" : "Resend code"}
                       </button>
 
                       <button
                         type="button"
+                        className="hf_link"
                         onClick={() => {
                           setOtpSent(false);
                           setOtpCode("");
                           setErrMsg("");
                           setInfoMsg("");
                         }}
-                        style={linkBtn}
                       >
                         Change email
                       </button>
                     </div>
-                  </div>
 
-                  <button
-                    type="submit"
-                    disabled={otpLoading}
-                    style={otpLoading ? submitDisabled : submit}
-                  >
-                    {otpLoading ? (
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Spinner />
-                        Verifying…
-                      </span>
-                    ) : (
-                      "Verify & Sign in"
-                    )}
-                  </button>
+                    <button className="hf_btnPrimary" type="submit" disabled={otpLoading}>
+                      {otpLoading ? (
+                        <span className="hf_btnSpin">
+                          <SpinnerDark /> Verifying…
+                        </span>
+                      ) : (
+                        "Verify & Sign in"
+                      )}
+                    </button>
+                  </>
+                )}
+
+                <div className="hf_footer">
+                  Don’t have an account?{" "}
+                  <span className="hf_footerLink" onClick={() => router.push("/signup")}>
+                    Create one
+                  </span>
+                </div>
+              </form>
+            )}
+
+            <div className="hf_trustRow">
+              <span className="hf_trustChip">Secure checkout</span>
+              <span className="hf_trustChip">Live order tracking</span>
+              <span className="hf_trustChip">24x7 support</span>
+            </div>
+
+            <div className="hf_terms">
+              {otpMode ? (
+                <>
+                  Code login is extra secure. <b>We’ll email you a one-time code</b>.
+                </>
+              ) : (
+                <>
+                  By signing in you agree to our basic terms. <b>Fast • Secure • Smooth</b>
                 </>
               )}
-
-              <div style={footer}>
-                Don’t have an account?{" "}
-                <span onClick={() => router.push("/signup")} style={createLink}>
-                  Create one
-                </span>
-              </div>
-            </form>
-          )}
-
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 16,
-              border: "1px dashed rgba(0,0,0,0.12)",
-              background: "rgba(255,255,255,0.55)",
-              color: "rgba(15,23,42,0.72)",
-              fontSize: 12,
-              lineHeight: 1.45,
-              textAlign: "center",
-            }}
-          >
-            {otpMode ? (
-              <>
-                Code login is extra secure. <br />
-                <span style={{ fontWeight: 900 }}>
-                  We’ll email you a one-time code
-                </span>
-              </>
-            ) : (
-              <>
-                By signing in you agree to our basic terms. <br />
-                <span style={{ fontWeight: 900 }}>Fast • Secure • Smooth</span>
-              </>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <style jsx global>{`
-        @keyframes hf_float {
-          0% {
-            transform: translate3d(0, 0, 0) rotate(0deg);
-          }
-          50% {
-            transform: translate3d(0, -14px, 0) rotate(2deg);
-          }
-          100% {
-            transform: translate3d(0, 0, 0) rotate(0deg);
-          }
-        }
-        @keyframes hf_shine {
-          0% {
-            opacity: 0.5;
-            transform: translate3d(0, 0, 0) scale(1);
-          }
-          50% {
-            opacity: 0.75;
-            transform: translate3d(0, 0, 0) scale(1.05);
-          }
-          100% {
-            opacity: 0.5;
-            transform: translate3d(0, 0, 0) scale(1);
-          }
-        }
-        @keyframes hf_slide {
-          0% {
-            transform: translate3d(-30%, -20%, 0) rotate(12deg);
-          }
-          50% {
-            transform: translate3d(30%, 10%, 0) rotate(12deg);
-          }
-          100% {
-            transform: translate3d(-30%, -20%, 0) rotate(12deg);
-          }
-        }
-        @keyframes hf_bob {
-          0% {
-            transform: translate3d(0, 0, 0);
-          }
-          50% {
-            transform: translate3d(0, -12px, 0);
-          }
-          100% {
-            transform: translate3d(0, 0, 0);
-          }
-        }
+      <section className="hf_joinWrap">
+        {/* Real partner photo (optional) */}
+        {PARTNER_PHOTO ? (
+          <div className="hf_partnerPhoto" aria-hidden="true">
+            <img src={PARTNER_PHOTO} alt="" className="hf_partnerImg" />
+            <div className="hf_partnerShade" />
+          </div>
+        ) : null}
 
-        .hf_bg {
-          position: absolute;
-          inset: 0;
-          overflow: hidden;
-          pointer-events: none;
-          z-index: 1;
-        }
-        .hf_wm {
-          position: absolute;
-          left: 50%;
-          top: 52%;
-          transform: translate(-50%, -50%);
-          font-weight: 1000;
-          letter-spacing: -2px;
-          font-size: clamp(46px, 10vw, 110px);
-          color: rgba(15, 23, 42, 0.06);
-          text-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
-          user-select: none;
-          white-space: nowrap;
-        }
+        <div className="hf_joinBg" aria-hidden="true">
+          <WaveSvg className="hf_joinWave hf_joinWave1" />
+          <WaveSvg className="hf_joinWave hf_joinWave2" />
+        </div>
 
-        .hf_glow {
-          position: absolute;
-          width: 520px;
-          height: 520px;
-          border-radius: 999px;
-          filter: blur(36px);
-          opacity: 0.65;
-          animation: hf_shine 6s ease-in-out infinite;
-        }
-        .hf_glowA {
-          left: -180px;
-          top: -220px;
-          background: radial-gradient(
-            circle at 30% 30%,
-            rgba(255, 140, 0, 0.55),
-            rgba(255, 140, 0, 0) 60%
-          );
-        }
-        .hf_glowB {
-          right: -220px;
-          top: 8%;
-          background: radial-gradient(
-            circle at 30% 30%,
-            rgba(80, 160, 255, 0.55),
-            rgba(80, 160, 255, 0) 60%
-          );
-          animation-delay: -1.4s;
-        }
-        .hf_glowC {
-          left: 20%;
-          bottom: -240px;
-          background: radial-gradient(
-            circle at 30% 30%,
-            rgba(0, 200, 120, 0.4),
-            rgba(0, 200, 120, 0) 62%
-          );
-          animation-delay: -2.1s;
-        }
+        <div className="hf_joinGrid">
+          <div className="hf_joinCard hf_reveal hf_r1">
+            <div className="hf_joinIcon">🛵</div>
+            <div className="hf_joinTitle">Become a Delivery Partner</div>
+            <div className="hf_joinDesc">
+              Deliver orders, earn money and work on your schedule. Sign up in minutes.
+            </div>
+            <button className="hf_joinLink" onClick={() => goBecome("delivery_partner")}>
+              Start earning <span className="hf_joinArrow"><ArrowIcon /></span>
+            </button>
+          </div>
 
-        .hf_sticker {
-          position: absolute;
-          width: 74px;
-          height: 74px;
-          border-radius: 22px;
-          background: rgba(255, 255, 255, 0.65);
-          border: 1px solid rgba(255, 255, 255, 0.55);
-          box-shadow: 0 18px 55px rgba(16, 24, 40, 0.12),
-            0 2px 10px rgba(16, 24, 40, 0.06);
-          backdrop-filter: blur(10px);
-          display: grid;
-          place-items: center;
-          transform-style: preserve-3d;
-          animation: hf_float 5.6s ease-in-out infinite;
-        }
-        .hf_stickerInner {
-          width: 58px;
-          height: 58px;
-          border-radius: 18px;
-          display: grid;
-          place-items: center;
-          background: linear-gradient(
-            135deg,
-            rgba(255, 140, 0, 0.1),
-            rgba(80, 160, 255, 0.1)
-          );
-          border: 1px solid rgba(0, 0, 0, 0.06);
-          font-size: 28px;
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-          transform: translateZ(14px);
-        }
+          <div className="hf_joinCard hf_reveal hf_r2">
+            <div className="hf_joinIcon">🏪</div>
+            <div className="hf_joinTitle">Become a Merchant</div>
+            <div className="hf_joinDesc">
+              Attract new customers and grow sales with online orders.
+            </div>
+            <button className="hf_joinLink" onClick={() => goBecome("restaurant_owner")}>
+              Partner up <span className="hf_joinArrow"><ArrowIcon /></span>
+            </button>
+          </div>
 
-        .hf_s1 {
-          left: 6%;
-          top: 14%;
-          animation-delay: -0.6s;
-        }
-        .hf_s2 {
-          left: 14%;
-          bottom: 12%;
-          animation-delay: -1.2s;
-        }
-        .hf_s3 {
-          right: 10%;
-          top: 18%;
-          animation-delay: -1.8s;
-        }
-        .hf_s4 {
-          right: 6%;
-          bottom: 16%;
-          animation-delay: -2.2s;
-        }
-        .hf_s5 {
-          left: 42%;
-          top: 8%;
-          animation-delay: -2.8s;
-        }
-        .hf_s6 {
-          right: 36%;
-          bottom: 8%;
-          animation-delay: -3.3s;
-        }
+        </div>
+      </section>
 
-        /* Card subtle shine */
-        .hf_cardShine {
-          position: absolute;
-          left: -40%;
-          top: -20%;
-          width: 180%;
-          height: 60%;
-          background: linear-gradient(
-            90deg,
-            rgba(255, 255, 255, 0) 0%,
-            rgba(255, 255, 255, 0.55) 50%,
-            rgba(255, 255, 255, 0) 100%
-          );
-          transform: rotate(12deg);
-          opacity: 0.45;
-          animation: hf_slide 7.5s ease-in-out infinite;
-          pointer-events: none;
-        }
 
-        /* Hero floating emojis */
-        .hf_heroFloat {
-          position: absolute;
-          font-size: 26px;
-          filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.12));
-          opacity: 0.9;
-          animation: hf_bob 4.6s ease-in-out infinite;
-          user-select: none;
-          pointer-events: none;
-        }
-        .hf_hf1 {
-          right: 18px;
-          bottom: 18px;
-          animation-delay: -0.6s;
-        }
-        .hf_hf2 {
-          left: 18px;
-          bottom: 22px;
-          animation-delay: -1.2s;
-        }
-        .hf_hf3 {
-          right: 26%;
-          top: 18px;
-          animation-delay: -1.8s;
-        }
-
-        /* Desktop layout: hero + card */
-        @media (min-width: 980px) {
-          .hf_shell {
-            grid-template-columns: 1.05fr 0.95fr !important;
-            align-items: start !important;
-            gap: 16px !important;
-          }
-          .hf_hero {
-            display: block !important;
-          }
-          .hf_heroMiniRow {
-            grid-template-columns: 1fr !important;
-          }
-        }
-
-        /* Mobile: hide hero panel for clean look */
-        @media (max-width: 979px) {
-          .hf_hero {
-            display: none !important;
-          }
-        }
-
-        @media (max-width: 720px) {
-          .hf_wm {
-            top: 46%;
-          }
-          .hf_sticker {
-            width: 64px;
-            height: 64px;
-            border-radius: 20px;
-          }
-          .hf_stickerInner {
-            width: 50px;
-            height: 50px;
-            border-radius: 16px;
-            font-size: 24px;
-          }
-          .hf_s5,
-          .hf_s6 {
-            display: none;
-          }
-        }
-      `}</style>
+      <style jsx global>{heroCss}</style>
     </main>
   );
 }
+
+const heroCss = `
+  .hf_page{
+    min-height: calc(100vh - 64px);
+    background: #ffffff;
+  }
+
+  .hf_hero{
+    position: relative;
+    overflow: hidden;
+    padding: 34px 18px 40px;
+    background:
+      radial-gradient(1200px 600px at 18% 30%, rgba(255,255,255,0.16), rgba(255,255,255,0) 60%),
+      radial-gradient(900px 520px at 82% 24%, rgba(255,255,255,0.14), rgba(255,255,255,0) 62%),
+      radial-gradient(700px 420px at 60% 68%, rgba(255, 214, 10, 0.10), rgba(255, 214, 10, 0) 62%),
+      linear-gradient(180deg, #ff5a5f, #ff2d55);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+  }
+
+  /* ✅ OPTIONAL PHOTO layer */
+  .hf_photoLayer{
+    position:absolute;
+    inset:0;
+    z-index: 0;
+    pointer-events:none;
+  }
+  .hf_photoImg{
+    width:100%;
+    height:100%;
+    object-fit: cover;
+    filter: saturate(1.05) contrast(1.05);
+    transform: scale(1.02);
+  }
+  .hf_photoShade{
+    position:absolute;
+    inset:0;
+    background:
+      radial-gradient(900px 520px at 20% 30%, rgba(255,90,95,0.35), rgba(255,90,95,0) 65%),
+      linear-gradient(180deg, rgba(255,90,95,0.55), rgba(255,45,85,0.70));
+    mix-blend-mode: multiply;
+  }
+
+  .hf_heroDecor{
+    position:absolute;
+    width: 560px;
+    height: 560px;
+    border-radius: 999px;
+    filter: blur(38px);
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .hf_dLeft{
+    left: -260px;
+    top: -260px;
+    background: radial-gradient(circle at 30% 30%, rgba(255,214,10,0.55), rgba(255,214,10,0) 62%);
+  }
+  .hf_dRight{
+    right: -300px;
+    top: -260px;
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.40), rgba(255,255,255,0) 62%);
+  }
+
+  .hf_heroFood{
+    position:absolute;
+    width: 92px;
+    height: 92px;
+    border-radius: 24px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.20);
+    box-shadow: 0 22px 60px rgba(0,0,0,0.25);
+    backdrop-filter: blur(10px);
+    font-size: 36px;
+    pointer-events:none;
+    z-index: 2;
+  }
+  .hf_fLeft{ left: 22px; top: 22px; transform: rotate(-10deg); }
+  .hf_fRight{ right: 22px; top: 22px; transform: rotate(10deg); }
+
+  @keyframes hf_waveMove1 { 0%{ transform: translateX(0); } 100%{ transform: translateX(-18%); } }
+  @keyframes hf_waveMove2 { 0%{ transform: translateX(0); } 100%{ transform: translateX(-28%); } }
+  @keyframes hf_waveMove3 { 0%{ transform: translateX(0); } 100%{ transform: translateX(-22%); } }
+
+  .hf_wave{
+    position:absolute;
+    left: -10%;
+    bottom: -2px;
+    width: 120%;
+    height: 140px;
+    color: rgba(255,255,255,0.18);
+    pointer-events:none;
+    z-index: 1;
+  }
+  .hf_wave1{
+    height: 160px;
+    color: rgba(255,255,255,0.22);
+    animation: hf_waveMove1 9.5s linear infinite;
+  }
+  .hf_wave2{
+    height: 140px;
+    bottom: 10px;
+    color: rgba(255,255,255,0.16);
+    animation: hf_waveMove2 12.5s linear infinite;
+  }
+  .hf_wave3{
+    height: 110px;
+    bottom: 22px;
+    color: rgba(255,255,255,0.12);
+    animation: hf_waveMove3 10.8s linear infinite;
+  }
+
+  .hf_heroInner{
+    max-width: 1120px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    align-items: center;
+    position: relative;
+    z-index: 3;
+  }
+
+  .hf_leftColumn{
+    display:flex;
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .hf_heroTitleBlock{
+    color:#fff;
+    text-align: center;
+    padding: 6px 8px 0;
+  }
+  .hf_heroBrand{
+    font-weight: 900;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    opacity: 0.95;
+    font-size: 12px;
+  }
+  .hf_heroTitle{
+    margin: 6px 0 0;
+    font-weight: 1000;
+    letter-spacing: -1px;
+    font-size: clamp(30px, 4.3vw, 52px);
+    line-height: 1.05;
+  }
+  .hf_heroSubtitle{
+    margin: 10px auto 0;
+    max-width: 720px;
+    opacity: 0.94;
+    font-weight: 800;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+
+  .hf_socialProof{
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(110px, 1fr));
+    gap: 10px;
+    width: 100%;
+    max-width: 560px;
+  }
+  .hf_statItem{
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.12);
+    backdrop-filter: blur(8px);
+    padding: 10px 12px;
+  }
+  .hf_statValue{
+    color: #fff;
+    font-size: 18px;
+    font-weight: 1000;
+    letter-spacing: -0.3px;
+    line-height: 1.05;
+  }
+  .hf_statLabel{
+    margin-top: 3px;
+    color: rgba(255,255,255,0.92);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .hf_phoneWrap{
+    width: 100%;
+    max-width: 520px;
+    display:none;
+    justify-content: center;
+  }
+  .hf_phone{
+    width: 310px;
+    height: 520px;
+    border-radius: 42px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.25), rgba(255,255,255,0.12));
+    border: 1px solid rgba(255,255,255,0.22);
+    box-shadow: 0 30px 90px rgba(0,0,0,0.30);
+    position: relative;
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+    transform: rotate(-6deg);
+  }
+  .hf_phoneTop{
+    height: 56px;
+    display:flex;
+    justify-content:center;
+    align-items:flex-end;
+    padding-bottom: 10px;
+  }
+  .hf_notch{
+    width: 120px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.35);
+  }
+  .hf_phoneScreen{
+    position:absolute;
+    inset: 18px;
+    top: 52px;
+    border-radius: 30px;
+    background:
+      radial-gradient(420px 240px at 35% 20%, rgba(255,214,10,0.30), rgba(255,214,10,0) 60%),
+      radial-gradient(420px 240px at 80% 30%, rgba(255,255,255,0.18), rgba(255,255,255,0) 60%),
+      linear-gradient(180deg, rgba(12,18,32,0.92), rgba(17,24,39,0.96));
+    border: 1px solid rgba(255,255,255,0.10);
+    overflow:hidden;
+    padding: 14px;
+  }
+  .hf_phoneHeader{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    color:#fff;
+  }
+  .hf_phoneLogo{
+    width: 44px;
+    height: 44px;
+    border-radius: 16px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.25);
+    font-size: 20px;
+  }
+  .hf_phoneName{ font-weight: 1000; letter-spacing: -0.3px; }
+  .hf_phoneTag{ margin-top: 2px; font-size: 12px; opacity: 0.85; font-weight: 850; }
+
+  .hf_phoneCard{
+    margin-top: 14px;
+    border-radius: 18px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.10);
+    padding: 12px;
+  }
+  .hf_phoneCardRow{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    color:#fff;
+  }
+  .hf_bubble{
+    width: 44px;
+    height: 44px;
+    border-radius: 16px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,90,95,0.22);
+    border: 1px solid rgba(255,255,255,0.10);
+    font-size: 18px;
+  }
+  .hf_phoneCardTitle{ font-weight: 1000; letter-spacing: -0.2px; }
+  .hf_phoneCardSub{ margin-top: 2px; font-size: 12px; opacity: 0.85; font-weight: 850; }
+
+  .hf_phoneBtn{
+    margin-top: 12px;
+    width: 100%;
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: linear-gradient(180deg, #ff5a5f, #ff2d55);
+    color:#fff;
+    font-weight: 1000;
+    text-align:center;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.22);
+  }
+
+  .hf_phoneMiniGrid{
+    margin-top: 14px;
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .hf_phoneMini{
+    border-radius: 16px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.10);
+    padding: 10px;
+    display:flex;
+    gap: 10px;
+    color:#fff;
+    align-items:center;
+  }
+  .hf_mi{
+    width: 40px;
+    height: 40px;
+    border-radius: 14px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.10);
+    font-size: 18px;
+  }
+  .hf_mtt{ font-weight: 1000; font-size: 12px; }
+  .hf_mts{ margin-top: 2px; opacity: 0.82; font-weight: 850; font-size: 11px; }
+
+  .hf_phoneGlow{
+    position:absolute;
+    width: 420px;
+    height: 420px;
+    border-radius: 999px;
+    left: -160px;
+    bottom: -220px;
+    background: radial-gradient(circle at 30% 30%, rgba(255,90,95,0.30), rgba(255,90,95,0) 60%);
+    filter: blur(24px);
+    opacity: 0.85;
+    pointer-events:none;
+  }
+
+  .hf_authCard{
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    border-radius: 20px;
+    background: linear-gradient(160deg, rgba(255,255,255,0.96), rgba(255,255,255,0.88));
+    border: 1px solid rgba(255,255,255,0.55);
+    box-shadow: 0 36px 90px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.75);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+
+  .hf_reveal{
+    opacity: 0;
+    transform: translateY(12px);
+    animation: hf_revealUp 560ms ease forwards;
+  }
+  .hf_r1{ animation-delay: 40ms; }
+  .hf_r2{ animation-delay: 140ms; }
+  .hf_r3{ animation-delay: 240ms; }
+  @keyframes hf_revealUp {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .hf_authTop{
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    background: linear-gradient(180deg, rgba(255,255,255,1), rgba(255,255,255,0.92));
+  }
+  .hf_brand{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .hf_brandLogo{
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    display:grid;
+    place-items:center;
+    background: linear-gradient(135deg, rgba(255,90,95,0.20), rgba(255,45,85,0.14));
+    border: 1px solid rgba(0,0,0,0.08);
+    box-shadow: 0 10px 24px rgba(0,0,0,0.12);
+    font-size: 20px;
+  }
+  .hf_brandName{
+    font-weight: 1000;
+    color: #0b1220;
+    letter-spacing: -0.3px;
+    font-size: 16px;
+    line-height: 1.1;
+  }
+  .hf_brandSub{
+    margin-top: 2px;
+    color: rgba(15,23,42,0.70);
+    font-weight: 850;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .hf_modePill{
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.85);
+    padding: 8px 10px;
+    font-weight: 950;
+    color: rgba(15,23,42,0.78);
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .hf_pillStatic{
+    border-radius: 999px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.85);
+    padding: 8px 10px;
+    font-weight: 950;
+    color: rgba(15,23,42,0.78);
+    white-space:nowrap;
+  }
+
+  .hf_alert{
+    margin: 12px 14px 0;
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-weight: 850;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+  .hf_error{
+    background: rgba(255,231,231,0.95);
+    border: 1px solid rgba(255,179,179,0.95);
+    color: #7a1717;
+  }
+  .hf_info{
+    background: rgba(233,255,240,0.95);
+    border: 1px solid rgba(168,240,191,0.98);
+    color: #0f5b2a;
+  }
+
+  .hf_form{
+    padding: 12px 14px 14px;
+  }
+  .hf_label{
+    display:block;
+    font-weight: 950;
+    color: rgba(2,6,23,0.86);
+    font-size: 13px;
+    margin: 6px 0 6px;
+  }
+
+  .hf_inputWrap{
+    position: relative;
+    display:flex;
+    align-items:center;
+  }
+  .hf_inputWrap.hf_valid .hf_input{
+    border-color: rgba(10,138,75,0.45);
+    box-shadow: 0 0 0 3px rgba(10,138,75,0.12);
+  }
+  .hf_inputWrap.hf_invalid .hf_input{
+    border-color: rgba(198,40,40,0.45);
+    box-shadow: 0 0 0 3px rgba(198,40,40,0.10);
+  }
+  .hf_stateIcon{
+    position: absolute;
+    right: 12px;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 1000;
+    pointer-events: none;
+  }
+  .hf_stateIconEye{ right: 48px; }
+  .hf_stateValid{
+    background: rgba(16,185,129,0.18);
+    color: rgba(6,95,70,0.98);
+    border: 1px solid rgba(6,95,70,0.20);
+  }
+  .hf_stateInvalid{
+    background: rgba(239,68,68,0.14);
+    color: rgba(127,29,29,0.98);
+    border: 1px solid rgba(127,29,29,0.20);
+  }
+  .hf_icon{
+    position:absolute;
+    left: 12px;
+    opacity: 0.8;
+    font-size: 15px;
+    pointer-events:none;
+  }
+  .hf_input{
+    width:100%;
+    border-radius: 14px;
+    border: 1px solid rgba(15,23,42,0.14);
+    background: rgba(255,255,255,0.98);
+    padding: 12px 12px 12px 40px;
+    outline:none;
+    font-size: 14px;
+    color: #0b1220;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+  }
+  .hf_input:focus{
+    border-color: rgba(0,0,0,0.22);
+    box-shadow: 0 0 0 4px rgba(0,0,0,0.06);
+  }
+  .hf_inputPass{ padding-right: 72px; }
+  .hf_eye{
+    position:absolute;
+    right: 10px;
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    border: 1px solid rgba(15,23,42,0.10);
+    background: rgba(255,255,255,0.92);
+    cursor:pointer;
+    display:grid;
+    place-items:center;
+    font-size: 16px;
+  }
+
+  .hf_linksRow{
+    display:flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 10px 0 12px;
+  }
+  .hf_link{
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    color: rgba(2,6,23,0.78);
+    font-weight: 900;
+    font-size: 13px;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .hf_link:disabled{
+    opacity: 0.7;
+    cursor:not-allowed;
+  }
+
+  .hf_btnPrimary{
+    width:100%;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(0,0,0,0.10);
+    background: linear-gradient(180deg, #0b0f19, #111827);
+    color:#fff;
+    font-weight: 950;
+    letter-spacing: 0.2px;
+    cursor:pointer;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.22);
+    margin-top: 6px;
+  }
+  .hf_btnPrimary:disabled{
+    opacity: 0.75;
+    cursor:not-allowed;
+  }
+  .hf_btnSpin{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap: 8px;
+  }
+
+  .hf_footer{
+    margin-top: 10px;
+    text-align:center;
+    color: rgba(15,23,42,0.70);
+    font-size: 13px;
+    font-weight: 850;
+  }
+  .hf_footerLink{
+    color:#0b0f19;
+    font-weight: 950;
+    cursor:pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .hf_trustRow{
+    margin: 2px 14px 10px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+  .hf_trustChip{
+    border-radius: 999px;
+    border: 1px solid rgba(15,23,42,0.10);
+    background: rgba(255,255,255,0.78);
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 900;
+    color: rgba(15,23,42,0.78);
+  }
+
+  .hf_terms{
+    margin: 0 14px 14px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px dashed rgba(0,0,0,0.12);
+    background: rgba(255,255,255,0.80);
+    color: rgba(15,23,42,0.72);
+    font-size: 12px;
+    font-weight: 850;
+    line-height: 1.45;
+    text-align:center;
+  }
+
+  .hf_notice{
+    margin: 12px 14px 14px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.92);
+    color: rgba(15,23,42,0.78);
+    font-weight: 900;
+    display:flex;
+    align-items:center;
+    gap: 10px;
+  }
+  .hf_dot{
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255,90,95,0.95);
+    box-shadow: 0 0 0 4px rgba(255,90,95,0.18);
+  }
+
+  .hf_joinWrap{
+    position: relative;
+    overflow:hidden;
+    padding: 40px 18px 48px;
+    background:
+      radial-gradient(900px 520px at 20% 20%, rgba(255,255,255,0.22), rgba(255,255,255,0) 62%),
+      linear-gradient(180deg, rgba(255,90,95,0.18), rgba(255,45,85,0.08));
+    border-top: 1px solid rgba(0,0,0,0.06);
+  }
+
+  /* ✅ OPTIONAL partner photo */
+  .hf_partnerPhoto{
+    position:absolute;
+    inset:0;
+    z-index: 0;
+    pointer-events:none;
+    opacity: 0.40;
+  }
+  .hf_partnerImg{
+    width:100%;
+    height:100%;
+    object-fit: cover;
+    filter: saturate(1.02) contrast(1.02);
+    transform: scale(1.03);
+  }
+  .hf_partnerShade{
+    position:absolute;
+    inset:0;
+    background:
+      radial-gradient(900px 520px at 60% 30%, rgba(255,255,255,0.45), rgba(255,255,255,0) 60%),
+      linear-gradient(180deg, rgba(255,255,255,0.60), rgba(255,255,255,0.85));
+  }
+
+  .hf_joinBg{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    opacity: 0.75;
+    z-index: 1;
+  }
+  .hf_joinWave{
+    position:absolute;
+    left: -12%;
+    width: 124%;
+    height: 120px;
+    color: rgba(255, 45, 85, 0.10);
+  }
+  .hf_joinWave1{
+    bottom: -8px;
+    animation: hf_waveMove2 12.5s linear infinite;
+  }
+  .hf_joinWave2{
+    bottom: 16px;
+    height: 90px;
+    color: rgba(255, 90, 95, 0.10);
+    animation: hf_waveMove1 9.5s linear infinite;
+  }
+
+  .hf_joinGrid{
+    max-width: 1120px;
+    margin: 0 auto;
+    display:grid;
+    grid-template-columns: 1fr;
+    gap: 22px;
+    text-align:center;
+    justify-content: center;
+    position:relative;
+    z-index: 2;
+  }
+
+  .hf_joinCard{
+    border-radius: 18px;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(0,0,0,0.08);
+    padding: 22px 16px;
+    box-shadow: 0 14px 40px rgba(16,24,40,0.08);
+    backdrop-filter: blur(8px);
+  }
+
+  .hf_joinIcon{
+    width: 88px;
+    height: 88px;
+    border-radius: 26px;
+    margin: 0 auto 10px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,90,95,0.10);
+    border: 1px solid rgba(255,90,95,0.18);
+    font-size: 34px;
+  }
+
+  .hf_joinTitle{
+    font-weight: 1000;
+    letter-spacing: -0.4px;
+    font-size: 22px;
+    color: #0b1220;
+    margin-top: 6px;
+  }
+  .hf_joinDesc{
+    margin: 10px auto 14px;
+    max-width: 320px;
+    color: rgba(15,23,42,0.72);
+    font-weight: 850;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .hf_joinLink{
+    border: none;
+    background: transparent;
+    color: #ff2d55;
+    font-weight: 950;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    gap: 10px;
+    font-size: 14px;
+  }
+  .hf_joinArrow{
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,45,85,0.25);
+    display:grid;
+    place-items:center;
+  }
+
+  /* ✅ Footer now light red */
+  .hf_footerBar{
+    background:
+      radial-gradient(900px 520px at 20% 30%, rgba(255,255,255,0.22), rgba(255,255,255,0) 62%),
+      linear-gradient(180deg, rgba(255,90,95,0.22), rgba(255,45,85,0.18));
+    color: rgba(15,23,42,0.85);
+    border-top: 1px solid rgba(0,0,0,0.06);
+    padding: 12px 14px;
+  }
+  .hf_footerInner{
+    max-width: 1120px;
+    margin: 0 auto;
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .hf_footerLeft{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    flex: 1 1 560px;
+    min-width: 280px;
+  }
+  .hf_footerLogo{
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,255,255,0.50);
+    border: 1px solid rgba(0,0,0,0.06);
+  }
+  .hf_footerLinks{
+    display:flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    align-items:center;
+    font-size: 12px;
+    font-weight: 850;
+  }
+  .hf_footerA{
+    color: rgba(15,23,42,0.85);
+    text-decoration: none;
+  }
+  .hf_footerA:hover{
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .hf_footerCopy{
+    opacity: 0.75;
+  }
+
+  .hf_footerRight{
+    display:flex;
+    align-items:center;
+    gap: 12px;
+  }
+  .hf_lang{
+    display:flex;
+    align-items:center;
+    gap: 8px;
+    background: rgba(255,255,255,0.55);
+    border: 1px solid rgba(0,0,0,0.06);
+    border-radius: 999px;
+    padding: 6px 10px;
+  }
+  .hf_langIcon{ opacity: 0.9; }
+  .hf_langSelect{
+    background: transparent;
+    border: none;
+    outline: none;
+    color: rgba(15,23,42,0.90);
+    font-weight: 900;
+    font-size: 12px;
+    cursor:pointer;
+  }
+  .hf_langSelect option{
+    color: #0b0f19;
+  }
+
+  .hf_social{
+    display:flex;
+    gap: 8px;
+    align-items:center;
+  }
+  .hf_socialBtn{
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    display:grid;
+    place-items:center;
+    background: rgba(255,255,255,0.55);
+    border: 1px solid rgba(0,0,0,0.06);
+    color: rgba(15,23,42,0.90);
+    text-decoration:none;
+  }
+
+  @media (min-width: 980px){
+    .hf_heroInner{
+      grid-template-columns: 1fr 520px;
+      gap: 18px;
+      align-items: center;
+    }
+    .hf_leftColumn{
+      align-items: flex-start;
+    }
+    .hf_heroTitleBlock{
+      text-align:left;
+      padding: 0 8px 0 0;
+    }
+    .hf_phoneWrap{
+      display:flex;
+    }
+    .hf_joinGrid{
+      grid-template-columns: repeat(2, minmax(320px, 360px));
+      gap: 26px;
+      text-align:center;
+      justify-content: center;
+    }
+  }
+
+  @media (max-width: 760px){
+    .hf_socialProof{
+      grid-template-columns: 1fr;
+      max-width: 320px;
+    }
+  }
+
+  @media (max-width: 520px){
+    .hf_heroFood{ display:none; }
+  }
+`;

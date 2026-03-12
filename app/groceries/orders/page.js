@@ -1,12 +1,13 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { fetchReviewsByOrderIds, isReviewableStatus } from "@/lib/reviews";
 
-// ✅ SSR-safe dynamic import (leaflet must run client-side only)
+//  SSR-safe dynamic import (leaflet must run client-side only)
 const CustomerTrackingMap = dynamic(() => import("@/components/CustomerTrackingMap.jsx"), {
   ssr: false,
   loading: () => (
@@ -23,7 +24,7 @@ const CustomerTrackingMap = dynamic(() => import("@/components/CustomerTrackingM
         color: "rgba(17,24,39,0.7)",
       }}
     >
-      Loading map…
+      Loading map...
     </div>
   ),
 });
@@ -37,8 +38,8 @@ function normalizeRole(r) {
 
 function formatMoney(v) {
   const n = Number(v || 0);
-  // keeping your existing style (₹)
-  return `₹${n.toFixed(0)}`;
+  // keeping your existing style (Rs )
+  return `Rs ${n.toFixed(0)}`;
 }
 
 function formatTime(ts) {
@@ -52,7 +53,7 @@ function formatTime(ts) {
 function clampText(s, max = 140) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "...";
 }
 
 function safeNum(v, d = 0) {
@@ -252,24 +253,24 @@ function groceryStatusMessage(status) {
   const s = String(status || "").toLowerCase();
 
   if (s === "rejected" || s === "cancelled") {
-    return { title: "Order cancelled ❌", text: "This grocery order was cancelled/rejected.", tone: "danger" };
+    return { title: "Order cancelled ", text: "This grocery order was cancelled/rejected.", tone: "danger" };
   }
   if (s === "delivered") {
-    return { title: "Delivered successfully ✅", text: "Thanks! Your groceries are delivered.", tone: "success" };
+    return { title: "Delivered successfully ", text: "Thanks! Your groceries are delivered.", tone: "success" };
   }
   if (s === "on_the_way") {
-    return { title: "On the way 🚚", text: "Your groceries are on the way.", tone: "info" };
+    return { title: "On the way ", text: "Your groceries are on the way.", tone: "info" };
   }
   if (s === "picked_up" || s === "delivering") {
-    return { title: "Out for delivery 🛵", text: "A delivery partner is bringing your groceries.", tone: "info" };
+    return { title: "Out for delivery ", text: "A delivery partner is bringing your groceries.", tone: "info" };
   }
   if (s === "ready") {
-    return { title: "Order is ready ✅", text: "Store marked your order ready. Delivery will start soon.", tone: "success" };
+    return { title: "Order is ready ", text: "Store marked your order ready. Delivery will start soon.", tone: "success" };
   }
   if (s === "preparing" || s === "accepted" || s === "confirmed") {
-    return { title: "Preparing 🧺", text: "Store is preparing your grocery order.", tone: "info" };
+    return { title: "Preparing ", text: "Store is preparing your grocery order.", tone: "info" };
   }
-  return { title: "Order placed 🧾", text: "We received your grocery order. Store will confirm soon.", tone: "warn" };
+  return { title: "Order placed ", text: "We received your grocery order. Store will confirm soon.", tone: "warn" };
 }
 
 function StatusMessageCard({ status }) {
@@ -331,7 +332,7 @@ function StatusSteps({ status }) {
         const active = i === currentIndex;
         return (
           <div key={t} style={stepItem}>
-            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "✓" : i + 1}</div>
+            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "\u2713" : i + 1}</div>
             <div style={{ ...stepLabel, opacity: done || active ? 1 : 0.65 }}>{t}</div>
             {i !== steps.length - 1 ? <div style={{ ...stepLine, ...(done ? stepLineDone : stepLineTodo) }} /> : null}
           </div>
@@ -389,15 +390,21 @@ export default function GroceryOrdersPage() {
   const [lastRealtimeHit, setLastRealtimeHit] = useState("");
   const channelRef = useRef(null);
 
-  // ✅ store coords map: { [store_id]: { lat, lng } }
+  //  store coords map: { [store_id]: { lat, lng } }
   const [storeCoords, setStoreCoords] = useState({});
 
-  // ✅ live driver GPS per order: { [orderId]: { lat, lng, ts, source } }
+  //  live driver GPS per order: { [orderId]: { lat, lng, ts, source } }
   const [liveGpsByOrderId, setLiveGpsByOrderId] = useState({});
   const gpsPollRef = useRef(null);
 
-  // ✅ details view toggle
+  //  details view toggle
   const [openOrderId, setOpenOrderId] = useState(null);
+
+  const [reviewByOrderId, setReviewByOrderId] = useState({});
+  const [reviewModalOrder, setReviewModalOrder] = useState(null);
+  const [reviewForm, setReviewForm] = useState({ rating: 5, title: "", comment: "" });
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState("");
 
   const totalOrders = useMemo(() => orders.length, [orders]);
 
@@ -409,6 +416,93 @@ export default function GroceryOrdersPage() {
     if (!openOrderId) return null;
     return (orders || []).find((x) => x.id === openOrderId) || null;
   }, [orders, openOrderId]);
+
+  function renderStars(rating) {
+    const value = Math.max(1, Math.min(5, Math.round(Number(rating || 0))));
+    return "\u2605".repeat(value) + "\u2606".repeat(5 - value);
+  }
+
+  async function loadOwnReviews(userId, ordersList) {
+    const reviewableOrderIds = (ordersList || [])
+      .filter((order) => isReviewableStatus(order?.status) && order?.store_id)
+      .map((order) => order.id)
+      .filter(Boolean);
+
+    if (!userId || !reviewableOrderIds.length) {
+      setReviewByOrderId({});
+      return;
+    }
+
+    try {
+      const rows = await fetchReviewsByOrderIds(supabase, { userId, orderIds: reviewableOrderIds });
+      const map = {};
+      for (const row of rows || []) {
+        if (row?.order_id && String(row?.target_type || "") === "grocery") map[row.order_id] = row;
+      }
+      setReviewByOrderId(map);
+    } catch {
+      setReviewByOrderId({});
+    }
+  }
+
+  function openReviewModal(order) {
+    const existing = reviewByOrderId?.[order?.id] || null;
+    setReviewError("");
+    setReviewModalOrder(order);
+    setReviewForm({
+      rating: Number(existing?.rating || 5) || 5,
+      title: String(existing?.title || ""),
+      comment: String(existing?.comment || ""),
+    });
+  }
+
+  function closeReviewModal() {
+    if (reviewSaving) return;
+    setReviewModalOrder(null);
+    setReviewError("");
+  }
+
+  async function saveReview() {
+    if (!user?.id || !reviewModalOrder?.id || !reviewModalOrder?.store_id) return;
+    const rating = Math.max(1, Math.min(5, Number(reviewForm.rating || 0) || 0));
+    if (!rating) {
+      setReviewError("Please choose a rating.");
+      return;
+    }
+
+    setReviewSaving(true);
+    setReviewError("");
+
+    const payload = {
+      user_id: user.id,
+      order_id: reviewModalOrder.id,
+      target_type: "grocery",
+      target_id: reviewModalOrder.store_id,
+      rating,
+      title: String(reviewForm.title || "").trim() || null,
+      comment: String(reviewForm.comment || "").trim() || null,
+      is_visible: true,
+    };
+
+    try {
+      const existing = reviewByOrderId?.[reviewModalOrder.id];
+      if (existing?.id) {
+        const { error } = await supabase.from("reviews").update(payload).eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("reviews").insert(payload);
+        if (error) throw error;
+      }
+
+      const latest = await loadGroceryOrders(user.id);
+      await loadOwnReviews(user.id, latest);
+      setReviewModalOrder(null);
+    } catch (e) {
+      setReviewError(e?.message || String(e));
+    } finally {
+      setReviewSaving(false);
+    }
+  }
 
   function cleanupRealtime() {
     if (channelRef.current) {
@@ -424,7 +518,7 @@ export default function GroceryOrdersPage() {
     }
   }
 
-  // ✅ Fetch latest GPS for ONE order (fast view first, then fallback table)
+  //  Fetch latest GPS for ONE order (fast view first, then fallback table)
   async function fetchLatestGpsForOrder(orderId) {
     if (!orderId) return null;
 
@@ -504,7 +598,7 @@ export default function GroceryOrdersPage() {
     gpsPollRef.current = setInterval(tick, 5000);
   }
 
-  // ✅ schema-safe store coords loader (tries different column sets)
+  //  schema-safe store coords loader (tries different column sets)
   async function loadStoreCoordsFromOrders(ordersList) {
     try {
       const ids = Array.from(new Set((ordersList || []).map((o) => o.store_id).filter(Boolean)));
@@ -629,10 +723,12 @@ export default function GroceryOrdersPage() {
     setOrders(list);
     await loadStoreCoordsFromOrders(list);
 
-    // ✅ If open order removed, close safely
+    //  If open order removed, close safely
     if (openOrderId && !list.find((x) => x.id === openOrderId)) {
       setOpenOrderId(null);
     }
+
+    return list;
   }
 
   async function setupRealtime(customerId) {
@@ -642,7 +738,8 @@ export default function GroceryOrdersPage() {
       .channel(`realtime-customer-grocery-orders-${customerId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "grocery_orders", filter: `customer_user_id=eq.${customerId}` }, async () => {
         setLastRealtimeHit(new Date().toLocaleTimeString());
-        await loadGroceryOrders(customerId);
+        const list = await loadGroceryOrders(customerId);
+        await loadOwnReviews(customerId, list);
       })
       .subscribe();
   }
@@ -682,7 +779,8 @@ export default function GroceryOrdersPage() {
         return;
       }
 
-      await loadGroceryOrders(u.id);
+      const loadedOrders = await loadGroceryOrders(u.id);
+      await loadOwnReviews(u.id, loadedOrders);
       await setupRealtime(u.id);
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -707,7 +805,7 @@ export default function GroceryOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, user]);
 
-  // ✅ Invoice action: open PREMIUM invoice page in SAME TAB (like restaurant invoice)
+  //  Invoice action: open PREMIUM invoice page in SAME TAB (like restaurant invoice)
   function goToInvoicePage(order) {
     if (!order?.id) return;
     router.push(`/groceries/orders/invoice?id=${order.id}`);
@@ -719,7 +817,7 @@ export default function GroceryOrdersPage() {
         {/* HERO */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
-            <div style={pill}>Customer • Grocery</div>
+            <div style={pill}>Customer - Grocery</div>
             <h1 style={heroTitle}>Grocery Orders</h1>
             <div style={subText}>Track your grocery orders & status updates (Realtime)</div>
           </div>
@@ -736,10 +834,10 @@ export default function GroceryOrdersPage() {
             </div>
 
             <Link href="/groceries" style={pill}>
-              ← Groceries
+              Groceries
             </Link>
             <Link href="/orders" style={pill}>
-              Restaurant Orders →
+              Restaurant Orders
             </Link>
           </div>
         </div>
@@ -772,13 +870,13 @@ export default function GroceryOrdersPage() {
           </div>
         ) : null}
 
-        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div> : null}
+        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading...</div> : null}
 
         {!loading && orders.length === 0 ? (
           <div style={emptyBox}>
             No grocery orders yet.{" "}
             <Link href="/groceries" style={{ color: "#111827", fontWeight: 1000 }}>
-              Browse groceries →
+              Browse groceries
             </Link>
           </div>
         ) : null}
@@ -805,14 +903,25 @@ export default function GroceryOrdersPage() {
                       </span>
 
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>
-                        Grocery Order • <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}…</span>
+                        Grocery Order - <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}...</span>
                       </div>
 
                       <span style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>{formatTime(o.created_at)}</span>
                     </div>
 
-                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>{formatMoney(total)}</div>
+                      {isReviewableStatus(o.status) && o.store_id ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openReviewModal(o);
+                          }}
+                          style={reviewByOrderId[o.id] ? btnReviewGhost : btnReview}
+                        >
+                          {reviewByOrderId[o.id] ? "Edit Review" : "Write Review"}
+                        </button>
+                      ) : null}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -820,7 +929,7 @@ export default function GroceryOrdersPage() {
                         }}
                         style={btnView}
                       >
-                        View details →
+                        View details
                       </button>
                     </div>
                   </div>
@@ -862,19 +971,19 @@ export default function GroceryOrdersPage() {
               const items = Array.isArray(o.grocery_order_items) ? o.grocery_order_items : [];
               const total = Number(o.total_amount || o.total || 0);
 
-              // ✅ map points
+              //  map points
               const pickup = o.store_id ? storeCoords[o.store_id] || null : null;
               const drop = pickLatLng({ customer_lat: o.customer_lat, customer_lng: o.customer_lng }) || null;
 
-              // ✅ live driver gps (if available)
+              //  live driver gps (if available)
               const live = liveGpsByOrderId[o.id] || null;
               const liveOk = live?.lat != null && live?.lng != null && isActiveDeliveryStatus(o.status);
 
               const liveLabel = !isActiveDeliveryStatus(o.status)
                 ? "Live GPS available during delivery"
                 : liveOk
-                ? `Live GPS connected ✅ (updated: ${formatTime(live.ts)})`
-                : "Waiting for driver GPS…";
+                ? `Live GPS connected  (updated: ${formatTime(live.ts)})`
+                : "Waiting for driver GPS...";
 
               const hasAnyMapPoint = !!pickup || !!drop || (liveOk && live);
 
@@ -882,7 +991,7 @@ export default function GroceryOrdersPage() {
                 <div style={cardGlass}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button onClick={() => setOpenOrderId(null)} style={btnBack}>
-                      ← Back to all grocery orders
+                      Back to all grocery orders
                     </button>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -899,8 +1008,12 @@ export default function GroceryOrdersPage() {
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {formatMoney(total)}</div>
-
-                      {/* ✅ INVOICE BUTTON (same tab) */}
+                      {isReviewableStatus(o.status) && o.store_id ? (
+                        <button onClick={() => openReviewModal(o)} style={reviewByOrderId[o.id] ? btnReviewGhost : btnReview}>
+                          {reviewByOrderId[o.id] ? "Edit Review" : "Write Review"}
+                        </button>
+                      ) : null}
+                      {/* Invoice button (same tab) */}
                       <button
                         style={btnInvoice}
                         onClick={() => goToInvoicePage(o)}
@@ -917,7 +1030,24 @@ export default function GroceryOrdersPage() {
 
                   <StatusMessageCard status={o.status} />
 
-                  {/* ✅ LIVE TRACKING ONLY IN DETAILS */}
+                  {reviewByOrderId[o.id] ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        borderRadius: 16,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "rgba(255,255,255,0.75)",
+                        padding: 12,
+                      }}
+                    >
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Your Review</div>
+                      <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.78)" }}>{renderStars(reviewByOrderId[o.id].rating)}</div>
+                      {reviewByOrderId[o.id].title ? <div style={{ marginTop: 6, fontWeight: 900, color: "#0b1220" }}>{reviewByOrderId[o.id].title}</div> : null}
+                      {reviewByOrderId[o.id].comment ? <div style={{ marginTop: 6, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>{reviewByOrderId[o.id].comment}</div> : null}
+                    </div>
+                  ) : null}
+
+                  {/*  LIVE TRACKING ONLY IN DETAILS */}
                   <div style={{ marginTop: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Live Tracking</div>
@@ -963,20 +1093,18 @@ export default function GroceryOrdersPage() {
                           Pickup: {pickup?.lat?.toFixed?.(4)}, {pickup?.lng?.toFixed?.(4)}
                         </>
                       ) : (
-                        <>Pickup: —</>
-                      )}{" "}
-                      •{" "}
+                        <>Pickup: -</>
+                      )}{" "} - {" "}
                       {drop ? (
                         <>
                           Drop: {drop?.lat?.toFixed?.(4)}, {drop?.lng?.toFixed?.(4)}
                         </>
                       ) : (
-                        <>Drop: —</>
+                        <>Drop: -</>
                       )}
                       {liveOk ? (
                         <>
-                          {" "}
-                          • Driver: {Number(live.lat).toFixed(5)}, {Number(live.lng).toFixed(5)}
+                          {" "} - Driver: {Number(live.lat).toFixed(5)}, {Number(live.lng).toFixed(5)}
                         </>
                       ) : null}
                     </div>
@@ -1001,13 +1129,13 @@ export default function GroceryOrdersPage() {
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Delivery</div>
 
                       <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Name:</b> {o.customer_name || "—"}
+                        <b>Name:</b> {o.customer_name || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Phone:</b> {o.customer_phone || "—"}
+                        <b>Phone:</b> {o.customer_phone || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Address:</b> {o.delivery_address || "—"}
+                        <b>Address:</b> {o.delivery_address || "-"}
                       </div>
                       {o.instructions ? (
                         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
@@ -1069,6 +1197,57 @@ export default function GroceryOrdersPage() {
             })()}
           </div>
         ) : null}
+
+        {reviewModalOrder ? (
+          <div style={reviewModalOverlay} onMouseDown={(e) => e.target === e.currentTarget && closeReviewModal()}>
+            <div style={reviewModalCard}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 18 }}>
+                  {reviewByOrderId[reviewModalOrder.id] ? "Edit Grocery Review" : "Write Grocery Review"}
+                </div>
+                <button onClick={closeReviewModal} style={btnBack} disabled={reviewSaving}>Close</button>
+              </div>
+
+              <div style={{ marginTop: 12, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
+                Grocery Order - {String(reviewModalOrder.id).slice(0, 8)}...
+              </div>
+
+              <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    key={value}
+                    onClick={() => setReviewForm((prev) => ({ ...prev, rating: value }))}
+                    style={Number(reviewForm.rating) === value ? reviewStarBtnActive : reviewStarBtn}
+                  >
+                    {value} Star{value === 1 ? "" : "s"}
+                  </button>
+                ))}
+              </div>
+
+              <input
+                value={reviewForm.title}
+                onChange={(e) => setReviewForm((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="Review title (optional)"
+                style={{ ...reviewInput, marginTop: 14 }}
+              />
+
+              <textarea
+                value={reviewForm.comment}
+                onChange={(e) => setReviewForm((prev) => ({ ...prev, comment: e.target.value }))}
+                placeholder="Tell other customers about your grocery experience"
+                rows={5}
+                style={{ ...reviewInput, marginTop: 12, resize: "vertical", minHeight: 120 }}
+              />
+
+              {reviewError ? <div style={{ marginTop: 10, color: "#b42318", fontWeight: 900 }}>{reviewError}</div> : null}
+
+              <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={closeReviewModal} style={btnBack} disabled={reviewSaving}>Cancel</button>
+                <button onClick={saveReview} style={btnReview} disabled={reviewSaving}>{reviewSaving ? "Saving..." : "Save Review"}</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </main>
   );
@@ -1113,6 +1292,72 @@ const btnInvoice = {
   color: "#111827",
   fontWeight: 1000,
   cursor: "pointer",
+};
+
+const btnReview = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,140,0,0.35)",
+  background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
+  color: "#111827",
+  fontWeight: 1000,
+  cursor: "pointer",
+};
+
+const btnReviewGhost = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.9)",
+  color: "#111827",
+  fontWeight: 1000,
+  cursor: "pointer",
+};
+
+const reviewModalOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.45)",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  padding: 16,
+  zIndex: 10000,
+};
+
+const reviewModalCard = {
+  width: "min(720px, 96vw)",
+  borderRadius: 18,
+  background: "rgba(255,255,255,0.96)",
+  border: "1px solid rgba(0,0,0,0.12)",
+  boxShadow: "0 18px 70px rgba(0,0,0,0.25)",
+  padding: 16,
+};
+
+const reviewInput = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.9)",
+  fontWeight: 800,
+  outline: "none",
+};
+
+const reviewStarBtn = {
+  padding: "9px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.9)",
+  color: "#111827",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const reviewStarBtnActive = {
+  ...reviewStarBtn,
+  border: "1px solid rgba(255,140,0,0.35)",
+  background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
 };
 
 const stepsWrap = {
@@ -1179,3 +1424,8 @@ const stepLineDone = {
 const stepLineTodo = {
   background: "rgba(0,0,0,0.10)",
 };
+
+
+
+
+

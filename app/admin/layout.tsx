@@ -26,6 +26,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { href: "/admin/restaurants", label: "Restaurants" },
       { href: "/admin/orders", label: "Orders" },
 
+      // ✅ NEW: Revenue management (reports / filters / analytics)
+      { href: "/admin/revenue", label: "Revenue" },
+
       // ✅ NEW: Groceries management (approve/disable/accepting orders)
       { href: "/admin/groceries", label: "Groceries" },
 
@@ -33,6 +36,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { href: "/admin/delivery-partners", label: "Delivery Partners" },
 
       { href: "/admin/users", label: "Users" },
+
+      // ✅ NEW: Support / Help inbox
+      { href: "/admin/support", label: "Support" },
+
+      // ✅ NEW: CMS / homepage feature pages in left navigation
+      { href: "/admin/pages", label: "CMS Pages" },
+      { href: "/admin/home-banner", label: "Home Banner" },
+      { href: "/admin/home-banner-settings", label: "Home Banner Settings" },
+      { href: "/admin/home-featured", label: "Home Featured" },
+      { href: "/admin/home-filters", label: "Home Filters" },
+      { href: "/admin/currency-settings", label: "Currency Settings" },
+
       { href: "/admin/settings", label: "Settings" },
     ],
     []
@@ -406,3 +421,5 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     </div>
   );
 }
+
+

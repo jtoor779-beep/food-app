@@ -253,6 +253,47 @@ function mapsUrlFromOrder(o) {
 }
 
 /* =========================
+   ✅ NEW (SAFE): image URL normalizer + placeholder
+   ========================= */
+
+function safeImgUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  return s;
+}
+
+const itemThumb = {
+  width: 54,
+  height: 54,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.10)",
+  overflow: "hidden",
+  background: "rgba(255,255,255,0.9)",
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const itemThumbImg = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  display: "block",
+};
+
+const itemThumbPlaceholder = {
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 1000,
+  color: "rgba(17,24,39,0.55)",
+  fontSize: 12,
+};
+
+/* =========================
    CUSTOMER-LIKE UI PIECES (for owner page)
    ========================= */
 
@@ -437,7 +478,7 @@ export default function RestaurantOrdersPage() {
 
     const orderIds = (o || []).map((x) => x.id).filter(Boolean);
     let itemsByOrder = {};
-    let nameByMenuId = {};
+    let metaByMenuId = {}; // ✅ name/price/image map
 
     if (orderIds.length > 0) {
       const { data: items, error: iErr } = await supabase.from("order_items").select("*").in("order_id", orderIds);
@@ -446,11 +487,12 @@ export default function RestaurantOrdersPage() {
         const menuIds = Array.from(new Set(items.map((it) => it.menu_item_id).filter(Boolean)));
 
         if (menuIds.length > 0) {
-          const { data: menus, error: mErr } = await supabase.from("menu_items").select("id,name,price").in("id", menuIds);
+          // ✅ UPDATED: also select image_url so we can show pictures
+          const { data: menus, error: mErr } = await supabase.from("menu_items").select("id,name,price,image_url").in("id", menuIds);
 
           if (!mErr && menus) {
-            nameByMenuId = (menus || []).reduce((acc, mi) => {
-              acc[String(mi.id)] = { name: mi.name || "Item", price: mi.price };
+            metaByMenuId = (menus || []).reduce((acc, mi) => {
+              acc[String(mi.id)] = { name: mi.name || "Item", price: mi.price, image_url: mi.image_url || "" };
               return acc;
             }, {});
           }
@@ -459,18 +501,25 @@ export default function RestaurantOrdersPage() {
         itemsByOrder = items.reduce((acc, it) => {
           const oid = it.order_id;
           if (!oid) return acc;
+
           const mid = it.menu_item_id ? String(it.menu_item_id) : "";
+
           const fallbackName = pick(it, ["item_name", "name", "title"], "");
-          const resolvedName = nameByMenuId[mid]?.name || fallbackName || "Item";
+          const resolvedName = metaByMenuId[mid]?.name || fallbackName || "Item";
 
           const qty = safeNum(pick(it, ["qty", "quantity"], 1), 1);
           const price = safeNum(pick(it, ["price_each", "price", "item_price", "unit_price"], NaN), NaN) ?? NaN;
 
           const resolvedPrice = Number.isFinite(price)
             ? price
-            : Number.isFinite(safeNum(nameByMenuId[mid]?.price, NaN))
-            ? safeNum(nameByMenuId[mid]?.price, 0)
+            : Number.isFinite(safeNum(metaByMenuId[mid]?.price, NaN))
+            ? safeNum(metaByMenuId[mid]?.price, 0)
             : 0;
+
+          // ✅ NEW (SAFE): image url resolution (order_items may have it, else menu_items.image_url)
+          const imgFromItem = safeImgUrl(pick(it, ["image_url", "img", "photo_url", "picture_url"], ""));
+          const imgFromMenu = safeImgUrl(metaByMenuId[mid]?.image_url || "");
+          const image_url = imgFromItem || imgFromMenu || "";
 
           const clean = {
             ...it,
@@ -478,6 +527,9 @@ export default function RestaurantOrdersPage() {
             qty,
             price_each: resolvedPrice,
             line_total: Math.round(qty * resolvedPrice),
+
+            // ✅ attach for UI
+            image_url,
           };
 
           acc[oid] = acc[oid] || [];
@@ -988,6 +1040,7 @@ export default function RestaurantOrdersPage() {
                           const qty = safeNum(pick(it, ["qty", "quantity"], 1), 1);
                           const price = safeNum(pick(it, ["price_each", "price", "item_price", "unit_price"], 0), 0);
                           const line = Math.round(qty * price);
+                          const img = safeImgUrl(it?.image_url);
 
                           return (
                             <div
@@ -1003,7 +1056,31 @@ export default function RestaurantOrdersPage() {
                                 background: "rgba(255,255,255,0.85)",
                               }}
                             >
-                              <div style={{ fontWeight: 950, color: "#0b1220" }}>{itemName}</div>
+                              <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                                <div style={itemThumb}>
+                                  {img ? (
+                                    <img
+                                      src={img}
+                                      alt={String(itemName || "Item")}
+                                      style={itemThumbImg}
+                                      onError={(e) => {
+                                        // ✅ if broken image url, show placeholder (no crash)
+                                        e.currentTarget.style.display = "none";
+                                      }}
+                                    />
+                                  ) : (
+                                    <div style={itemThumbPlaceholder}>No image</div>
+                                  )}
+                                </div>
+
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 950, color: "#0b1220" }}>{itemName}</div>
+                                  <div style={{ marginTop: 4, color: "rgba(17,24,39,0.62)", fontWeight: 850, fontSize: 12 }}>
+                                    ₹{Math.round(price || 0)} each
+                                  </div>
+                                </div>
+                              </div>
+
                               <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
                                 Qty {qty}
                                 <span style={{ marginLeft: 10 }}>₹{line}</span>

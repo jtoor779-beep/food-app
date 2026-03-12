@@ -2,10 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { readGlobalCity, subscribeGlobalCity } from "@/lib/globalLocation";
 
 function clean(v) {
   return String(v || "").trim();
+}
+
+
+
+function normalizeCityKey(v) {
+  return clean(v).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function cityMatches(inputCity, rowCity) {
+  const a = normalizeCityKey(inputCity);
+  const b = normalizeCityKey(rowCity);
+  if (!a) return true;
+  if (!b) return false;
+  if (b.includes(a) || a.includes(b)) return true;
+  const aFirst = a.split(" ")[0] || "";
+  const bFirst = b.split(" ")[0] || "";
+  return !!(aFirst && bFirst && (aFirst === bFirst || bFirst.startsWith(aFirst) || aFirst.startsWith(bFirst)));
 }
 
 // demo helpers (used for rating/eta only)
@@ -27,7 +46,7 @@ function demoFreeDelivery(id) {
   return hashNum(id) % 10 >= 5;
 }
 
-// ✅ filter helpers
+// filter helpers
 function isApprovedRow(r) {
   const a = String(r?.approval_status || "").toLowerCase();
   if (a) return a === "approved";
@@ -41,32 +60,77 @@ function isEnabledRow(r) {
   return true;
 }
 function isOpenNowRow(r) {
-  // ✅ IMPORTANT: do NOT use is_open column (it doesn't exist)
+  // IMPORTANT: do NOT use is_open column (it doesn't exist)
   if (typeof r?.accepting_orders === "boolean") return !!r.accepting_orders;
   if (typeof r?.is_open === "boolean") return !!r.is_open; // fallback if you ever add later
   return true;
 }
 
 export default function GroceriesPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
 
   const [stores, setStores] = useState([]);
+  const [reviewStatsByStore, setReviewStatsByStore] = useState({});
   const [isGuest, setIsGuest] = useState(true);
 
   const [profileCity, setProfileCity] = useState("");
   const [cityInput, setCityInput] = useState("");
   const [activeCity, setActiveCity] = useState("");
-  const [showAll, setShowAll] = useState(false);
 
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("recommended"); // recommended | rating | eta | az
 
   const title = useMemo(() => {
-    if (showAll) return "Groceries (All Stores)";
     if (activeCity) return `Groceries near ${activeCity}`;
     return "Groceries";
-  }, [activeCity, showAll]);
+  }, [activeCity]);
+  function getRatingNumber(storeId) {
+    const stat = reviewStatsByStore?.[storeId];
+    if (stat?.count > 0) return Number(stat.average || 0);
+    return 0;
+  }
+
+  async function loadStoreReviewStats(storeIds) {
+    const ids = Array.from(new Set((storeIds || []).filter(Boolean)));
+    if (!ids.length) {
+      setReviewStatsByStore({});
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("reviews")
+        .select("target_id, rating")
+        .eq("target_type", "grocery")
+        .eq("is_visible", true)
+        .in("target_id", ids);
+
+      if (error) throw error;
+
+      const stats = {};
+      for (const id of ids) stats[id] = { sum: 0, count: 0, average: 0 };
+
+      for (const row of data || []) {
+        const id = row?.target_id;
+        const rating = Number(row?.rating || 0);
+        if (!id || !Number.isFinite(rating)) continue;
+        if (!stats[id]) stats[id] = { sum: 0, count: 0, average: 0 };
+        stats[id].sum += rating;
+        stats[id].count += 1;
+      }
+
+      for (const id of Object.keys(stats)) {
+        const count = Number(stats[id].count || 0);
+        stats[id].average = count > 0 ? stats[id].sum / count : 0;
+      }
+
+      setReviewStatsByStore(stats);
+    } catch {
+      setReviewStatsByStore({});
+    }
+  }
 
   async function loadProfileCity() {
     const { data: userData } = await supabase.auth.getUser();
@@ -93,31 +157,36 @@ export default function GroceriesPage() {
     return c;
   }
 
-  // ✅ REAL loader from DB
-  async function loadStores(city, all) {
+  // REAL loader from DB
+  async function loadStores(city) {
     setLoading(true);
     setErrMsg("");
 
     try {
-      // ✅ IMPORTANT: only select columns that exist
+      // IMPORTANT: only select columns that exist
       // (NO is_open here)
-      let q = supabase
+      const c = clean(city);
+      const q = supabase
         .from("grocery_stores")
         .select("id, name, city, image_url, approval_status, is_disabled, accepting_orders")
         .order("name", { ascending: true });
 
-      if (!all) {
-        const c = clean(city);
-        if (c) q = q.ilike("city", `%${c}%`);
-      }
-
       const { data, error } = await q;
       if (error) throw error;
 
-      setStores(Array.isArray(data) ? data : []);
+      const allRows = Array.isArray(data) ? data : [];
+      let rows = allRows;
+      if (c) {
+        rows = allRows.filter((row) => cityMatches(c, row?.city));
+        if (!rows.length) rows = allRows;
+      }
+
+      setStores(rows);
+      await loadStoreReviewStats(rows.map((row) => row?.id));
     } catch (e) {
       setErrMsg(e?.message || String(e));
       setStores([]);
+      setReviewStatsByStore({});
     } finally {
       setLoading(false);
     }
@@ -128,9 +197,10 @@ export default function GroceriesPage() {
     setErrMsg("");
     try {
       const c = await loadProfileCity();
-      setActiveCity(c);
-      setCityInput(c);
-      await loadStores(c, false);
+      const selectedCity = clean(readGlobalCity() || c);
+      setActiveCity(selectedCity);
+      setCityInput(selectedCity);
+      await loadStores(selectedCity);
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -140,26 +210,28 @@ export default function GroceriesPage() {
 
   useEffect(() => {
     init();
+
+    const unsubscribe = subscribeGlobalCity((city) => {
+      const nextCity = clean(city);
+      setActiveCity(nextCity);
+      setCityInput(nextCity);
+      loadStores(nextCity);
+    });
+
+    return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function applyCity() {
     const c = clean(cityInput);
     setActiveCity(c);
-    setShowAll(false);
-    await loadStores(c, false);
-  }
-
-  async function toggleShowAll(next) {
-    setShowAll(next);
-    if (next) await loadStores("", true);
-    else await loadStores(activeCity || profileCity, false);
+    await loadStores(c);
   }
 
   const processed = useMemo(() => {
     let list = Array.isArray(stores) ? [...stores] : [];
 
-    // ✅ HARD filter: approved + enabled
+    // HARD filter: approved + enabled
     list = list.filter((r) => isApprovedRow(r) && isEnabledRow(r));
 
     const s = clean(search).toLowerCase();
@@ -174,7 +246,7 @@ export default function GroceriesPage() {
     if (sortBy === "az") {
       list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
     } else if (sortBy === "rating") {
-      list.sort((a, b) => Number(demoRating(b?.id)) - Number(demoRating(a?.id)));
+      list.sort((a, b) => getRatingNumber(b?.id) - getRatingNumber(a?.id));
     } else if (sortBy === "eta") {
       list.sort((a, b) => Number(demoEta(a?.id)) - Number(demoEta(b?.id)));
     } else {
@@ -187,44 +259,6 @@ export default function GroceriesPage() {
   return (
     <main style={pageBg}>
       <div style={{ width: "100%", margin: 0 }}>
-        {/* Header */}
-        <div style={heroGlass}>
-          <div>
-            <div style={pill}>Shop</div>
-            <h1 style={heroTitle}>{title}</h1>
-            <div style={subText}>Choose a grocery store to browse items</div>
-          </div>
-
-          {/* Location controls */}
-          <div style={controlsGlass} suppressHydrationWarning>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 950, color: "#0b1220" }}>Your City:</div>
-              <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 800 }}>{profileCity || "Not set"}</div>
-
-              <div style={{ width: 12 }} />
-
-              <div style={{ fontWeight: 950, color: "#0b1220" }}>Filter City:</div>
-              <input
-                value={cityInput}
-                onChange={(e) => setCityInput(e.target.value)}
-                placeholder="e.g. Bakersfield"
-                style={input}
-                disabled={showAll}
-                autoComplete="off"
-              />
-
-              <button onClick={applyCity} disabled={showAll} style={btnPrimary}>
-                Apply
-              </button>
-            </div>
-
-            <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 900 }}>
-              <input type="checkbox" checked={showAll} onChange={(e) => toggleShowAll(e.target.checked)} />
-              Show all grocery stores
-            </label>
-          </div>
-        </div>
-
         {/* Guest banner */}
         {isGuest ? (
           <div style={guestBanner}>
@@ -255,9 +289,9 @@ export default function GroceriesPage() {
 
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={selectMini}>
             <option value="recommended">Recommended</option>
-            <option value="rating">Top Rated (demo)</option>
-            <option value="eta">Fast Delivery (demo)</option>
-            <option value="az">A–Z</option>
+            <option value="rating">Top Rated </option>
+            <option value="eta">Fast Delivery </option>
+            <option value="az">A-Z</option>
           </select>
 
           <div style={{ marginTop: 6, color: "rgba(17,24,39,0.6)", fontWeight: 800, fontSize: 12 }}>
@@ -267,23 +301,35 @@ export default function GroceriesPage() {
 
         {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
 
-        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 800 }}>Loading…</div> : null}
+        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 800 }}>Loading...</div> : null}
 
         {!loading && processed.length === 0 ? (
-          <div style={emptyBox}>No grocery stores found{showAll ? "." : activeCity ? ` in ${activeCity}.` : "."}</div>
+          <div style={emptyBox}>No grocery stores found{activeCity ? ` in ${activeCity}.` : "."}</div>
         ) : null}
 
         {!loading && processed.length > 0 ? (
           <div style={grid}>
             {processed.map((r) => {
               const rid = r?.id;
-              const rating = demoRating(rid);
+              const rating = getRatingNumber(rid).toFixed(1);
               const eta = demoEta(rid);
               const free = demoFreeDelivery(rid);
               const open = isOpenNowRow(r);
 
               return (
-                <div key={rid} style={cardGlass}>
+                                <div
+                  key={rid}
+                  style={{ ...cardGlass, cursor: "pointer" }}
+                  onClick={() => router.push(`/groceries/menu?store_id=${rid}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      router.push(`/groceries/menu?store_id=${rid}`);
+                    }
+                  }}
+                  role="link"
+                  tabIndex={0}
+                >
                   <div style={imgWrap}>
                     {r.image_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -293,7 +339,7 @@ export default function GroceriesPage() {
                     )}
 
                     <div style={topBadges}>
-                      <span style={badgeDark}>⭐ {rating}</span>
+                      <span style={badgeDark}>Rating {rating}</span>
                       <span style={badgeLight}>{eta} mins</span>
                     </div>
                   </div>
@@ -305,7 +351,7 @@ export default function GroceriesPage() {
                     </div>
 
                     <div style={{ fontSize: 12, color: "rgba(17,24,39,0.65)", marginTop: 6, fontWeight: 800 }}>
-                      {r.city ? `📍 ${r.city}` : "📍 City not set"} • {free ? "Free delivery (demo)" : "Delivery (demo)"}
+                      {r.city ? `${r.city}` : "City not set"} | {free ? "Free delivery " : "Delivery "}
                     </div>
 
                     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -316,10 +362,10 @@ export default function GroceriesPage() {
                     </div>
 
                     <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <Link href={`/groceries/menu?store_id=${rid}`} style={btnSmallDarkLink}>
+                      <Link href={`/groceries/menu?store_id=${rid}`} style={btnSmallDarkLink} onClick={(e) => e.stopPropagation()}>
                         Open Store
                       </Link>
-                      <Link href={`/groceries/menu?store_id=${rid}`} style={btnSmallOutlineLink}>
+                      <Link href={`/groceries/menu?store_id=${rid}`} style={btnSmallOutlineLink} onClick={(e) => e.stopPropagation()}>
                         View
                       </Link>
                     </div>
@@ -611,3 +657,18 @@ const tagStrong = {
   background: "rgba(17,24,39,0.92)",
   color: "#fff",
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

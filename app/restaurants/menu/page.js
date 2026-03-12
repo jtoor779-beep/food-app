@@ -287,6 +287,43 @@ const modalBody = { padding: 14 };
 const split2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
 const split3 = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 };
 
+/* =========================================================
+   ✅ CURRENCY SUPPORT (SAFE, FORMATTING ONLY)
+   - Default stays INR to avoid breaking old behavior
+   - Uses localStorage "foodapp_currency" just like cart page
+   ========================================================= */
+
+const DEFAULT_CURRENCY = "INR";
+
+function normalizeCurrency(c) {
+  const v = String(c || "").trim().toUpperCase();
+  if (v === "USD") return "USD";
+  if (v === "INR") return "INR";
+  return DEFAULT_CURRENCY;
+}
+
+function money(v, currency = DEFAULT_CURRENCY) {
+  const n = Number(v || 0);
+  if (!isFinite(n)) return currency === "USD" ? "$0.00" : "₹0";
+
+  const cur = normalizeCurrency(currency);
+
+  // Preserve OLD look: INR had no decimals
+  const fractionDigits = cur === "INR" ? 0 : 2;
+
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: cur,
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(n);
+  } catch {
+    const fixed = n.toFixed(fractionDigits);
+    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+  }
+}
+
 function pick(obj, keys, fallback = null) {
   for (const k of keys) {
     if (obj && obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== "") return obj[k];
@@ -299,6 +336,7 @@ function safeNumber(v, fallback = 0) {
   return isFinite(n) ? n : fallback;
 }
 
+// (kept for backward compatibility; no longer used in UI)
 function moneyINR(v) {
   const n = Number(v || 0);
   if (!isFinite(n)) return "₹0";
@@ -331,6 +369,9 @@ export default function RestaurantManageMenuPage() {
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
   const [note, setNote] = useState("");
+
+  // ✅ Currency state (default INR; reads preference once)
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
   // identity
   const [ownerEmail, setOwnerEmail] = useState("");
@@ -365,6 +406,9 @@ export default function RestaurantManageMenuPage() {
   const [fBest, setFBest] = useState(false);
   const [fImageUrl, setFImageUrl] = useState("");
 
+  // ✅ Taxable flag (default true)
+  const [isTaxable, setIsTaxable] = useState(true);
+
   // PRO fields (safe-save)
   const [fDescription, setFDescription] = useState("");
   const [fSpiceLevel, setFSpiceLevel] = useState("medium"); // mild | medium | hot | extra_hot
@@ -373,6 +417,16 @@ export default function RestaurantManageMenuPage() {
   const [fPrepMins, setFPrepMins] = useState("");
 
   const fileRef = useRef(null);
+
+  // ✅ Read currency preference once (NO writes)
+  useEffect(() => {
+    try {
+      const c = localStorage.getItem("foodapp_currency");
+      setCurrency(normalizeCurrency(c));
+    } catch {
+      setCurrency(DEFAULT_CURRENCY);
+    }
+  }, []);
 
   function showToast(msg) {
     setToast(msg);
@@ -388,6 +442,9 @@ export default function RestaurantManageMenuPage() {
     setFInStock(true);
     setFBest(false);
     setFImageUrl("");
+
+    // ✅ Default tax ON for new items
+    setIsTaxable(true);
 
     setFDescription("");
     setFSpiceLevel("medium");
@@ -407,6 +464,9 @@ export default function RestaurantManageMenuPage() {
     setFInStock(it.in_stock !== false);
     setFBest(it.is_best_seller === true);
     setFImageUrl(it.image_url || "");
+
+    // ✅ Load from DB if exists, otherwise default true
+    setIsTaxable(it?.is_taxable === false ? false : true);
 
     setFDescription(pick(it, ["description", "item_description"], "") || "");
     setFSpiceLevel(pick(it, ["spice_level", "spicy_level"], "medium") || "medium");
@@ -604,6 +664,9 @@ export default function RestaurantManageMenuPage() {
       allergens: text(fAllergens) || null,
       calories: fCalories === "" ? null : safeNumber(fCalories, null),
       prep_mins: fPrepMins === "" ? null : safeNumber(fPrepMins, null),
+
+      // ✅ Taxable flag (safe-save; requires menu_items.is_taxable column)
+      is_taxable: !!isTaxable,
     };
 
     try {
@@ -616,7 +679,7 @@ export default function RestaurantManageMenuPage() {
           const { anyFailed } = await tryUpdateMenuItemFields(newId, desiredExtras);
           if (anyFailed) {
             setNote(
-              "Note: Some pro fields (description/spice/allergens/calories/prep) may not be saved because your menu_items table may not have those columns yet. UI still works."
+              "Note: Some pro fields (description/spice/allergens/calories/prep/taxable) may not be saved because your menu_items table may not have those columns yet. UI still works."
             );
           }
         }
@@ -629,7 +692,7 @@ export default function RestaurantManageMenuPage() {
         const { anyFailed } = await tryUpdateMenuItemFields(editingId, desiredExtras);
         if (anyFailed) {
           setNote(
-            "Note: Some pro fields (description/spice/allergens/calories/prep) may not be saved because your menu_items table may not have those columns yet. UI still works."
+            "Note: Some pro fields (description/spice/allergens/calories/prep/taxable) may not be saved because your menu_items table may not have those columns yet. UI still works."
           );
         }
 
@@ -746,6 +809,7 @@ export default function RestaurantManageMenuPage() {
             <span style={pill}>Role: {role || "-"}</span>
             <span style={pill}>Restaurant: {restaurantName || "-"}</span>
             <span style={pill}>Restaurant ID: {restaurantId || "-"}</span>
+            <span style={pill}>Currency: {currency}</span>
           </div>
           {err ? <div style={alertErr}>{err}</div> : null}
           {note ? <div style={noteBox}>{note}</div> : null}
@@ -880,6 +944,8 @@ export default function RestaurantManageMenuPage() {
                 const calories = pick(it, ["calories", "kcal"], "");
                 const prep = pick(it, ["prep_mins", "prep_time_mins"], "");
 
+                const taxable = it?.is_taxable === false ? false : true;
+
                 return (
                   <div key={it.id} style={cardGlass}>
                     <div style={imgWrap}>
@@ -899,11 +965,14 @@ export default function RestaurantManageMenuPage() {
                         {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
                         {!out ? <span style={badgeIn}>IN</span> : <span style={badgeOut}>OUT</span>}
                       </div>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{moneyINR(it.price)}</div>
+
+                      {/* ✅ Currency formatted */}
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(it.price, currency)}</div>
                     </div>
 
                     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {it.cuisine ? <span style={tag}>{normCuisine(it.cuisine)}</span> : null}
+                      <span style={tag}>{taxable ? "TAXABLE" : "NO TAX"}</span>
                       {desc ? <span style={tag}>desc</span> : null}
                       {spice ? <span style={tag}>spice:{String(spice)}</span> : null}
                       {calories ? <span style={tag}>{String(calories)} kcal</span> : null}
@@ -956,7 +1025,7 @@ export default function RestaurantManageMenuPage() {
               <div>
                 <div style={{ fontWeight: 1000, color: "#0b1220" }}>{editingId ? "Edit Item" : "Add Item"}</div>
                 <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
-                  Bucket: <b>{BUCKET}</b> • Restaurant: <b>{restaurantName || "-"}</b>
+                  Bucket: <b>{BUCKET}</b> • Restaurant: <b>{restaurantName || "-"}</b> • Currency: <b>{currency}</b>
                 </div>
               </div>
 
@@ -1074,6 +1143,14 @@ export default function RestaurantManageMenuPage() {
                   </button>
                   <button onClick={() => setFBest(false)} style={{ ...btnSmall, ...(!fBest ? btnDark : {}), borderRadius: 14 }}>
                     Best Seller: NO
+                  </button>
+
+                  {/* ✅ Taxable toggle */}
+                  <button onClick={() => setIsTaxable(true)} style={{ ...btnSmall, ...(isTaxable ? btnDark : {}), borderRadius: 14 }}>
+                    Taxable: YES
+                  </button>
+                  <button onClick={() => setIsTaxable(false)} style={{ ...btnSmall, ...(!isTaxable ? btnDark : {}), borderRadius: 14 }}>
+                    Taxable: NO
                   </button>
                 </div>
 

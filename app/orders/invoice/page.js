@@ -5,13 +5,139 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import supabase from "@/lib/supabase";
 
-function money(v) {
+/* =========================================================
+   ✅ CURRENCY SUPPORT (DB + localStorage, SAFE)
+   - Source of truth: public.system_settings.default_currency
+   - Cache: localStorage "foodapp_currency"
+   ========================================================= */
+
+const DEFAULT_CURRENCY = "USD"; // ✅ keep USD for your app
+
+function normalizeCurrency(c) {
+  const v = String(c || "").trim().toUpperCase();
+  if (v === "USD") return "USD";
+  if (v === "INR") return "INR";
+  return DEFAULT_CURRENCY;
+}
+
+function money(v, currency = DEFAULT_CURRENCY) {
   const n = Number(v || 0);
-  return `₹${n.toFixed(0)}`;
+  const cur = normalizeCurrency(currency);
+
+  if (!isFinite(n)) return cur === "USD" ? "$0.00" : "₹0";
+
+  const fractionDigits = cur === "INR" ? 0 : 2;
+
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: cur,
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(n);
+  } catch {
+    const fixed = n.toFixed(fractionDigits);
+    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+  }
+}
+
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function isMissingColumnError(msg) {
+  const m = String(msg || "").toLowerCase();
+  return m.includes("column") && m.includes("does not exist");
+}
+
+async function fetchCurrencyFromDB() {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("key, default_currency, value_json, updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+
+    if (error) return DEFAULT_CURRENCY;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length === 0) return DEFAULT_CURRENCY;
+
+    const globalRow = rows.find((r) => String(r?.key || "").toLowerCase() === "global");
+    const row = globalRow || rows[0];
+
+    const col = row?.default_currency;
+    if (col) return normalizeCurrency(col);
+
+    const jsonCur = row?.value_json?.default_currency;
+    if (jsonCur) return normalizeCurrency(jsonCur);
+
+    return DEFAULT_CURRENCY;
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
 }
 
 function safeStr(v) {
   return String(v ?? "").trim();
+}
+
+/**
+ * ✅ Clean customer instructions
+ * Removes the extra debug/metadata part like:
+ * (deliveryFee:... | tax:... | pay:... | platform%:... | ... | currency:USD)
+ * Keeps ONLY the real instruction text.
+ */
+function cleanInstructions(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+
+  // Primary cut markers (most reliable)
+  const markers = [
+    "(deliveryFee:",
+    " (deliveryFee:",
+    "(tax:",
+    " (tax:",
+    "(pay:",
+    " (pay:",
+    "(platform%:",
+    " (platform%:",
+    "(platformFee:",
+    " (platformFee:",
+    "(taxNote:",
+    " (taxNote:",
+    "(currency:",
+    " (currency:",
+  ];
+
+  const low = s.toLowerCase();
+  for (const mk of markers) {
+    const i = low.indexOf(mk.toLowerCase());
+    if (i !== -1) {
+      return s.slice(0, i).trim();
+    }
+  }
+
+  // Secondary: if it ends with (...) and inside contains known metadata keys
+  const m = s.match(/\s*\(([^)]{0,500})\)\s*$/);
+  if (m) {
+    const inside = String(m[1] || "").toLowerCase();
+    const looksLikeMeta =
+      inside.includes("deliveryfee") ||
+      inside.includes("platformfee") ||
+      inside.includes("platform%") ||
+      inside.includes("taxnote") ||
+      inside.includes("currency") ||
+      inside.includes("pay:") ||
+      inside.includes("tax:");
+
+    if (looksLikeMeta) {
+      return s.slice(0, s.length - m[0].length).trim();
+    }
+  }
+
+  return s;
 }
 
 function formatTime(ts) {
@@ -43,6 +169,95 @@ function yyyymmdd(d) {
   }
 }
 
+/**
+ * ✅ Order loader (COLUMN-SAFE)
+ * Your DB has: platform_fee, delivery_fee, tax_amount, tip_amount
+ * Older code sometimes had: commission_amount, gst_amount
+ * We try “full select” first, then fallback if any column is missing.
+ */
+async function fetchOrderForInvoice({ id, userId }) {
+  const base = `
+    id,
+    user_id,
+    restaurant_id,
+    status,
+    created_at,
+    total,
+    subtotal_amount,
+    discount_amount,
+    total_amount,
+    coupon_code,
+    customer_name,
+    phone,
+    address_line1,
+    address_line2,
+    landmark,
+    instructions,
+    stripe_session_id,
+    stripe_payment_intent_id,
+    payment_status,
+    paid_at,
+    payment_method,
+    currency,
+    order_items (
+      id,
+      qty,
+      price_each,
+      menu_item_id,
+      menu_items ( id, name, price )
+    )
+  `;
+
+  const selects = [
+    // ✅ new schema (your current)
+    `
+      ${base},
+      platform_fee,
+      delivery_fee,
+      tax_amount,
+      tip_amount
+    `,
+    // fallback: maybe commission_amount is used instead of platform_fee
+    `
+      ${base},
+      commission_amount,
+      delivery_fee,
+      tax_amount,
+      tip_amount
+    `,
+    // fallback: older GST schema
+    `
+      ${base},
+      platform_fee,
+      delivery_fee,
+      gst_amount,
+      tip_amount
+    `,
+    // minimal fallback
+    `${base}`,
+  ];
+
+  let lastErr = null;
+
+  for (const sel of selects) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select(sel)
+      .eq("id", id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!error) return data || null;
+
+    lastErr = error;
+    const msg = error?.message || String(error);
+    if (isMissingColumnError(msg)) continue;
+    throw error;
+  }
+
+  throw lastErr;
+}
+
 function InvoiceInner() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -57,6 +272,9 @@ function InvoiceInner() {
   const [order, setOrder] = useState(null);
   const [restaurant, setRestaurant] = useState(null);
 
+  // ✅ currency
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
+
   const items = useMemo(() => {
     const arr = order?.order_items;
     return Array.isArray(arr) ? arr : [];
@@ -66,38 +284,88 @@ function InvoiceInner() {
     return items.reduce((s, it) => s + Number(it?.qty || 0), 0);
   }, [items]);
 
+  // ✅ fee breakdown (matches Cart)
   const subtotal = useMemo(() => {
-    // prefer subtotal_amount column, else compute
-    const fromCol = Number(order?.subtotal_amount || 0);
+    const fromCol = safeNum(order?.subtotal_amount, 0);
     if (fromCol > 0) return fromCol;
-
-    return items.reduce(
-      (s, it) => s + Number(it?.qty || 0) * Number(it?.price_each || 0),
-      0
-    );
+    return items.reduce((s, it) => s + safeNum(it?.qty, 0) * safeNum(it?.price_each, 0), 0);
   }, [order, items]);
 
-  const discount = useMemo(
-    () => Math.max(0, Number(order?.discount_amount || 0)),
-    [order]
-  );
+  const discount = useMemo(() => Math.max(0, safeNum(order?.discount_amount, 0)), [order]);
 
-  const total = useMemo(() => {
-    // prefer total_amount, else total, else computed
-    const t1 = Number(order?.total_amount || 0);
+  const platformFee = useMemo(() => {
+    // your DB uses platform_fee
+    const pf = safeNum(order?.platform_fee, 0);
+    if (pf > 0) return pf;
+    // fallback older
+    const cm = safeNum(order?.commission_amount, 0);
+    return Math.max(0, cm);
+  }, [order]);
+
+  const deliveryFee = useMemo(() => Math.max(0, safeNum(order?.delivery_fee, 0)), [order]);
+
+  const tax = useMemo(() => {
+    // your DB uses tax_amount now
+    const t = safeNum(order?.tax_amount, 0);
+    if (t > 0) return t;
+    // fallback older
+    const gst = safeNum(order?.gst_amount, 0);
+    return Math.max(0, gst);
+  }, [order]);
+
+  const tip = useMemo(() => Math.max(0, safeNum(order?.tip_amount, 0)), [order]);
+
+  const computedTotal = useMemo(() => {
+    const val = subtotal + platformFee + deliveryFee + tax + tip - discount;
+    return Math.max(0, Number(val.toFixed(2)));
+  }, [subtotal, platformFee, deliveryFee, tax, tip, discount]);
+
+  // ✅ stored total from DB (if present)
+  const storedTotal = useMemo(() => {
+    const t1 = safeNum(order?.total_amount, 0);
     if (t1 > 0) return t1;
-
-    const t2 = Number(order?.total || 0);
+    const t2 = safeNum(order?.total, 0);
     if (t2 > 0) return t2;
+    return 0;
+  }, [order]);
 
-    return Math.max(0, subtotal - discount);
-  }, [order, subtotal, discount]);
+  // ✅ final shown total (prefer stored if exists, else computed)
+  const total = useMemo(() => {
+    return storedTotal > 0 ? storedTotal : computedTotal;
+  }, [storedTotal, computedTotal]);
+
+  // ✅ show adjustment ONLY if mismatch exists (this helps debug bad order writes)
+  const adjustment = useMemo(() => {
+    if (!(storedTotal > 0)) return 0;
+    const diff = Number((storedTotal - computedTotal).toFixed(2));
+    // ignore tiny float noise
+    if (Math.abs(diff) < 0.01) return 0;
+    return diff;
+  }, [storedTotal, computedTotal]);
 
   async function load() {
     setLoading(true);
     setErr("");
 
     try {
+      // ✅ Currency bootstrap
+      (async () => {
+        try {
+          const c = localStorage.getItem("foodapp_currency");
+          setCurrency(normalizeCurrency(c));
+        } catch {
+          setCurrency(DEFAULT_CURRENCY);
+        }
+
+        const dbCur = await fetchCurrencyFromDB();
+        const normalized = normalizeCurrency(dbCur);
+
+        setCurrency(normalized);
+        try {
+          localStorage.setItem("foodapp_currency", normalized);
+        } catch {}
+      })();
+
       if (!id) {
         setErr("Missing order id.");
         setLoading(false);
@@ -114,42 +382,8 @@ function InvoiceInner() {
       }
       setUser(u);
 
-      // ✅ fetch order (must belong to this user)
-      const { data: o, error: oErr } = await supabase
-        .from("orders")
-        .select(
-          `
-          id,
-          user_id,
-          restaurant_id,
-          status,
-          created_at,
-          total,
-          subtotal_amount,
-          discount_amount,
-          total_amount,
-          coupon_code,
-          customer_name,
-          phone,
-          address_line1,
-          address_line2,
-          landmark,
-          instructions,
-          stripe_session_id,
-          order_items (
-            id,
-            qty,
-            price_each,
-            menu_item_id,
-            menu_items ( id, name, price )
-          )
-        `
-        )
-        .eq("id", id)
-        .eq("user_id", u.id)
-        .maybeSingle();
-
-      if (oErr) throw oErr;
+      // ✅ fetch order (column-safe)
+      const o = await fetchOrderForInvoice({ id, userId: u.id });
       if (!o) {
         setErr("Invoice not found for this account.");
         setLoading(false);
@@ -185,7 +419,7 @@ function InvoiceInner() {
 
       setRestaurant(rRow);
 
-      // auto print (if print=1)
+      // auto print
       if (autoPrint) {
         setTimeout(() => {
           try {
@@ -205,10 +439,7 @@ function InvoiceInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const restName =
-    safeStr(restaurant?.name) ||
-    safeStr(restaurant?.restaurant_name) ||
-    "Restaurant";
+  const restName = safeStr(restaurant?.name) || safeStr(restaurant?.restaurant_name) || "Restaurant";
 
   const restPhone = safeStr(restaurant?.phone);
   const restAddr =
@@ -219,17 +450,27 @@ function InvoiceInner() {
 
   const custName = safeStr(order?.customer_name) || safeStr(user?.email) || "Customer";
   const custPhone = safeStr(order?.phone);
-  const custAddr = [safeStr(order?.address_line1), safeStr(order?.address_line2)]
-    .filter(Boolean)
-    .join(", ");
+  const custAddr = [safeStr(order?.address_line1), safeStr(order?.address_line2)].filter(Boolean).join(", ");
 
   const coupon = safeStr(order?.coupon_code);
 
-  // ✅ FIX: orders.payment_method column DOES NOT exist in your DB
-  // So we use a safe default (and still show Stripe info if session exists).
-  const method = order?.stripe_session_id ? "stripe" : "online";
+  // ✅ Payment logic
+  const paymentStatus = safeStr(order?.payment_status).toLowerCase();
+  const paidAt = order?.paid_at ? new Date(order.paid_at) : null;
 
-  // ✅ Premium: invoice number (no DB needed)
+  const isPaid =
+    paymentStatus === "paid" ||
+    paymentStatus === "succeeded" ||
+    paymentStatus === "complete" ||
+    !!paidAt ||
+    !!order?.stripe_session_id ||
+    !!order?.stripe_payment_intent_id;
+
+  const methodRaw = safeStr(order?.payment_method) || (order?.stripe_session_id ? "stripe" : "online");
+  const method = methodRaw || "online";
+  const payLabel = isPaid ? "PAID" : "PENDING";
+
+  // ✅ invoice number
   const invoiceNo = useMemo(() => {
     const dt = yyyymmdd(order?.created_at || Date.now());
     const short = String(order?.id || id || "")
@@ -244,12 +485,8 @@ function InvoiceInner() {
     return raw.length > 12 ? `${raw.slice(0, 6)}…${raw.slice(-4)}` : raw;
   }, [order, id]);
 
-  const isPaid = !!order?.stripe_session_id; // stripe_session_id present => online paid
-  const payLabel = isPaid ? "PAID" : "PENDING";
-
   return (
     <main style={pageBg}>
-      {/* ✅ Print-only CSS (Premium PDF) */}
       <style>{printCss}</style>
 
       <div style={{ maxWidth: 1040, margin: "0 auto" }}>
@@ -258,18 +495,14 @@ function InvoiceInner() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <div style={pill}>Invoice • Restaurant</div>
               <div style={{ ...(isPaid ? pillPaid : pillPending) }}>{payLabel}</div>
+              <div style={pill}>Currency: {currency}</div>
             </div>
 
             <h1 style={title}>Order Invoice</h1>
             <div style={sub}>
-              {loading
-                ? "Loading invoice…"
-                : err
-                ? "Invoice error"
-                : `Order #${String(order?.id || "").slice(0, 8)}…`}
+              {loading ? "Loading invoice…" : err ? "Invoice error" : `Order #${String(order?.id || "").slice(0, 8)}…`}
             </div>
 
-            {/* ✅ Premium header chips */}
             {!loading && !err && order ? (
               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <div style={chip}>
@@ -288,10 +521,7 @@ function InvoiceInner() {
             ) : null}
           </div>
 
-          <div
-            style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}
-            className="no-print"
-          >
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="no-print">
             <Link href="/orders" style={btnGhost}>
               ← Back to Orders
             </Link>
@@ -303,15 +533,10 @@ function InvoiceInner() {
 
         {err ? <div style={alertErr}>{err}</div> : null}
 
-        {loading ? (
-          <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>
-            Loading…
-          </div>
-        ) : null}
+        {loading ? <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading…</div> : null}
 
         {!loading && !err && order ? (
           <div style={{ marginTop: 12, ...cardGlass }}>
-            {/* ✅ Premium Brand Row */}
             <div style={brandRow}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                 <div style={brandBadge} title={restName}>
@@ -319,35 +544,20 @@ function InvoiceInner() {
                 </div>
                 <div>
                   <div style={brandTitle}>{restName}</div>
-                  <div style={brandSub}>
-                    Thank you for ordering with HomyFood • Food + Groceries
-                  </div>
+                  <div style={brandSub}>Thank you for ordering with HomyFood • Food + Groceries</div>
                 </div>
               </div>
 
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>
-                  Invoice Total
-                </div>
-                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>
-                  {money(total)}
-                </div>
+                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Invoice Total</div>
+                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>{money(total, currency)}</div>
                 <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.60)", fontSize: 12 }}>
                   Generated: {formatTime(new Date())}
                 </div>
               </div>
             </div>
 
-            {/* Header Row */}
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-                flexWrap: "wrap",
-                marginTop: 12,
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
               <div style={box}>
                 <div style={boxTitle}>Billed From</div>
                 <div style={boxStrong}>{restName}</div>
@@ -379,21 +589,31 @@ function InvoiceInner() {
                 </div>
                 <div style={boxText}>
                   <b>Payment:</b>{" "}
-                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>
-                    {String(method || "stripe").toUpperCase()}
-                  </span>{" "}
-                  <span style={{ marginLeft: 6, ...(isPaid ? paidDot : pendingDot) }}>
-                    {isPaid ? "Paid" : "Pending"}
-                  </span>
+                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>{String(method || "online").toUpperCase()}</span>{" "}
+                  <span style={{ marginLeft: 6, ...(isPaid ? paidDot : pendingDot) }}>{isPaid ? "Paid" : "Pending"}</span>
                 </div>
+
+                {paidAt ? (
+                  <div style={boxText}>
+                    <b>Paid at:</b> {formatTime(paidAt)}
+                  </div>
+                ) : null}
+
                 {coupon ? (
                   <div style={boxText}>
                     <b>Coupon:</b> {coupon}
                   </div>
                 ) : null}
+
                 {order?.stripe_session_id ? (
                   <div style={boxText}>
                     <b>Stripe:</b> {String(order.stripe_session_id).slice(0, 18)}…
+                  </div>
+                ) : null}
+
+                {paymentStatus ? (
+                  <div style={boxText}>
+                    <b>Payment status:</b> {paymentStatus}
                   </div>
                 ) : null}
               </div>
@@ -401,15 +621,7 @@ function InvoiceInner() {
 
             {/* Items */}
             <div style={{ marginTop: 16 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                }}
-              >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <div style={{ fontWeight: 1000, color: "#0b1220" }}>Items</div>
                 <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.65)", fontSize: 12 }}>
                   {itemsCount} item(s) • {safeStr(order.status) || "pending"}
@@ -426,20 +638,14 @@ function InvoiceInner() {
 
                 {items.map((it) => {
                   const name = it?.menu_items?.name || "Item";
-                  const qty = Number(it?.qty || 0);
-                  const priceEach = Number(it?.price_each || 0);
+                  const qty = safeNum(it?.qty, 0);
+                  const priceEach = safeNum(it?.price_each, 0);
                   return (
                     <div key={it.id} style={tRowHover}>
                       <div style={{ fontWeight: 950, color: "#0b1220" }}>{name}</div>
-                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
-                        {qty}
-                      </div>
-                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>
-                        {money(priceEach)}
-                      </div>
-                      <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>
-                        {money(qty * priceEach)}
-                      </div>
+                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{qty}</div>
+                      <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{money(priceEach, currency)}</div>
+                      <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>{money(qty * priceEach, currency)}</div>
                     </div>
                   );
                 })}
@@ -448,57 +654,73 @@ function InvoiceInner() {
               {order?.instructions ? (
                 <div style={{ marginTop: 12, ...noteBox }}>
                   <div style={{ fontWeight: 1000 }}>Customer Instructions</div>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      fontWeight: 850,
-                      color: "rgba(17,24,39,0.72)",
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    {String(order.instructions)}
+                  <div style={{ marginTop: 6, fontWeight: 850, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>
+                    {cleanInstructions(order.instructions)}
                   </div>
                 </div>
               ) : null}
             </div>
 
-            {/* Totals */}
+            {/* Totals (MATCH CART) */}
             <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
               <div style={totalsBox}>
                 <div style={line}>
                   <span>Subtotal</span>
-                  <span style={{ color: "#0b1220" }}>{money(subtotal)}</span>
+                  <span style={{ color: "#0b1220" }}>{money(subtotal, currency)}</span>
                 </div>
 
-                {/* ✅ Premium placeholders (future-proof) */}
                 <div style={line}>
-                  <span>Taxes / GST</span>
-                  <span style={{ color: "#0b1220" }}>{money(0)}</span>
+                  <span>Platform fee</span>
+                  <span style={{ color: "#0b1220" }}>{platformFee > 0 ? money(platformFee, currency) : money(0, currency)}</span>
                 </div>
+
+                <div style={line}>
+                  <span>Delivery fee</span>
+                  <span style={{ color: "#0b1220" }}>{deliveryFee === 0 ? "FREE" : money(deliveryFee, currency)}</span>
+                </div>
+
+                <div style={line}>
+                  <span>Tax</span>
+                  <span style={{ color: "#0b1220" }}>{money(tax, currency)}</span>
+                </div>
+
+                {tip > 0 ? (
+                  <div style={line}>
+                    <span>Tip</span>
+                    <span style={{ color: "#0b1220" }}>{money(tip, currency)}</span>
+                  </div>
+                ) : null}
 
                 <div style={line}>
                   <span>Discount{coupon ? ` (${coupon})` : ""}</span>
                   <span style={{ color: discount > 0 ? "#065f46" : "#0b1220" }}>
-                    {discount > 0 ? `- ${money(discount)}` : money(0)}
+                    {discount > 0 ? `- ${money(discount, currency)}` : money(0, currency)}
                   </span>
                 </div>
 
+                {/* ✅ Only show when mismatch exists */}
+                {adjustment !== 0 ? (
+                  <div style={line}>
+                    <span title="Stored total doesn’t match computed breakdown. This indicates the order was saved with missing/incorrect fee fields.">
+                      Adjustment
+                    </span>
+                    <span style={{ color: adjustment < 0 ? "#7f1d1d" : "#065f46", fontWeight: 1000 }}>
+                      {adjustment < 0 ? `- ${money(Math.abs(adjustment), currency)}` : money(adjustment, currency)}
+                    </span>
+                  </div>
+                ) : null}
+
                 <div style={{ ...line, borderBottom: "none" }}>
                   <span style={{ fontWeight: 1000, color: "#0b1220" }}>Total</span>
-                  <span style={{ fontWeight: 1100, color: "#0b1220" }}>{money(total)}</span>
+                  <span style={{ fontWeight: 1100, color: "#0b1220" }}>{money(total, currency)}</span>
                 </div>
               </div>
             </div>
 
-            {/* Footer */}
             <div style={{ marginTop: 14, ...footerBox }}>
               <div style={{ fontWeight: 1000, color: "#0b1220" }}>Need help?</div>
-              <div style={{ marginTop: 6, fontWeight: 850, color: "rgba(17,24,39,0.70)", lineHeight: 1.5 }}>
-                This invoice is generated automatically for your order. Use “Print / Save PDF” to download.
-                <br />
-                <span style={{ color: "rgba(17,24,39,0.60)" }}>
-                  Support: support@homyfood.com • For food safety, refunds may not be available once preparation begins.
-                </span>
+              <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.70)", lineHeight: 1.5 }}>
+                support@homyfood.com
               </div>
             </div>
           </div>
@@ -520,6 +742,7 @@ export default function RestaurantInvoicePage() {
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={pill}>Invoice • Restaurant</div>
                   <div style={{ ...pillPending }}>LOADING</div>
+                  <div style={pill}>Currency: {DEFAULT_CURRENCY}</div>
                 </div>
                 <h1 style={title}>Order Invoice</h1>
                 <div style={sub}>Preparing invoice…</div>

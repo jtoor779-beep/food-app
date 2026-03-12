@@ -67,6 +67,30 @@ async function trySaveWithVariants({ table, mode, matchEq, basePayload, variants
   return { ok: false, error: lastErr };
 }
 
+// ✅ Insert and return created row id (safe: if select not supported, it will throw and we fallback)
+async function tryInsertReturningIdWithVariants({ table, basePayload, variants }) {
+  let lastErr = null;
+
+  for (const extra of variants) {
+    try {
+      const payload = { ...basePayload, ...(extra || {}) };
+      const { data, error } = await supabase
+        .from(table)
+        .insert(payload)
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      const id = data?.id;
+      if (!id) throw new Error("Insert succeeded but could not read inserted id.");
+      return { ok: true, id };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  return { ok: false, error: lastErr };
+}
+
 export default function GroceryOwnerItemsPage() {
   const router = useRouter();
   const fileRef = useRef(null);
@@ -126,7 +150,23 @@ export default function GroceryOwnerItemsPage() {
   const [isBestSeller, setIsBestSeller] = useState(false);
   const [isRecommended, setIsRecommended] = useState(false);
 
+  // ✅ NEW: Taxable toggle (default YES)
+  const [isTaxable, setIsTaxable] = useState(true);
+
   const [editingId, setEditingId] = useState("");
+
+  /* =========================================================
+     ✅ NEW: Weight / Variant options (lbs, kg, pack)
+     - Safe: if you don't add variants, old price logic stays.
+     - We will save variants into table "grocery_item_variants" if it exists.
+     ========================================================= */
+  const [variantUnit, setVariantUnit] = useState("lb"); // lb | kg | pcs | pack
+  const [variantLabel, setVariantLabel] = useState(""); // e.g. "1"
+  const [variantPrice, setVariantPrice] = useState(""); // e.g. "20"
+  const [variantInStock, setVariantInStock] = useState(true);
+
+  // array of { label: "1 lb", unit: "lb", value: 1, price: 20, in_stock: true, is_default: boolean }
+  const [weightOptions, setWeightOptions] = useState([]);
 
   const canAccess = useMemo(() => {
     return role === "grocery_owner" || role === "admin";
@@ -143,6 +183,14 @@ export default function GroceryOwnerItemsPage() {
   const storeDisabled = useMemo(() => {
     return !!activeStore?.is_disabled;
   }, [activeStore]);
+
+  // ✅ normalize taxable from item row (default true)
+  function isTaxableRow(it) {
+    if (typeof it?.is_taxable === "boolean") return it.is_taxable;
+    const s = String(it?.is_taxable ?? it?.taxable ?? "").toLowerCase();
+    if (s === "false" || s === "0" || s === "no") return false;
+    return true;
+  }
 
   // ===== Stats =====
   const stats = useMemo(() => {
@@ -203,6 +251,14 @@ export default function GroceryOwnerItemsPage() {
     setSortBy("newest");
   }
 
+  function resetVariantsUI() {
+    setVariantUnit("lb");
+    setVariantLabel("");
+    setVariantPrice("");
+    setVariantInStock(true);
+    setWeightOptions([]);
+  }
+
   function resetForm() {
     setEditingId("");
     setName("");
@@ -216,6 +272,12 @@ export default function GroceryOwnerItemsPage() {
     setIsVeg(false);
     setIsBestSeller(false);
     setIsRecommended(false);
+
+    // ✅ default taxable ON
+    setIsTaxable(true);
+
+    // ✅ variants reset
+    resetVariantsUI();
   }
 
   function closeModal() {
@@ -233,6 +295,40 @@ export default function GroceryOwnerItemsPage() {
     setShowModal(true);
   }
 
+  // ✅ load variants for editing (safe: if table doesn't exist, ignore)
+  async function loadItemVariants(itemId) {
+    if (!itemId) return;
+    try {
+      const { data, error } = await supabase
+        .from("grocery_item_variants")
+        .select("id, item_id, label, unit, value, price, in_stock, is_default, sort_order, created_at")
+        .eq("item_id", itemId)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      const list = Array.isArray(data) ? data : [];
+      const mapped = list.map((v) => ({
+        id: v.id,
+        label: clean(v.label),
+        unit: clean(v.unit) || "lb",
+        value: Number(v.value || 0) || 0,
+        price: Number(v.price || 0) || 0,
+        in_stock: typeof v.in_stock === "boolean" ? v.in_stock : true,
+        is_default: !!v.is_default,
+        sort_order: Number(v.sort_order || 0) || 0,
+      }));
+
+      // Pick a unit for UI from first variant
+      if (mapped?.[0]?.unit) setVariantUnit(mapped[0].unit);
+      setWeightOptions(mapped.length ? mapped : []);
+    } catch (e) {
+      // If table missing, just ignore (keep old behavior)
+      setWeightOptions([]);
+    }
+  }
+
   function openEdit(row) {
     setEditingId(row?.id || "");
     setName(row?.name || "");
@@ -245,6 +341,9 @@ export default function GroceryOwnerItemsPage() {
     setIsBestSeller(!!row?.is_best_seller);
     setIsRecommended(!!row?.is_recommended);
 
+    // ✅ Taxable: default true if not present
+    setIsTaxable(isTaxableRow(row));
+
     // If your grocery_items table contains category as string (it does), try to map it back to a category id by name
     const catName = clean(row?.category);
     if (catName) {
@@ -256,9 +355,84 @@ export default function GroceryOwnerItemsPage() {
     }
     setSelectedSubId("");
 
+    // ✅ load variants for this item (safe)
+    resetVariantsUI();
+    loadItemVariants(row?.id);
+
     setInfoMsg("");
     setErrMsg("");
     setShowModal(true);
+  }
+
+  /* =========================
+     Variant UI actions
+     ========================= */
+  function buildVariantLabel(value, unit) {
+    const v = clean(value);
+    const u = clean(unit) || "lb";
+    if (!v) return "";
+    return `${v} ${u}`;
+  }
+
+  function addWeightOption() {
+    setErrMsg("");
+    setInfoMsg("");
+
+    const v = Number(variantLabel);
+    if (!Number.isFinite(v) || v <= 0) {
+      setErrMsg("Enter a valid weight number (e.g. 1, 2, 5).");
+      return;
+    }
+    const p = Number(variantPrice);
+    if (!Number.isFinite(p) || p < 0) {
+      setErrMsg("Enter a valid variant price.");
+      return;
+    }
+
+    const unit = clean(variantUnit) || "lb";
+    const label = buildVariantLabel(v, unit);
+
+    // prevent duplicates
+    const exists = (weightOptions || []).some((x) => clean(x.label).toLowerCase() === label.toLowerCase());
+    if (exists) {
+      setErrMsg("This weight option already exists.");
+      return;
+    }
+
+    const next = [
+      ...(weightOptions || []),
+      {
+        id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        label,
+        unit,
+        value: v,
+        price: p,
+        in_stock: !!variantInStock,
+        is_default: (weightOptions || []).length === 0, // first one default automatically
+        sort_order: (weightOptions || []).length,
+      },
+    ];
+
+    setWeightOptions(next);
+
+    // clear inputs but keep unit
+    setVariantLabel("");
+    setVariantPrice("");
+    setVariantInStock(true);
+  }
+
+  function removeWeightOption(localId) {
+    const next = (weightOptions || []).filter((x) => x.id !== localId);
+    // ensure at least one default if list not empty
+    if (next.length > 0 && !next.some((x) => x.is_default)) {
+      next[0].is_default = true;
+    }
+    setWeightOptions(next.map((x, idx) => ({ ...x, sort_order: idx })));
+  }
+
+  function setDefaultWeightOption(localId) {
+    const next = (weightOptions || []).map((x) => ({ ...x, is_default: x.id === localId }));
+    setWeightOptions(next);
   }
 
   /* =========================
@@ -335,17 +509,43 @@ export default function GroceryOwnerItemsPage() {
     setErrMsg("");
 
     try {
-      // IMPORTANT: do NOT select columns that don't exist (like subcategory)
-      const { data, error } = await supabase
+      // ✅ Try selecting is_taxable (if column exists). If not, fallback safely.
+      const selectWithTax =
+        "id, store_id, name, description, price, image_url, category, is_available, in_stock, is_veg, is_best_seller, is_recommended, is_taxable, created_at";
+
+      const selectNoTax =
+        "id, store_id, name, description, price, image_url, category, is_available, in_stock, is_veg, is_best_seller, is_recommended, created_at";
+
+      let data = null;
+      let error = null;
+
+      const r1 = await supabase
         .from("grocery_items")
-        .select(
-          "id, store_id, name, description, price, image_url, category, is_available, in_stock, is_veg, is_best_seller, is_recommended, created_at"
-        )
+        .select(selectWithTax)
         .eq("store_id", sid)
         .order("created_at", { ascending: false });
+      data = r1.data;
+      error = r1.error;
 
-      if (error) throw error;
-      setItems(Array.isArray(data) ? data : []);
+      if (error) {
+        const msg = String(error?.message || "").toLowerCase();
+        if (
+          msg.includes("is_taxable") &&
+          (msg.includes("does not exist") || msg.includes("column") || msg.includes("unknown"))
+        ) {
+          const r2 = await supabase
+            .from("grocery_items")
+            .select(selectNoTax)
+            .eq("store_id", sid)
+            .order("created_at", { ascending: false });
+          if (r2.error) throw r2.error;
+          setItems(Array.isArray(r2.data) ? r2.data : []);
+        } else {
+          throw error;
+        }
+      } else {
+        setItems(Array.isArray(data) ? data : []);
+      }
     } catch (e) {
       setErrMsg(e?.message || String(e));
       setItems([]);
@@ -387,7 +587,6 @@ export default function GroceryOwnerItemsPage() {
       }
     } catch (e) {
       setCategories([]);
-      // don't kill whole page
       setErrMsg(e?.message || String(e));
     } finally {
       setCatsLoading(false);
@@ -435,7 +634,6 @@ export default function GroceryOwnerItemsPage() {
     setInfoMsg("");
 
     try {
-      // slug is required in your DB (NOT NULL)
       const { error } = await supabase.from("grocery_categories").insert({
         store_id: storeId,
         name: nm,
@@ -447,11 +645,8 @@ export default function GroceryOwnerItemsPage() {
       setInfoMsg("✅ Category created");
       setNewCatName("");
 
-      // refresh categories and make the newest one selected if we can
       await loadCategoriesForStore(storeId, { keepSelection: false });
 
-      // after reload, try selecting the created category by slug/name
-      // (best effort)
       const { data: cats2 } = await supabase
         .from("grocery_categories")
         .select("id, name, slug, created_at")
@@ -460,7 +655,9 @@ export default function GroceryOwnerItemsPage() {
         .limit(10);
 
       const match = (cats2 || []).find(
-        (c) => String(c.slug || "").toLowerCase() === slug.toLowerCase() || String(c.name || "").toLowerCase() === nm.toLowerCase()
+        (c) =>
+          String(c.slug || "").toLowerCase() === slug.toLowerCase() ||
+          String(c.name || "").toLowerCase() === nm.toLowerCase()
       );
       if (match?.id) setManageCatId(match.id);
     } catch (e) {
@@ -484,7 +681,6 @@ export default function GroceryOwnerItemsPage() {
     setInfoMsg("");
 
     try {
-      // Many DBs also require slug here, so we include it
       const { error } = await supabase.from("grocery_subcategories").insert({
         store_id: storeId,
         category_id: manageCatId,
@@ -501,6 +697,45 @@ export default function GroceryOwnerItemsPage() {
       setErrMsg(e?.message || String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /* =========================
+     ✅ Save variants (safe)
+     ========================= */
+  async function saveVariantsForItem(itemId) {
+    const list = Array.isArray(weightOptions) ? weightOptions : [];
+    if (!itemId) return;
+    if (list.length === 0) return;
+
+    const sorted = [...list].sort(
+      (a, b) => (Number(a.sort_order || 0) || 0) - (Number(b.sort_order || 0) || 0)
+    );
+    const hasDefault = sorted.some((x) => !!x.is_default);
+    if (!hasDefault && sorted.length > 0) sorted[0].is_default = true;
+
+    const payload = sorted.map((x, idx) => ({
+      item_id: itemId,
+      label: clean(x.label),
+      unit: clean(x.unit) || "lb",
+      value: Number(x.value || 0) || 0,
+      price: Number(x.price || 0) || 0,
+      in_stock: typeof x.in_stock === "boolean" ? x.in_stock : true,
+      is_default: !!x.is_default,
+      sort_order: idx,
+    }));
+
+    try {
+      const del = await supabase.from("grocery_item_variants").delete().eq("item_id", itemId);
+      if (del.error) throw del.error;
+
+      const ins = await supabase.from("grocery_item_variants").insert(payload);
+      if (ins.error) throw ins.error;
+    } catch (e) {
+      throw new Error(
+        (e?.message || String(e)) +
+          " | Variants table not ready. Create table: grocery_item_variants (I will give you SQL)."
+      );
     }
   }
 
@@ -522,6 +757,14 @@ export default function GroceryOwnerItemsPage() {
     const p = Number(price || 0);
     if (Number.isNaN(p) || p < 0) return setErrMsg("Price must be a valid number.");
 
+    if (Array.isArray(weightOptions) && weightOptions.length > 0) {
+      const bad = weightOptions.some(
+        (x) =>
+          !Number.isFinite(Number(x.price)) || Number(x.price) < 0 || !clean(x.label)
+      );
+      if (bad) return setErrMsg("Please fix weight options: label & price must be valid.");
+    }
+
     setBusy(true);
 
     try {
@@ -531,7 +774,7 @@ export default function GroceryOwnerItemsPage() {
         description: clean(description),
         price: p,
         image_url: clean(imageUrl),
-        category: catName, // keeps compatibility with your current grocery_items schema
+        category: catName,
         is_available: !!isAvailable,
         in_stock: !!inStock,
         is_veg: !!isVeg,
@@ -539,21 +782,26 @@ export default function GroceryOwnerItemsPage() {
         is_recommended: !!isRecommended,
       };
 
-      // Optional subcategory linking:
-      // - Your grocery_items table currently DOES NOT have "subcategory" column (as error shows)
-      // - So we try saving subcategory_id (if exists), then subcategory (if exists), else none
       const subObj = (subcategories || []).find((s) => s.id === selectedSubId);
       const subName = clean(subObj?.name);
 
-      const variants = [
-        selectedSubId ? { subcategory_id: selectedSubId } : {}, // if column exists
-        subName ? { subcategory: subName } : {}, // if column exists
-        {}, // no subcategory at all
+      const subVariants = [
+        selectedSubId ? { subcategory_id: selectedSubId } : {},
+        subName ? { subcategory: subName } : {},
+        {},
       ];
 
-      let res;
+      const taxVariants = [{ is_taxable: !!isTaxable }, {}];
+
+      const variants = [];
+      for (const sv of subVariants) {
+        for (const tv of taxVariants) {
+          variants.push({ ...(sv || {}), ...(tv || {}) });
+        }
+      }
+
       if (editingId) {
-        res = await trySaveWithVariants({
+        const res = await trySaveWithVariants({
           table: "grocery_items",
           mode: "update",
           matchEq: { col: "id", val: editingId },
@@ -561,16 +809,44 @@ export default function GroceryOwnerItemsPage() {
           variants,
         });
         if (!res.ok) throw res.error;
+
+        if (Array.isArray(weightOptions) && weightOptions.length > 0) {
+          await saveVariantsForItem(editingId);
+        }
+
         setInfoMsg("✅ Item updated");
       } else {
-        res = await trySaveWithVariants({
+        const ins = await tryInsertReturningIdWithVariants({
           table: "grocery_items",
-          mode: "insert",
           basePayload,
           variants,
         });
-        if (!res.ok) throw res.error;
-        setInfoMsg("✅ Item added");
+
+        if (!ins.ok) {
+          const res = await trySaveWithVariants({
+            table: "grocery_items",
+            mode: "insert",
+            basePayload,
+            variants,
+          });
+          if (!res.ok) throw res.error;
+
+          if (Array.isArray(weightOptions) && weightOptions.length > 0) {
+            setErrMsg(
+              "Item saved but variants could not be linked (could not read inserted id). We will fix by ensuring grocery_item_variants table exists + insert returns id."
+            );
+          } else {
+            setInfoMsg("✅ Item added");
+          }
+        } else {
+          const newId = ins.id;
+
+          if (Array.isArray(weightOptions) && weightOptions.length > 0) {
+            await saveVariantsForItem(newId);
+          }
+
+          setInfoMsg("✅ Item added");
+        }
       }
 
       resetForm();
@@ -595,6 +871,11 @@ export default function GroceryOwnerItemsPage() {
     try {
       const { error } = await supabase.from("grocery_items").delete().eq("id", id);
       if (error) throw error;
+
+      try {
+        await supabase.from("grocery_item_variants").delete().eq("item_id", id);
+      } catch {}
+
       setInfoMsg("🗑️ Item deleted");
       await loadItems(storeId);
     } catch (e) {
@@ -632,7 +913,6 @@ export default function GroceryOwnerItemsPage() {
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
     const path = `${safeIdPart(storeId)}/${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`;
 
-    // Try grocery-images first, then fallback to menu-images
     const bucketsToTry = ["grocery-images", "menu-images"];
 
     try {
@@ -687,7 +967,6 @@ export default function GroceryOwnerItemsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // when store changes, load items + categories
   useEffect(() => {
     if (!storeId) {
       setItems([]);
@@ -701,7 +980,6 @@ export default function GroceryOwnerItemsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 
-  // ensure storeId stays valid
   useEffect(() => {
     if (stores.length > 0 && storeId) {
       const exists = stores.some((s) => s.id === storeId);
@@ -711,28 +989,21 @@ export default function GroceryOwnerItemsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stores]);
 
-  // when manageCatId changes, load subcategories for that category
   useEffect(() => {
     if (!storeId || !manageCatId) {
       setSubcategories([]);
       return;
     }
     loadSubcategoriesForCategory(storeId, manageCatId);
-
-    // Also, if Add Item modal is open and category matches manageCatId, keep in sync
-    // (but don't force changing user's selection)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId, manageCatId]);
 
-  // when user selects category inside modal, load subcategories for that category and reset sub selection
   useEffect(() => {
     if (!storeId || !selectedCatId) {
       setSelectedSubId("");
       return;
     }
-    // load subcategories for selected category
     loadSubcategoriesForCategory(storeId, selectedCatId);
-    // reset selected sub
     setSelectedSubId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId, selectedCatId]);
@@ -749,7 +1020,8 @@ export default function GroceryOwnerItemsPage() {
 
   return (
     <main style={pageBg}>
-      <div style={{ Width: "100", margin: "0 auto" }}>
+      {/* ✅ FIX: width spelling + 100% */}
+      <div style={{ width: "100%", maxWidth: 1200, margin: "0 auto" }}>
         {/* ===== HERO ===== */}
         <div style={heroGlass}>
           <div>
@@ -769,6 +1041,7 @@ export default function GroceryOwnerItemsPage() {
               </Link>
 
               <button
+                type="button"
                 onClick={openAdd}
                 style={btnPillDark}
                 disabled={!storeId || !storeApproved || storeDisabled || busy}
@@ -798,6 +1071,7 @@ export default function GroceryOwnerItemsPage() {
                 View Grocery Stores
               </Link>
               <button
+                type="button"
                 onClick={() => {
                   if (storeId) {
                     loadItems(storeId);
@@ -814,8 +1088,15 @@ export default function GroceryOwnerItemsPage() {
             </div>
 
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontWeight: 950, color: "#0b1220", marginBottom: 6 }}>Switch Store (Owner only)</div>
-              <select value={storeId} onChange={(e) => setStoreId(e.target.value)} style={input} disabled={busy}>
+              <div style={{ fontWeight: 950, color: "#0b1220", marginBottom: 6 }}>
+                Switch Store (Owner only)
+              </div>
+              <select
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                style={input}
+                disabled={busy}
+              >
                 <option value="">-- Select --</option>
                 {stores.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -855,11 +1136,9 @@ export default function GroceryOwnerItemsPage() {
           </div>
         </div>
 
-        {/* Alerts */}
         {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
         {infoMsg ? <div style={alertOk}>{infoMsg}</div> : null}
 
-        {/* Identity bar */}
         <div style={identityBar}>
           <span style={pillThin}>Owner: {email || "-"}</span>
           <span style={pillThin}>Role: {role || "-"}</span>
@@ -867,7 +1146,7 @@ export default function GroceryOwnerItemsPage() {
           <span style={pillThin}>Store ID: {storeId || "-"}</span>
         </div>
 
-        {/* ===== Categories & Subcategories (CLEAN SEPARATE SECTION) ===== */}
+        {/* ===== Categories & Subcategories ===== */}
         <div style={panelGlass}>
           <div style={panelHeaderRow}>
             <div>
@@ -878,6 +1157,7 @@ export default function GroceryOwnerItemsPage() {
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button
+                type="button"
                 onClick={() => {
                   if (storeId) loadCategoriesForStore(storeId);
                   if (storeId && manageCatId) loadSubcategoriesForCategory(storeId, manageCatId);
@@ -892,7 +1172,6 @@ export default function GroceryOwnerItemsPage() {
           </div>
 
           <div style={twoColGrid}>
-            {/* Left: Create Category + Category dropdown */}
             <div style={miniPanel}>
               <div style={miniPanelTitle}>Create Category</div>
 
@@ -905,6 +1184,7 @@ export default function GroceryOwnerItemsPage() {
                   disabled={!storeId || busy}
                 />
                 <button
+                  type="button"
                   onClick={createCategory}
                   style={btnPillDark}
                   disabled={!storeId || busy || !clean(newCatName)}
@@ -917,6 +1197,7 @@ export default function GroceryOwnerItemsPage() {
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={miniPanelTitle}>All Categories</div>
                 <button
+                  type="button"
                   onClick={() => (storeId ? loadCategoriesForStore(storeId) : null)}
                   style={btnTiny}
                   disabled={!storeId || catsLoading || busy}
@@ -948,7 +1229,6 @@ export default function GroceryOwnerItemsPage() {
               </div>
             </div>
 
-            {/* Right: Create Subcategory inside selected category */}
             <div style={miniPanel}>
               <div style={miniPanelTitle}>Create Subcategory (inside selected category)</div>
 
@@ -961,6 +1241,7 @@ export default function GroceryOwnerItemsPage() {
                   disabled={!storeId || !manageCatId || busy}
                 />
                 <button
+                  type="button"
                   onClick={createSubcategory}
                   style={btnPillDark}
                   disabled={!storeId || !manageCatId || busy || !clean(newSubName)}
@@ -973,6 +1254,7 @@ export default function GroceryOwnerItemsPage() {
               <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={miniPanelTitle}>Subcategories</div>
                 <button
+                  type="button"
                   onClick={() => (storeId && manageCatId ? loadSubcategoriesForCategory(storeId, manageCatId) : null)}
                   style={btnTiny}
                   disabled={!storeId || !manageCatId || subsLoading || busy}
@@ -1007,6 +1289,12 @@ export default function GroceryOwnerItemsPage() {
             <span style={notePill}>
               Note: Your <b>grocery_items</b> table doesn’t have “subcategory” column. We safely save subcategory only if your DB supports it.
             </span>
+            <span style={notePill}>
+              Note: Tax toggle saves to <b>grocery_items.is_taxable</b> if your DB has that column (safe fallback if not).
+            </span>
+            <span style={notePill}>
+              NEW: Weight options save to <b>grocery_item_variants</b> (safe; won’t break if missing).
+            </span>
           </div>
         </div>
 
@@ -1036,7 +1324,7 @@ export default function GroceryOwnerItemsPage() {
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={panelTitle}>Search</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <button onClick={resetFilters} style={btnSmallOutline} disabled={busy}>
+              <button type="button" onClick={resetFilters} style={btnSmallOutline} disabled={busy}>
                 Reset
               </button>
               <span style={tag}>Showing: {showingCount} items</span>
@@ -1059,13 +1347,13 @@ export default function GroceryOwnerItemsPage() {
             <div style={filterGroup}>
               <div style={filterTitle}>Veg / Non-Veg</div>
               <div style={filterRow}>
-                <button onClick={() => setVegFilter("all")} style={vegFilter === "all" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setVegFilter("all")} style={vegFilter === "all" ? filterBtnOn : filterBtnOff}>
                   All
                 </button>
-                <button onClick={() => setVegFilter("veg")} style={vegFilter === "veg" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setVegFilter("veg")} style={vegFilter === "veg" ? filterBtnOn : filterBtnOff}>
                   Veg
                 </button>
-                <button onClick={() => setVegFilter("nonveg")} style={vegFilter === "nonveg" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setVegFilter("nonveg")} style={vegFilter === "nonveg" ? filterBtnOn : filterBtnOff}>
                   Non-Veg
                 </button>
               </div>
@@ -1074,28 +1362,28 @@ export default function GroceryOwnerItemsPage() {
             <div style={filterGroup}>
               <div style={filterTitle}>Stock / Best Seller</div>
               <div style={filterRow}>
-                <button onClick={() => setStockFilter("all")} style={stockFilter === "all" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("all")} style={stockFilter === "all" ? filterBtnOn : filterBtnOff}>
                   All Stock
                 </button>
-                <button onClick={() => setStockFilter("instock")} style={stockFilter === "instock" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("instock")} style={stockFilter === "instock" ? filterBtnOn : filterBtnOff}>
                   In Stock
                 </button>
-                <button onClick={() => setStockFilter("out")} style={stockFilter === "out" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("out")} style={stockFilter === "out" ? filterBtnOn : filterBtnOff}>
                   Out
                 </button>
-                <button onClick={() => setStockFilter("best")} style={stockFilter === "best" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("best")} style={stockFilter === "best" ? filterBtnOn : filterBtnOff}>
                   Best
                 </button>
-                <button onClick={() => setStockFilter("rec")} style={stockFilter === "rec" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("rec")} style={stockFilter === "rec" ? filterBtnOn : filterBtnOff}>
                   Rec
                 </button>
               </div>
 
               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button onClick={() => setStockFilter("available")} style={stockFilter === "available" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("available")} style={stockFilter === "available" ? filterBtnOn : filterBtnOff}>
                   Available
                 </button>
-                <button onClick={() => setStockFilter("hidden")} style={stockFilter === "hidden" ? filterBtnOn : filterBtnOff}>
+                <button type="button" onClick={() => setStockFilter("hidden")} style={stockFilter === "hidden" ? filterBtnOn : filterBtnOff}>
                   Hidden
                 </button>
               </div>
@@ -1110,7 +1398,7 @@ export default function GroceryOwnerItemsPage() {
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <span style={tag}>Showing: {showingCount}</span>
-              <button onClick={() => loadItems(storeId)} style={chip} disabled={busy || !storeId}>
+              <button type="button" onClick={() => loadItems(storeId)} style={chip} disabled={busy || !storeId}>
                 Refresh
               </button>
             </div>
@@ -1143,7 +1431,9 @@ export default function GroceryOwnerItemsPage() {
                   </div>
 
                   <div style={{ padding: 12 }}>
-                    <div style={{ fontSize: 16, fontWeight: 1000, color: "#0b1220" }}>{it.name || "Item"}</div>
+                    <div style={{ fontSize: 16, fontWeight: 1000, color: "#0b1220" }}>
+                      {it.name || "Item"}
+                    </div>
 
                     {it.description ? (
                       <div style={{ marginTop: 6, color: "rgba(17,24,39,0.7)", fontWeight: 800, fontSize: 12 }}>
@@ -1152,23 +1442,31 @@ export default function GroceryOwnerItemsPage() {
                     ) : null}
 
                     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <span style={it.is_available ? openPill : closedPill}>{it.is_available ? "Available" : "Hidden"}</span>
-                      <span style={it.in_stock ? openPill : closedPill}>{it.in_stock ? "In stock" : "Out of stock"}</span>
+                      <span style={it.is_available ? openPill : closedPill}>
+                        {it.is_available ? "Available" : "Hidden"}
+                      </span>
+                      <span style={it.in_stock ? openPill : closedPill}>
+                        {it.in_stock ? "In stock" : "Out of stock"}
+                      </span>
                       {it.is_veg ? <span style={tag}>Veg</span> : null}
                       {it.is_best_seller ? <span style={tagStrong}>Best</span> : null}
                       {it.is_recommended ? <span style={tagStrong}>Rec</span> : null}
+                      {typeof it?.is_taxable === "boolean" ? (
+                        isTaxableRow(it) ? <span style={tagStrong}>Taxable</span> : <span style={tag}>Non-Tax</span>
+                      ) : null}
                     </div>
 
                     <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button onClick={() => openEdit(it)} style={btnSmallOutline} disabled={busy}>
+                      <button type="button" onClick={() => openEdit(it)} style={btnSmallOutline} disabled={busy}>
                         Edit
                       </button>
 
-                      <button onClick={() => deleteItem(it.id)} style={btnSmallDanger} disabled={busy}>
+                      <button type="button" onClick={() => deleteItem(it.id)} style={btnSmallDanger} disabled={busy}>
                         Delete
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => quickToggle(it.id, { is_available: !it.is_available })}
                         style={chip}
                         disabled={busy}
@@ -1178,6 +1476,7 @@ export default function GroceryOwnerItemsPage() {
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => quickToggle(it.id, { in_stock: !it.in_stock })}
                         style={chip}
                         disabled={busy}
@@ -1209,17 +1508,20 @@ export default function GroceryOwnerItemsPage() {
           <div style={modalCard}>
             <div style={modalHeader}>
               <div>
-                <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }}>{editingId ? "Edit Item" : "Add Item"}</div>
+                <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }}>
+                  {editingId ? "Edit Item" : "Add Item"}
+                </div>
                 <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.62)" }}>
                   Store: {activeStore?.name || "-"} • Upload bucket: grocery-images (fallback menu-images)
                 </div>
               </div>
 
-              <button onClick={closeModal} style={iconBtn} disabled={busy || uploading} aria-label="Close">
+              <button type="button" onClick={closeModal} style={iconBtn} disabled={busy || uploading} aria-label="Close">
                 ✕
               </button>
             </div>
 
+            {/* ✅ FIX: modalBody scroll + always visible footer */}
             <div style={modalBody}>
               <div style={modalGrid}>
                 <div>
@@ -1228,19 +1530,108 @@ export default function GroceryOwnerItemsPage() {
                 </div>
 
                 <div>
-                  <div style={label}>Price *</div>
+                  <div style={label}>Base Price *</div>
                   <input value={price} onChange={(e) => setPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
+                  <div style={hintSmall}>Base price is used if you don’t add weight options.</div>
                 </div>
 
-                {/* Category/Subcategory selection ONLY dropdown (no typing) */}
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div style={variantBox}>
+                    <div style={variantTopRow}>
+                      <div>
+                        <div style={{ fontWeight: 1000, color: "#0b1220" }}>Weight Options (Pro)</div>
+                        <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.62)" }}>
+                          Add multiple weights (lb/kg/etc). Customer will select one on product page.
+                        </div>
+                      </div>
+                      <span style={tag}>Optional ✅</span>
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "140px 120px 1fr 160px 120px", gap: 10, alignItems: "end" }}>
+                      <div>
+                        <div style={label}>Unit</div>
+                        <select value={variantUnit} onChange={(e) => setVariantUnit(e.target.value)} style={input} disabled={busy}>
+                          <option value="lb">lb</option>
+                          <option value="kg">kg</option>
+                          <option value="pcs">pcs</option>
+                          <option value="pack">pack</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div style={label}>Value</div>
+                        <input value={variantLabel} onChange={(e) => setVariantLabel(e.target.value)} style={input} placeholder="1" inputMode="decimal" disabled={busy} />
+                      </div>
+
+                      <div>
+                        <div style={label}>Label Preview</div>
+                        <div style={variantPreview}>
+                          {variantLabel ? buildVariantLabel(variantLabel, variantUnit) : <span style={{ opacity: 0.65 }}>e.g. 1 lb</span>}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={label}>Price</div>
+                        <input value={variantPrice} onChange={(e) => setVariantPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" disabled={busy} />
+                      </div>
+
+                      <div>
+                        <div style={label}>Stock</div>
+                        <select value={variantInStock ? "yes" : "no"} onChange={(e) => setVariantInStock(e.target.value === "yes")} style={input} disabled={busy}>
+                          <option value="yes">In stock</option>
+                          <option value="no">Out</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <button type="button" onClick={addWeightOption} style={btnSmallOutline} disabled={busy}>
+                        + Add Option
+                      </button>
+                      {weightOptions.length ? (
+                        <button type="button" onClick={resetVariantsUI} style={btnSmallDanger} disabled={busy}>
+                          Clear Options
+                        </button>
+                      ) : null}
+                      <div style={{ marginLeft: "auto", fontWeight: 900, color: "rgba(17,24,39,0.65)", fontSize: 12 }}>
+                        Options: <b>{weightOptions.length}</b>
+                      </div>
+                    </div>
+
+                    {weightOptions.length ? (
+                      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                        {weightOptions.map((o) => (
+                          <div key={o.id} style={variantRow}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                              <span style={o.is_default ? tagStrong : tag}>{o.label}</span>
+                              <span style={tag}>{money(o.price)}</span>
+                              <span style={o.in_stock ? openPill : closedPill}>{o.in_stock ? "In stock" : "Out"}</span>
+                              {o.is_default ? <span style={tagStrong}>Default</span> : <span style={tag}>Not default</span>}
+                            </div>
+
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                              <button type="button" onClick={() => setDefaultWeightOption(o.id)} style={btnTiny} disabled={busy}>
+                                Set Default
+                              </button>
+                              <button type="button" onClick={() => removeWeightOption(o.id)} style={btnTinyDanger} disabled={busy}>
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={hintSmall}>
+                          Save will store these options in <b>grocery_item_variants</b>. If table doesn’t exist, item still saves but variants won’t.
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={hintSmall}>No weight options added. Customer will just see base price.</div>
+                    )}
+                  </div>
+                </div>
+
                 <div>
                   <div style={label}>Category *</div>
-                  <select
-                    value={selectedCatId}
-                    onChange={(e) => setSelectedCatId(e.target.value)}
-                    style={input}
-                    disabled={!storeId || busy}
-                  >
+                  <select value={selectedCatId} onChange={(e) => setSelectedCatId(e.target.value)} style={input} disabled={!storeId || busy}>
                     <option value="">-- Select Category --</option>
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -1253,12 +1644,7 @@ export default function GroceryOwnerItemsPage() {
 
                 <div>
                   <div style={label}>Subcategory (optional)</div>
-                  <select
-                    value={selectedSubId}
-                    onChange={(e) => setSelectedSubId(e.target.value)}
-                    style={input}
-                    disabled={!storeId || !selectedCatId || busy}
-                  >
+                  <select value={selectedSubId} onChange={(e) => setSelectedSubId(e.target.value)} style={input} disabled={!storeId || !selectedCatId || busy}>
                     <option value="">-- Select Subcategory --</option>
                     {(subcategories || []).map((s) => (
                       <option key={s.id} value={s.id}>
@@ -1271,16 +1657,9 @@ export default function GroceryOwnerItemsPage() {
 
                 <div style={{ gridColumn: "1 / -1" }}>
                   <div style={label}>Description</div>
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    style={textarea}
-                    placeholder="Short description…"
-                    rows={3}
-                  />
+                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={textarea} placeholder="Short description…" rows={3} />
                 </div>
 
-                {/* Image section */}
                 <div style={{ gridColumn: "1 / -1" }}>
                   <div style={imgSection}>
                     <div>
@@ -1297,26 +1676,13 @@ export default function GroceryOwnerItemsPage() {
                     </div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-end" }}>
-                      <input
-                        ref={fileRef}
-                        type="file"
-                        accept="image/*"
-                        style={{ display: "none" }}
-                        onChange={(e) => uploadImageFile(e.target.files?.[0])}
-                      />
+                      <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => uploadImageFile(e.target.files?.[0])} />
                       <button
+                        type="button"
                         onClick={() => fileRef.current?.click?.()}
                         style={btnPillDark}
                         disabled={uploading || busy || !storeId || !storeApproved || storeDisabled}
-                        title={
-                          !storeId
-                            ? "Select store first"
-                            : !storeApproved
-                            ? "Store must be approved"
-                            : storeDisabled
-                            ? "Store disabled"
-                            : "Upload image"
-                        }
+                        title={!storeId ? "Select store first" : !storeApproved ? "Store must be approved" : storeDisabled ? "Store disabled" : "Upload image"}
                       >
                         {uploading ? "Uploading…" : "Upload Image"}
                       </button>
@@ -1333,57 +1699,60 @@ export default function GroceryOwnerItemsPage() {
                   </div>
                 </div>
 
-                {/* Toggle buttons */}
                 <div style={{ gridColumn: "1 / -1" }}>
                   <div style={toggleGrid}>
-                    <button onClick={() => setIsVeg(true)} style={isVeg ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsVeg(true)} style={isVeg ? toggleOn : toggleOff} disabled={busy}>
                       Veg
                     </button>
-                    <button onClick={() => setIsVeg(false)} style={!isVeg ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsVeg(false)} style={!isVeg ? toggleOn : toggleOff} disabled={busy}>
                       Non-Veg
                     </button>
 
-                    <button onClick={() => setInStock(true)} style={inStock ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setInStock(true)} style={inStock ? toggleOn : toggleOff} disabled={busy}>
                       In Stock: YES
                     </button>
-                    <button onClick={() => setInStock(false)} style={!inStock ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setInStock(false)} style={!inStock ? toggleOn : toggleOff} disabled={busy}>
                       In Stock: NO
                     </button>
 
-                    <button onClick={() => setIsBestSeller(true)} style={isBestSeller ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsBestSeller(true)} style={isBestSeller ? toggleOn : toggleOff} disabled={busy}>
                       Best Seller: YES
                     </button>
-                    <button onClick={() => setIsBestSeller(false)} style={!isBestSeller ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsBestSeller(false)} style={!isBestSeller ? toggleOn : toggleOff} disabled={busy}>
                       Best Seller: NO
                     </button>
 
-                    <button onClick={() => setIsRecommended(true)} style={isRecommended ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsRecommended(true)} style={isRecommended ? toggleOn : toggleOff} disabled={busy}>
                       Recommended: YES
                     </button>
-                    <button onClick={() => setIsRecommended(false)} style={!isRecommended ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsRecommended(false)} style={!isRecommended ? toggleOn : toggleOff} disabled={busy}>
                       Recommended: NO
                     </button>
 
-                    <button onClick={() => setIsAvailable(true)} style={isAvailable ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsAvailable(true)} style={isAvailable ? toggleOn : toggleOff} disabled={busy}>
                       Available: YES
                     </button>
-                    <button onClick={() => setIsAvailable(false)} style={!isAvailable ? toggleOn : toggleOff} disabled={busy}>
+                    <button type="button" onClick={() => setIsAvailable(false)} style={!isAvailable ? toggleOn : toggleOff} disabled={busy}>
                       Available: NO
+                    </button>
+
+                    <button type="button" onClick={() => setIsTaxable(true)} style={isTaxable ? toggleOn : toggleOff} disabled={busy}>
+                      Tax: YES
+                    </button>
+                    <button type="button" onClick={() => setIsTaxable(false)} style={!isTaxable ? toggleOn : toggleOff} disabled={busy}>
+                      Tax: NO
                     </button>
                   </div>
                 </div>
               </div>
 
               <div style={modalFooter}>
-                <button
-                  onClick={saveItem}
-                  style={btnPrimary}
-                  disabled={busy || uploading || !storeId || !storeApproved || storeDisabled}
-                >
+                <button type="button" onClick={saveItem} style={btnPrimary} disabled={busy || uploading || !storeId || !storeApproved || storeDisabled}>
                   {busy ? "Saving…" : editingId ? "Save Changes" : "Add Item"}
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => {
                     resetForm();
                     setShowModal(false);
@@ -1598,6 +1967,17 @@ const btnTiny = {
   cursor: "pointer",
   fontWeight: 900,
   fontSize: 12,
+};
+
+const btnTinyDanger = {
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(239,68,68,0.25)",
+  background: "rgba(254,242,242,0.95)",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 12,
+  color: "#7f1d1d",
 };
 
 const alertErr = {
@@ -1873,13 +2253,17 @@ const modalOverlay = {
   zIndex: 9999,
 };
 
+/* ✅ FIX: maxHeight + flex so body scroll works */
 const modalCard = {
   width: "min(920px, 96vw)",
+  maxHeight: "92vh",
   borderRadius: 20,
   background: "rgba(255,255,255,0.92)",
   border: "1px solid rgba(0,0,0,0.12)",
   boxShadow: "0 30px 80px rgba(0,0,0,0.25)",
   overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
 };
 
 const modalHeader = {
@@ -1902,8 +2286,11 @@ const iconBtn = {
   fontWeight: 1000,
 };
 
+/* ✅ FIX: scroll inside modal body */
 const modalBody = {
   padding: 14,
+  overflowY: "auto",
+  flex: 1,
 };
 
 const modalGrid = {
@@ -2048,10 +2435,40 @@ const notePill = {
   fontWeight: 850,
 };
 
-const btnPrimaryLink = {
-  ...btnPrimary,
-  textDecoration: "none",
-  display: "inline-flex",
+/* ✅ NEW variant styles */
+const variantBox = {
+  borderRadius: 16,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(255,255,255,0.8)",
+  padding: 12,
+};
+
+const variantTopRow = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const variantPreview = {
+  width: "100%",
+  padding: 10,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.92)",
+  fontWeight: 900,
+  color: "rgba(17,24,39,0.85)",
+};
+
+const variantRow = {
+  borderRadius: 14,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.78)",
+  padding: 10,
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
   alignItems: "center",
-  justifyContent: "center",
 };

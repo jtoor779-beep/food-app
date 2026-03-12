@@ -35,16 +35,173 @@ function safeArr(v) {
   return Array.isArray(v) ? v : [];
 }
 
+/** ✅ NEW: safe pick helper */
+function pick(obj, keys, fallback = "") {
+  for (const k of keys) {
+    const val = obj?.[k];
+    if (val !== undefined && val !== null && String(val).trim() !== "") return val;
+  }
+  return fallback;
+}
+
+/** ✅ NEW (SAFE): deep getter (supports nested paths like "customer.full_name") */
+function dget(obj, path) {
+  try {
+    if (!obj || !path) return undefined;
+    const parts = String(path).split(".").filter(Boolean);
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p];
+    }
+    return cur;
+  } catch {
+    return undefined;
+  }
+}
+
+/** ✅ NEW (SAFE): pick helper that supports normal keys + nested paths */
+function pickDeep(obj, keys, fallback = "") {
+  for (const k of keys) {
+    if (!k) continue;
+
+    // try normal key first
+    const direct = obj?.[k];
+    if (direct !== undefined && direct !== null && String(direct).trim() !== "") return direct;
+
+    // try nested path like "customer.full_name"
+    if (String(k).includes(".")) {
+      const deep = dget(obj, k);
+      if (deep !== undefined && deep !== null && String(deep).trim() !== "") return deep;
+    }
+  }
+  return fallback;
+}
+
+/* =========================
+   ✅ NEW (SAFE): image url helper
+   ========================= */
+function safeImgUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  return s;
+}
+
+/* =========================
+   ✅ Better customer + address detection
+   ========================= */
 function buildAddressFromRow(o) {
-  const a1 = clean(o?.delivery_address || o?.address || o?.address_line1 || "");
-  const a2 = clean(o?.address_line2 || "");
-  const lm = clean(o?.landmark || "");
-  const parts = [a1, a2, lm].filter(Boolean);
+  // Support MANY possible schemas (including nested JSON paths)
+  const a1 = clean(
+    pickDeep(
+      o,
+      [
+        "delivery_address",
+        "customer_address",
+        "address",
+        "address_line1",
+        "drop_address",
+        "shipping_address",
+        "delivery.address",
+        "delivery.address_line1",
+        "delivery.address.line1",
+        "shipping.address",
+        "shipping.address.line1",
+        "customer.address",
+        "customer.address.line1",
+      ],
+      ""
+    )
+  );
+
+  const a2 = clean(
+    pickDeep(
+      o,
+      [
+        "address_line2",
+        "address2",
+        "apt",
+        "unit",
+        "delivery.address_line2",
+        "delivery.address.line2",
+        "shipping.address.line2",
+        "customer.address.line2",
+      ],
+      ""
+    )
+  );
+
+  const lm = clean(pickDeep(o, ["landmark", "nearby", "area", "delivery.landmark", "customer.landmark"], ""));
+  const city = clean(pickDeep(o, ["city", "delivery_city", "delivery.city", "shipping.city", "customer.city"], ""));
+  const state = clean(pickDeep(o, ["state", "delivery_state", "delivery.state", "shipping.state", "customer.state"], ""));
+  const zip = clean(pickDeep(o, ["pincode", "zip", "postal_code", "delivery.zip", "delivery.pincode", "customer.zip"], ""));
+
+  const parts = [a1, a2, lm, city, state, zip].filter(Boolean);
   return parts.join(", ") || "-";
 }
 
 function getPhoneFromRow(o) {
-  return clean(o?.customer_phone || o?.phone || o?.mobile || "");
+  return clean(
+    pickDeep(
+      o,
+      [
+        "customer_phone",
+        "phone",
+        "mobile",
+        "customer_mobile",
+        "delivery_phone",
+        "contact_phone",
+        // nested JSON possibilities
+        "customer.phone",
+        "customer.mobile",
+        "customer.contact.phone",
+        "delivery.phone",
+        "contact.phone",
+      ],
+      ""
+    )
+  );
+}
+
+function getNameFromRow(o) {
+  return clean(
+    pickDeep(
+      o,
+      [
+        "customer_name",
+        "name",
+        "full_name",
+        "delivery_name",
+        "contact_name",
+        // nested JSON possibilities
+        "customer.name",
+        "customer.full_name",
+        "customer.fullName",
+        "delivery.name",
+        "contact.name",
+      ],
+      ""
+    )
+  );
+}
+
+function getEmailFromRow(o) {
+  return clean(
+    pickDeep(
+      o,
+      [
+        "customer_email",
+        "email",
+        "delivery_email",
+        "contact_email",
+        // nested JSON possibilities
+        "customer.email",
+        "delivery.email",
+        "contact.email",
+      ],
+      ""
+    )
+  );
 }
 
 /* =========================
@@ -110,17 +267,8 @@ async function loadOrdersAuto(sid) {
         lastErr = e;
         const msg = e?.message || String(e);
 
-        // If table doesn't exist, skip to next table
-        if (isMissingTableError(msg)) {
-          break; // next table
-        }
-
-        // If column doesn't exist, try next storeIdCol
-        if (isMissingColumnError(msg)) {
-          continue;
-        }
-
-        // Other errors: keep trying
+        if (isMissingTableError(msg)) break; // next table
+        if (isMissingColumnError(msg)) continue; // next storeIdCol
         continue;
       }
     }
@@ -131,7 +279,6 @@ async function loadOrdersAuto(sid) {
 
 /**
  * Load order items in bulk and attach to orders as order_items[]
- * This fixes your "No items array found" problem.
  */
 async function loadOrderItemsAuto(orderIds) {
   const ids = safeArr(orderIds).filter(Boolean);
@@ -140,18 +287,11 @@ async function loadOrderItemsAuto(orderIds) {
   let lastErr = null;
 
   for (const itemsTable of ORDER_ITEMS_TABLE_CANDIDATES) {
-    // try each possible order id column
     for (const orderIdCol of ORDER_ID_COL_CANDIDATES) {
-      // try each possible item id column + qty column
       for (const itemIdCol of ITEM_ID_COL_CANDIDATES) {
         for (const qtyCol of QTY_COL_CANDIDATES) {
           try {
-            // select minimal fields (safe)
-            const { data, error } = await supabase
-              .from(itemsTable)
-              .select("*")
-              .in(orderIdCol, ids);
-
+            const { data, error } = await supabase.from(itemsTable).select("*").in(orderIdCol, ids);
             if (error) throw error;
 
             const rows = safeArr(data);
@@ -160,14 +300,8 @@ async function loadOrderItemsAuto(orderIds) {
             lastErr = e;
             const msg = e?.message || String(e);
 
-            if (isMissingTableError(msg)) {
-              // next items table
-              break;
-            }
-            if (isMissingColumnError(msg)) {
-              // try next column combo
-              continue;
-            }
+            if (isMissingTableError(msg)) break;
+            if (isMissingColumnError(msg)) continue;
             continue;
           }
         }
@@ -175,28 +309,32 @@ async function loadOrderItemsAuto(orderIds) {
     }
   }
 
-  // not fatal; orders can still load
   return { itemsTable: "", orderIdCol: "", itemIdCol: "", qtyCol: "", rows: [] };
 }
 
 /**
- * Optional: get grocery item names in bulk
+ * Get grocery item names in bulk (+ image_url)
  */
 async function loadGroceryItemNamesAuto(itemIds) {
   const ids = safeArr(itemIds).filter(Boolean);
   if (ids.length === 0) return new Map();
 
-  // your table name is grocery_items (seen in your Supabase sidebar)
   try {
     const { data, error } = await supabase
       .from("grocery_items")
-      .select("id, name")
+      .select("id, name, image_url, price")
       .in("id", ids);
 
     if (error) throw error;
 
     const map = new Map();
-    safeArr(data).forEach((r) => map.set(String(r.id), r.name || "Item"));
+    safeArr(data).forEach((r) =>
+      map.set(String(r.id), {
+        name: r.name || "Item",
+        image_url: r.image_url || "",
+        price: r.price,
+      })
+    );
     return map;
   } catch {
     return new Map();
@@ -204,29 +342,116 @@ async function loadGroceryItemNamesAuto(itemIds) {
 }
 
 /**
+ * ✅ NEW: Enrich customer data from profiles (bulk)
+ * Supports multiple possible customer id columns in grocery_orders.
+ */
+async function enrichCustomersFromProfiles(orders) {
+  const list = safeArr(orders);
+
+  // detect possible customer id (including nested)
+  const ids = [];
+  list.forEach((o) => {
+    const cid = pickDeep(
+      o,
+      [
+        "customer_user_id",
+        "customer_id",
+        "user_id",
+        "created_by",
+        "profile_id",
+        // nested JSON possibilities
+        "customer.user_id",
+        "customer.id",
+        "customer.profile_id",
+        "customer.uid",
+      ],
+      ""
+    );
+    if (cid) ids.push(String(cid));
+  });
+
+  const uniq = [...new Set(ids)];
+  if (uniq.length === 0) return list;
+
+  try {
+    // profiles table in your project uses user_id (but we also select id just in case)
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, user_id, full_name, name, phone, mobile, email")
+      .in("user_id", uniq);
+
+    // If some projects use profiles.id instead, we try a second query (SAFE fallback)
+    let mergedProfiles = safeArr(data);
+    if (error || mergedProfiles.length === 0) {
+      // fallback: try matching by profiles.id
+      const { data: data2, error: error2 } = await supabase
+        .from("profiles")
+        .select("id, user_id, full_name, name, phone, mobile, email")
+        .in("id", uniq);
+
+      if (error2) throw (error || error2);
+      mergedProfiles = safeArr(data2);
+    }
+
+    const map = new Map();
+    mergedProfiles.forEach((p) => {
+      if (p?.user_id) map.set(String(p.user_id), p);
+      if (p?.id) map.set(String(p.id), p);
+    });
+
+    // merge customer fields only if missing (never overwrite good data)
+    return list.map((o) => {
+      const cid = pickDeep(
+        o,
+        [
+          "customer_user_id",
+          "customer_id",
+          "user_id",
+          "created_by",
+          "profile_id",
+          "customer.user_id",
+          "customer.id",
+          "customer.profile_id",
+          "customer.uid",
+        ],
+        ""
+      );
+
+      const p = cid ? map.get(String(cid)) : null;
+      if (!p) return o;
+
+      const existingName = getNameFromRow(o);
+      const existingPhone = getPhoneFromRow(o);
+      const existingEmail = getEmailFromRow(o);
+
+      return {
+        ...o,
+        // add derived fallback fields (UI will use these if base is empty)
+        __cust_name: existingName || clean(p.full_name || p.name || ""),
+        __cust_phone: existingPhone || clean(p.phone || p.mobile || ""),
+        __cust_email: existingEmail || clean(p.email || ""),
+      };
+    });
+  } catch {
+    return list;
+  }
+}
+
+/**
  * Update status safely with detected table.
- * Tries update by id; if fails, tries order_id.
  */
 async function updateOrderStatusAuto({ table, orderId, nextStatus }) {
   if (!table) throw new Error("Orders table not detected yet.");
 
   // First try: update by id
   {
-    const { error } = await supabase
-      .from(table)
-      .update({ status: nextStatus })
-      .eq("id", orderId);
-
+    const { error } = await supabase.from(table).update({ status: nextStatus }).eq("id", orderId);
     if (!error) return true;
   }
 
   // Second try: update by order_id
   {
-    const { error } = await supabase
-      .from(table)
-      .update({ status: nextStatus })
-      .eq("order_id", orderId);
-
+    const { error } = await supabase.from(table).update({ status: nextStatus }).eq("order_id", orderId);
     if (error) throw error;
     return true;
   }
@@ -252,13 +477,12 @@ function countItems(order) {
 }
 function stepIndexFromStatus(st) {
   const s = normalizeRole(st || "pending");
-  // progress line is: Placed -> Preparing -> On the way -> Delivered
   if (s === "delivered") return 3;
   if (s === "on_the_way") return 2;
-  if (s === "ready") return 2; // ready is basically before on_the_way, but show progress up to "On the way" soon
+  if (s === "ready") return 2;
   if (s === "preparing") return 1;
   if (s === "rejected" || s === "cancelled") return 0;
-  return 0; // pending/placed
+  return 0;
 }
 
 /* =========================
@@ -283,13 +507,13 @@ export default function GroceryOwnerOrdersPage() {
   const [errMsg, setErrMsg] = useState("");
   const [infoMsg, setInfoMsg] = useState("");
 
-  // NEW: detected orders source
+  // detected orders source
   const [ordersSource, setOrdersSource] = useState({
     table: "",
     storeIdCol: "",
   });
 
-  // NEW: detected items source (helpful for debugging)
+  // detected items source
   const [itemsSource, setItemsSource] = useState({
     table: "",
     orderIdCol: "",
@@ -299,7 +523,7 @@ export default function GroceryOwnerOrdersPage() {
   const [activeTab, setActiveTab] = useState("all");
   const [search, setSearch] = useState("");
 
-  // UI only: expand/collapse order details (keeps old work)
+  // expand/collapse order details
   const [openOrderId, setOpenOrderId] = useState(null);
 
   const canAccess = useMemo(() => role === "grocery_owner" || role === "admin", [role]);
@@ -322,12 +546,7 @@ export default function GroceryOwnerOrdersPage() {
       setUserId(user.id);
       setEmail(user.email || "");
 
-      const { data: prof, error: profErr } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
+      const { data: prof, error: profErr } = await supabase.from("profiles").select("role").eq("user_id", user.id).maybeSingle();
       if (profErr) throw profErr;
 
       const r = normalizeRole(prof?.role);
@@ -361,7 +580,7 @@ export default function GroceryOwnerOrdersPage() {
     if (!storeId && list.length > 0) setStoreId(list[0].id);
   }
 
-  // ✅ FIXED: Auto-detect orders table + storeId col + attach items
+  // ✅ Auto-detect orders table + storeId col + attach items + enrich customer data
   async function loadOrders(sid) {
     if (!sid) {
       setOrders([]);
@@ -386,34 +605,34 @@ export default function GroceryOwnerOrdersPage() {
       if (itemsRes.rows && itemsRes.rows.length > 0 && itemsRes.orderIdCol) {
         const orderIdCol = itemsRes.orderIdCol;
 
-        // collect item ids to lookup names
         const itemIds = [];
         for (const row of itemsRes.rows) {
-          const foundItemId =
-            row?.grocery_item_id ?? row?.item_id ?? row?.product_id ?? row?.menu_item_id ?? null;
+          const foundItemId = row?.grocery_item_id ?? row?.item_id ?? row?.product_id ?? row?.menu_item_id ?? null;
           if (foundItemId) itemIds.push(foundItemId);
         }
 
         const namesMap = await loadGroceryItemNamesAuto([...new Set(itemIds.map(String))]);
 
-        // group by order id
         const byOrder = new Map();
         itemsRes.rows.forEach((row) => {
           const oid = row?.[orderIdCol];
           if (!oid) return;
 
-          const itemId =
-            row?.grocery_item_id ?? row?.item_id ?? row?.product_id ?? row?.menu_item_id ?? null;
-
+          const itemId = row?.grocery_item_id ?? row?.item_id ?? row?.product_id ?? row?.menu_item_id ?? null;
           const qty = row?.qty ?? row?.quantity ?? row?.count ?? 1;
 
-          const nameFromDb = itemId ? namesMap.get(String(itemId)) : null;
+          const meta = itemId ? namesMap.get(String(itemId)) : null;
+
+          const imgFromRow = safeImgUrl(row?.image_url ?? row?.img ?? row?.photo_url ?? row?.picture_url ?? "");
+          const imgFromItem = safeImgUrl(meta?.image_url || "");
+          const image_url = imgFromRow || imgFromItem || "";
 
           const line = {
             id: row?.id ?? null,
             grocery_item_id: itemId ?? null,
-            name: row?.name || row?.item_name || nameFromDb || "Item",
+            name: row?.name || row?.item_name || meta?.name || "Item",
             qty: Number(qty || 1),
+            image_url,
           };
 
           if (!byOrder.has(String(oid))) byOrder.set(String(oid), []);
@@ -422,18 +641,17 @@ export default function GroceryOwnerOrdersPage() {
 
         merged = merged.map((o) => ({
           ...o,
-          // attach as order_items so your existing UI works
           order_items: byOrder.get(String(o.id)) || safeArr(o.order_items || o.items),
         }));
       }
 
+      // ✅ 3) Enrich customer details from profiles if order row is empty
+      merged = await enrichCustomersFromProfiles(merged);
+
       setOrders(merged);
     } catch (e) {
       const msg = e?.message || String(e);
-      setErrMsg(
-        msg +
-          "  |  I tried grocery_orders / orders_grocery with store_id or grocery_store_id + tried grocery_order_items for items."
-      );
+      setErrMsg(msg + "  |  I tried grocery_orders / orders_grocery with store_id or grocery_store_id + tried grocery_order_items for items.");
       setOrders([]);
       setOrdersSource({ table: "", storeIdCol: "" });
       setItemsSource({ table: "", orderIdCol: "" });
@@ -442,7 +660,6 @@ export default function GroceryOwnerOrdersPage() {
     }
   }
 
-  // ✅ FIXED: Update status using detected table
   async function updateOrderStatus(orderId, nextStatus) {
     if (!orderId) return;
     setBusy(true);
@@ -450,9 +667,7 @@ export default function GroceryOwnerOrdersPage() {
     setInfoMsg("");
 
     try {
-      if (!ordersSource.table) {
-        throw new Error("Orders table not detected yet. Click Refresh once.");
-      }
+      if (!ordersSource.table) throw new Error("Orders table not detected yet. Click Refresh once.");
 
       await updateOrderStatusAuto({
         table: ordersSource.table,
@@ -524,17 +739,15 @@ export default function GroceryOwnerOrdersPage() {
   const filteredOrders = useMemo(() => {
     let list = [...normalizedOrders];
 
-    if (activeTab !== "all") {
-      list = list.filter((o) => o._status === activeTab);
-    }
+    if (activeTab !== "all") list = list.filter((o) => o._status === activeTab);
 
     const q = clean(search).toLowerCase();
     if (q) {
       list = list.filter((o) => {
         const id = clean(o?.id).toLowerCase();
-        const name = clean(o?.customer_name || o?.name || "").toLowerCase();
-        const phone = getPhoneFromRow(o).toLowerCase();
-        const addr = buildAddressFromRow(o).toLowerCase();
+        const name = clean(getNameFromRow(o) || o.__cust_name || "").toLowerCase();
+        const phone = clean(getPhoneFromRow(o) || o.__cust_phone || "").toLowerCase();
+        const addr = clean(buildAddressFromRow(o)).toLowerCase();
         return id.includes(q) || name.includes(q) || phone.includes(q) || addr.includes(q);
       });
     }
@@ -574,7 +787,6 @@ export default function GroceryOwnerOrdersPage() {
               </Link>
             </div>
 
-            {/* show detected source */}
             {ordersSource.table ? (
               <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <span style={tag}>Orders table: {ordersSource.table}</span>
@@ -619,7 +831,7 @@ export default function GroceryOwnerOrdersPage() {
         {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
         {infoMsg ? <div style={alertOk}>{infoMsg}</div> : null}
 
-        {/* FILTERS (Restaurant Orders style) */}
+        {/* FILTERS */}
         <div style={panelGlass}>
           <div style={filtersRow}>
             <div style={chipsWrap} className="hf-chips">
@@ -635,10 +847,7 @@ export default function GroceryOwnerOrdersPage() {
               <button onClick={() => setActiveTab("ready")} style={activeTab === "ready" ? chipOn : chipOff}>
                 Ready: {counts.ready}
               </button>
-              <button
-                onClick={() => setActiveTab("on_the_way")}
-                style={activeTab === "on_the_way" ? chipOn : chipOff}
-              >
+              <button onClick={() => setActiveTab("on_the_way")} style={activeTab === "on_the_way" ? chipOn : chipOff}>
                 On The Way: {counts.on_the_way}
               </button>
               <button onClick={() => setActiveTab("delivered")} style={activeTab === "delivered" ? chipOn : chipOff}>
@@ -647,21 +856,13 @@ export default function GroceryOwnerOrdersPage() {
               <button onClick={() => setActiveTab("rejected")} style={activeTab === "rejected" ? chipOn : chipOff}>
                 Rejected: {counts.rejected}
               </button>
-              <button
-                onClick={() => setActiveTab("cancelled")}
-                style={activeTab === "cancelled" ? chipOn : chipOff}
-              >
+              <button onClick={() => setActiveTab("cancelled")} style={activeTab === "cancelled" ? chipOn : chipOff}>
                 Cancelled: {counts.cancelled}
               </button>
             </div>
 
             <div style={searchWrap}>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={searchInput}
-                placeholder="Search name / phone / address / id"
-              />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} style={searchInput} placeholder="Search name / phone / address / id" />
               <button onClick={() => setSearch("")} style={btnSmallOutline}>
                 Clear
               </button>
@@ -671,15 +872,7 @@ export default function GroceryOwnerOrdersPage() {
 
         {/* LIST */}
         <div style={panelGlass}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 10,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }}>
               Orders <span style={tag}>Showing: {filteredOrders.length}</span>
             </div>
@@ -688,19 +881,17 @@ export default function GroceryOwnerOrdersPage() {
             </button>
           </div>
 
-          {loadingOrders ? (
-            <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading orders…</div>
-          ) : null}
-
-          {!loadingOrders && filteredOrders.length === 0 ? (
-            <div style={emptyBox}>No orders found for selected store / filters.</div>
-          ) : null}
+          {loadingOrders ? <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading orders…</div> : null}
+          {!loadingOrders && filteredOrders.length === 0 ? <div style={emptyBox}>No orders found for selected store / filters.</div> : null}
 
           {!loadingOrders && filteredOrders.length > 0 ? (
             <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
               {filteredOrders.map((o) => {
-                const phone = getPhoneFromRow(o);
+                const phone = clean(getPhoneFromRow(o) || o.__cust_phone || "");
+                const name = clean(getNameFromRow(o) || o.__cust_name || "");
+                const email2 = clean(getEmailFromRow(o) || o.__cust_email || "");
                 const addr = buildAddressFromRow(o);
+
                 const items = safeArr(o.order_items || o.items);
                 const itemsCount = countItems(o);
                 const isOpen = openOrderId === o.id;
@@ -708,7 +899,6 @@ export default function GroceryOwnerOrdersPage() {
 
                 return (
                   <div key={o.id} style={orderShell}>
-                    {/* TOP COMPACT ROW (restaurant style) */}
                     <div style={orderTopRow}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <span style={statusPill(o._status)}>{o._status || "pending"}</span>
@@ -718,19 +908,15 @@ export default function GroceryOwnerOrdersPage() {
 
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <div style={orderTotal}>{money(o.total_amount ?? o.total ?? 0)}</div>
-                        <button
-                          onClick={() => setOpenOrderId((cur) => (cur === o.id ? null : o.id))}
-                          style={viewBtn}
-                        >
+                        <button onClick={() => setOpenOrderId((cur) => (cur === o.id ? null : o.id))} style={viewBtn}>
                           {isOpen ? "Hide details ←" : "View details →"}
                         </button>
                       </div>
                     </div>
 
-                    {/* SUB ROW (like restaurant list info) */}
                     <div style={orderSubRow}>
                       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                        <span style={miniTag}>Customer: {o.customer_name || "-"}</span>
+                        <span style={miniTag}>Customer: {name || "-"}</span>
                         <span style={miniTag}>Items: {itemsCount}</span>
                         <span style={miniTag}>Store: {activeStore?.name || "-"}</span>
                       </div>
@@ -740,7 +926,6 @@ export default function GroceryOwnerOrdersPage() {
                       </div>
                     </div>
 
-                    {/* PROGRESS TRACKER (restaurant style) */}
                     <div style={trackWrap}>
                       <div style={trackItem}>
                         <div style={trackDot(stepIdx >= 0)}>{stepIdx >= 0 ? "✓" : ""}</div>
@@ -763,16 +948,20 @@ export default function GroceryOwnerOrdersPage() {
                       </div>
                     </div>
 
-                    {/* DETAILS (your old full card UI preserved) */}
                     {isOpen ? (
                       <div style={{ marginTop: 12 }}>
                         <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                           <div style={miniBox}>
                             <div style={miniTitle}>Customer</div>
-                            <div style={miniText}>{o.customer_name || "-"}</div>
+                            <div style={miniText}>{name || "-"}</div>
                             <div style={miniLine}>
                               <span style={miniLabel}>Phone:</span> {phone || "-"}
                             </div>
+                            {email2 ? (
+                              <div style={miniLine}>
+                                <span style={miniLabel}>Email:</span> {email2}
+                              </div>
+                            ) : null}
 
                             <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                               {phone ? (
@@ -780,12 +969,7 @@ export default function GroceryOwnerOrdersPage() {
                                   <a href={`tel:${phone}`} style={btnPillLight}>
                                     Call
                                   </a>
-                                  <a
-                                    href={`https://wa.me/${String(phone).replace(/[^\d]/g, "")}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    style={btnPillLight}
-                                  >
+                                  <a href={`https://wa.me/${String(phone).replace(/[^\d]/g, "")}`} target="_blank" rel="noreferrer" style={btnPillLight}>
                                     WhatsApp
                                   </a>
                                 </>
@@ -799,12 +983,7 @@ export default function GroceryOwnerOrdersPage() {
 
                             {addr && addr !== "-" ? (
                               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                                <a
-                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  style={btnPillLight}
-                                >
+                                <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}`} target="_blank" rel="noreferrer" style={btnPillLight}>
                                   Maps
                                 </a>
                                 <button
@@ -835,47 +1014,67 @@ export default function GroceryOwnerOrdersPage() {
                           <div style={miniTitle}>Items</div>
                           <div style={noteBox}>
                             {items.length === 0 ? (
-                              <div style={{ fontWeight: 850, color: "rgba(17,24,39,0.6)" }}>
-                                No items found for this order.
-                              </div>
+                              <div style={{ fontWeight: 850, color: "rgba(17,24,39,0.6)" }}>No items found for this order.</div>
                             ) : (
-                              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                                {items.map((it, idx) => (
-                                  <li key={idx} style={{ marginBottom: 6 }}>
-                                    <b>{it?.name || it?.item_name || "Item"}</b>{" "}
-                                    <span style={{ color: "rgba(17,24,39,0.65)", fontWeight: 850 }}>
-                                      Qty {it?.qty ?? it?.quantity ?? 1}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
+                              <div style={{ display: "grid", gap: 10 }}>
+                                {items.map((it, idx) => {
+                                  const nm = it?.name || it?.item_name || "Item";
+                                  const qty = it?.qty ?? it?.quantity ?? 1;
+                                  const img = safeImgUrl(it?.image_url);
+
+                                  return (
+                                    <div
+                                      key={idx}
+                                      style={{
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        gap: 12,
+                                        flexWrap: "wrap",
+                                        alignItems: "center",
+                                        padding: "10px 10px",
+                                        borderRadius: 14,
+                                        border: "1px solid rgba(0,0,0,0.08)",
+                                        background: "rgba(255,255,255,0.88)",
+                                      }}
+                                    >
+                                      <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                                        <div style={itemThumb}>
+                                          {img ? (
+                                            <img
+                                              src={img}
+                                              alt={String(nm)}
+                                              style={itemThumbImg}
+                                              onError={(e) => {
+                                                e.currentTarget.style.display = "none";
+                                              }}
+                                            />
+                                          ) : (
+                                            <div style={itemThumbPlaceholder}>No image</div>
+                                          )}
+                                        </div>
+
+                                        <div style={{ minWidth: 0 }}>
+                                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{nm}</div>
+                                          <div style={{ marginTop: 4, fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.65)" }}>Qty {qty}</div>
+                                        </div>
+                                      </div>
+
+                                      <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.70)" }}>Qty {qty}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
                         </div>
 
                         {/* Status dropdown */}
-                        <div
-                          style={{
-                            marginTop: 12,
-                            display: "flex",
-                            justifyContent: "space-between",
-                            gap: 10,
-                            flexWrap: "wrap",
-                            alignItems: "center",
-                          }}
-                        >
-                          <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>
-                            Store: {activeStore?.name || "-"}
-                          </div>
+                        <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                          <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Store: {activeStore?.name || "-"}</div>
 
                           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                             <div style={{ fontWeight: 950, color: "#0b1220" }}>Change Status:</div>
-                            <select
-                              value={o._status}
-                              onChange={(e) => updateOrderStatus(o.id, e.target.value)}
-                              style={{ ...input, width: 220 }}
-                              disabled={busy}
-                            >
+                            <select value={o._status} onChange={(e) => updateOrderStatus(o.id, e.target.value)} style={{ ...input, width: 220 }} disabled={busy}>
                               <option value="pending">pending</option>
                               <option value="preparing">preparing</option>
                               <option value="ready">ready</option>
@@ -896,12 +1095,10 @@ export default function GroceryOwnerOrdersPage() {
         </div>
 
         <div style={{ marginTop: 12, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.6)" }}>
-          If it still shows empty, send screenshot of these tables/columns: <b>grocery_orders</b> +{" "}
-          <b>grocery_order_items</b>.
+          If customer still shows blank, it means grocery_orders does not store customer id/name or owner cannot read profiles due to RLS. Then send screenshot of one row in <b>grocery_orders</b> (columns) and one row in <b>profiles</b>.
         </div>
       </div>
 
-      {/* UI-only scrollbar hide for chips */}
       <style jsx global>{`
         .hf-chips::-webkit-scrollbar {
           display: none;
@@ -1142,13 +1339,7 @@ function statusPill(s) {
   return base;
 }
 
-/* ===== Restaurant orders look styles (UI only) ===== */
-const filtersRow = {
-  display: "flex",
-  gap: 12,
-  alignItems: "center",
-  flexWrap: "wrap",
-};
+const filtersRow = { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" };
 
 const chipsWrap = {
   flex: 1,
@@ -1163,18 +1354,9 @@ const chipsWrap = {
   paddingBottom: 2,
 };
 
-const searchWrap = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  justifyContent: "flex-end",
-  flexWrap: "wrap",
-};
+const searchWrap = { display: "flex", gap: 10, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" };
 
-const searchInput = {
-  ...input,
-  maxWidth: 320,
-};
+const searchInput = { ...input, maxWidth: 320 };
 
 const chipOn = {
   padding: "10px 14px",
@@ -1207,39 +1389,15 @@ const orderShell = {
   boxShadow: "0 12px 36px rgba(0,0,0,0.07)",
 };
 
-const orderTopRow = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 10,
-  flexWrap: "wrap",
-  alignItems: "center",
-};
+const orderTopRow = { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" };
 
-const orderSubRow = {
-  marginTop: 10,
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 10,
-  flexWrap: "wrap",
-  alignItems: "center",
-};
+const orderSubRow = { marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" };
 
-const orderMetaStrong = {
-  fontWeight: 1000,
-  color: "#0b1220",
-};
+const orderMetaStrong = { fontWeight: 1000, color: "#0b1220" };
 
-const orderMetaDim = {
-  fontSize: 12,
-  fontWeight: 850,
-  color: "rgba(17,24,39,0.55)",
-};
+const orderMetaDim = { fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.55)" };
 
-const orderTotal = {
-  fontWeight: 1000,
-  color: "#0b1220",
-  fontSize: 16,
-};
+const orderTotal = { fontWeight: 1000, color: "#0b1220", fontSize: 16 };
 
 const viewBtn = {
   padding: "10px 14px",
@@ -1262,20 +1420,9 @@ const miniTag = {
   fontWeight: 900,
 };
 
-/* Progress tracker */
-const trackWrap = {
-  marginTop: 12,
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  flexWrap: "wrap",
-};
+const trackWrap = { marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" };
 
-const trackItem = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-};
+const trackItem = { display: "flex", alignItems: "center", gap: 8 };
 
 const trackDot = (on) => ({
   width: 22,
@@ -1290,11 +1437,7 @@ const trackDot = (on) => ({
   color: on ? "#fff" : "rgba(17,24,39,0.45)",
 });
 
-const trackLabel = {
-  fontSize: 12,
-  fontWeight: 900,
-  color: "rgba(17,24,39,0.75)",
-};
+const trackLabel = { fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.75)" };
 
 const trackLine = (on) => ({
   height: 2,
@@ -1302,3 +1445,29 @@ const trackLine = (on) => ({
   borderRadius: 999,
   background: on ? "rgba(17,24,39,0.80)" : "rgba(17,24,39,0.16)",
 });
+
+const itemThumb = {
+  width: 52,
+  height: 52,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.10)",
+  overflow: "hidden",
+  background: "rgba(255,255,255,0.92)",
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const itemThumbImg = { width: "100%", height: "100%", objectFit: "cover", display: "block" };
+
+const itemThumbPlaceholder = {
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 1000,
+  color: "rgba(17,24,39,0.55)",
+  fontSize: 12,
+};

@@ -4,6 +4,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { fetchReviewsByOrderIds, isReviewableStatus } from "@/lib/reviews";
 
 // ✅ SSR-safe dynamic import (leaflet must run client-side only)
 const CustomerTrackingMap = dynamic(() => import("@/components/CustomerTrackingMap.jsx"), {
@@ -34,9 +35,187 @@ function normalizeRole(r) {
     .replace(/\s+/g, "_");
 }
 
-function formatMoney(v) {
+/* =========================================================
+   ✅ CURRENCY SUPPORT (DB + localStorage, SAFE)
+   - Source of truth: public.system_settings.default_currency
+   - We keep localStorage "foodapp_currency" for speed,
+     but ALWAYS sync it from DB on page load.
+   ========================================================= */
+
+const DEFAULT_CURRENCY = "INR";
+
+function normalizeCurrency(c) {
+  const v = String(c || "").trim().toUpperCase();
+  if (v === "USD") return "USD";
+  if (v === "INR") return "INR";
+  return DEFAULT_CURRENCY;
+}
+
+function money(v, currency = DEFAULT_CURRENCY) {
   const n = Number(v || 0);
-  return `₹${n.toFixed(0)}`;
+  const cur = normalizeCurrency(currency);
+
+  if (!isFinite(n)) {
+    return cur === "USD" ? "$0.00" : "₹0";
+  }
+
+  const fractionDigits = cur === "INR" ? 0 : 2;
+
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: cur,
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(n);
+  } catch {
+    const fixed = n.toFixed(fractionDigits);
+    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+  }
+}
+
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return isFinite(n) ? n : fallback;
+}
+
+function isMissingColumnError(msg) {
+  const m = String(msg || "").toLowerCase();
+  return m.includes("column") && m.includes("does not exist");
+}
+
+function safeItemImage(src) {
+  const s = String(src || "").trim();
+  if (!s) return "";
+  if (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("/")) return s;
+  return s.startsWith("uploads/") ? `/${s}` : s;
+}
+
+const itemThumbWrap = {
+  width: 52,
+  height: 52,
+  borderRadius: 14,
+  overflow: "hidden",
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.9)",
+  flex: "0 0 auto",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const itemThumbImg = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  display: "block",
+};
+
+const itemThumbPh = {
+  fontWeight: 1000,
+  color: "rgba(17,24,39,0.55)",
+  fontSize: 12,
+};
+
+function ItemThumb({ src, name }) {
+  const [broken, setBroken] = useState(false);
+  const safeSrc = safeItemImage(src);
+  if (!safeSrc || broken) {
+    return (
+      <div style={itemThumbWrap} aria-label="No image">
+        <div style={itemThumbPh}>{String(name || "Item").trim().charAt(0).toUpperCase() || "I"}</div>
+      </div>
+    );
+  }
+  return (
+    <div style={itemThumbWrap}>
+      <img
+        src={safeSrc}
+        alt={String(name || "Item")}
+        style={itemThumbImg}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setBroken(true)}
+      />
+    </div>
+  );
+}
+
+async function loadMenuItemImagesSafe(menuItemIds) {
+  const ids = Array.isArray(menuItemIds) ? Array.from(new Set(menuItemIds.filter(Boolean))) : [];
+  if (ids.length === 0) return {};
+
+  const selects = [
+    "id, image_url",
+    "id, image",
+    "id, photo_url",
+    "id, photo",
+    "id, item_image",
+    "id, product_image",
+    "id, thumbnail_url",
+    "id",
+  ];
+
+  for (const sel of selects) {
+    try {
+      const { data, error } = await supabase.from("menu_items").select(sel).in("id", ids);
+      if (!error) {
+        const map = {};
+        for (const row of data || []) {
+          map[row.id] =
+            row?.image_url ||
+            row?.image ||
+            row?.photo_url ||
+            row?.photo ||
+            row?.item_image ||
+            row?.product_image ||
+            row?.thumbnail_url ||
+            "";
+        }
+        return map;
+      }
+    } catch {
+      // ignore and try next
+    }
+  }
+
+  return {};
+}
+
+/**
+ * ✅ Read currency from DB (system_settings)
+ * We support multiple schemas:
+ * - column: default_currency
+ * - JSON: value_json.default_currency
+ * - optional key-based row ("global"), but also works if you store just 1 row
+ */
+async function fetchCurrencyFromDB() {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("key, default_currency, value_json, updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+
+    if (error) return DEFAULT_CURRENCY;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length === 0) return DEFAULT_CURRENCY;
+
+    // Prefer "global" row if exists, else latest row
+    const globalRow = rows.find((r) => String(r?.key || "").toLowerCase() === "global");
+    const row = globalRow || rows[0];
+
+    const col = row?.default_currency;
+    if (col) return normalizeCurrency(col);
+
+    const jsonCur = row?.value_json?.default_currency;
+    if (jsonCur) return normalizeCurrency(jsonCur);
+
+    return DEFAULT_CURRENCY;
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
 }
 
 function formatTime(ts) {
@@ -54,6 +233,58 @@ function initials(name) {
   const a = parts[0]?.[0] || "";
   const b = parts.length > 1 ? parts[parts.length - 1]?.[0] : "";
   return (a + b).toUpperCase() || "DP";
+}
+
+/* =========================================================
+   ✅ NEW: Clean "Instructions" display (UI only)
+   Removes: deliveryFee/tax/pay/platform/currency/etc junk
+   Keeps customer’s real note like: "give in hand..."
+   ========================================================= */
+function cleanCustomerInstructions(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+
+  const keywords = [
+    "deliveryfee",
+    "delivery_fee",
+    "platform%",
+    "platformfee",
+    "platform_fee",
+    "taxnote",
+    "tax_note",
+    "tax:",
+    "gst",
+    "currency",
+    "pay:",
+    "payment",
+  ];
+
+  let out = s;
+
+  // 1) Remove any parentheses chunk that contains those keywords
+  out = out.replace(/\(([^)]*)\)/g, (full, inner) => {
+    const low = String(inner || "").toLowerCase();
+    if (keywords.some((k) => low.includes(k))) return "";
+    return full;
+  });
+
+  // 2) If it’s pipe-separated without parentheses, cut before the junk
+  const lowAll = out.toLowerCase();
+  const hitIndex = lowAll.search(/\b(deliveryfee|platform%|platformfee|taxnote|tax:|currency|pay:)\b/);
+  if (hitIndex > 0) {
+    const lastPipeBefore = out.lastIndexOf("|", hitIndex);
+    out = (lastPipeBefore >= 0 ? out.slice(0, lastPipeBefore) : out.slice(0, hitIndex)).trim();
+  }
+
+  // 3) Cleanup leftovers
+  out = out
+    .replace(/\s+\|\s*$/g, "")
+    .replace(/\|\s*\|/g, "|")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\(\s*$/g, "")
+    .trim();
+
+  return out;
 }
 
 /* =========================
@@ -238,6 +469,11 @@ function statusBadge(status) {
 /* =========================
    CUSTOMER LIVE STATUS MESSAGE (Restaurant)
    ========================= */
+
+function renderStars(rating) {
+  const value = Math.max(1, Math.min(5, Math.round(Number(rating || 0))));
+  return `${"*".repeat(value)}${"-".repeat(5 - value)}`;
+}
 
 function friendlyStatus(status) {
   const s = String(status || "").toLowerCase();
@@ -486,9 +722,6 @@ function isActiveDeliveryStatus(status) {
 function statusStepInfo(status) {
   const s = String(status || "").toLowerCase();
 
-  // We show 4 steps visually (common food app flow)
-  // 1) Placed, 2) Preparing, 3) Out for delivery, 4) Delivered
-  // Cancel/Rejected overrides
   if (s === "rejected" || s === "cancelled") {
     return { mode: "cancelled", currentIndex: 0 };
   }
@@ -496,7 +729,6 @@ function statusStepInfo(status) {
   if (s === "delivered") return { mode: "normal", currentIndex: 3 };
   if (s === "on_the_way" || s === "picked_up" || s === "delivering") return { mode: "normal", currentIndex: 2 };
   if (s === "ready" || s === "preparing" || s === "accepted" || s === "confirmed") return { mode: "normal", currentIndex: 1 };
-  // pending/default
   return { mode: "normal", currentIndex: 0 };
 }
 
@@ -547,6 +779,9 @@ export default function OrdersPage() {
   const [role, setRole] = useState("");
   const [orders, setOrders] = useState([]);
 
+  // ✅ currency state (synced from DB like Home page)
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
+
   // ✅ delivery profile map: { [delivery_user_id]: { full_name, avatar_url, phone } }
   const [deliveryProfiles, setDeliveryProfiles] = useState({});
 
@@ -563,6 +798,12 @@ export default function OrdersPage() {
 
   // ✅ NEW: open one order detail (clean list by default)
   const [openOrderId, setOpenOrderId] = useState(null);
+
+  const [reviewByOrderId, setReviewByOrderId] = useState({});
+  const [reviewModalOrder, setReviewModalOrder] = useState(null);
+  const [reviewForm, setReviewForm] = useState({ rating: 5, title: "", comment: "" });
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewError, setReviewError] = useState("");
 
   const orderItemsByOrderId = useMemo(() => {
     const map = {};
@@ -609,6 +850,19 @@ export default function OrdersPage() {
     return items.reduce((s, it) => s + Number(it.qty || 0) * Number(it.price_each || 0), 0);
   }
 
+  function calcPlatformFee(order) {
+    return Math.max(0, safeNum(order?.commission_amount, 0));
+  }
+  function calcDeliveryFee(order) {
+    return Math.max(0, safeNum(order?.delivery_fee, 0));
+  }
+  function calcGst(order) {
+    return Math.max(0, safeNum(order?.gst_amount, 0));
+  }
+  function calcTip(order) {
+    return Math.max(0, safeNum(order?.tip_amount, 0));
+  }
+
   async function loadDeliveryProfilesFromOrders(ordersList) {
     try {
       const ids = Array.from(new Set((ordersList || []).map((o) => o.delivery_user_id).filter(Boolean)));
@@ -629,6 +883,86 @@ export default function OrdersPage() {
       setDeliveryProfiles(map);
     } catch {
       setDeliveryProfiles({});
+    }
+  }
+
+  async function loadOwnReviews(userId, ordersList) {
+    const reviewableOrderIds = (ordersList || [])
+      .filter((order) => isReviewableStatus(order?.status) && order?.restaurant_id)
+      .map((order) => order.id)
+      .filter(Boolean);
+
+    if (!userId || !reviewableOrderIds.length) {
+      setReviewByOrderId({});
+      return;
+    }
+
+    try {
+      const rows = await fetchReviewsByOrderIds(supabase, { userId, orderIds: reviewableOrderIds });
+      const map = {};
+      for (const row of rows || []) {
+        if (row?.order_id) map[row.order_id] = row;
+      }
+      setReviewByOrderId(map);
+    } catch {
+      setReviewByOrderId({});
+    }
+  }
+
+  function openReviewModal(order) {
+    const existing = reviewByOrderId?.[order?.id] || null;
+    setReviewError("");
+    setReviewModalOrder(order);
+    setReviewForm({
+      rating: Number(existing?.rating || 5) || 5,
+      title: String(existing?.title || ""),
+      comment: String(existing?.comment || ""),
+    });
+  }
+
+  function closeReviewModal() {
+    if (reviewSaving) return;
+    setReviewModalOrder(null);
+    setReviewError("");
+  }
+
+  async function saveReview() {
+    if (!user?.id || !reviewModalOrder?.id || !reviewModalOrder?.restaurant_id) return;
+    const rating = Math.max(1, Math.min(5, Number(reviewForm.rating || 0) || 0));
+    if (!rating) {
+      setReviewError("Please choose a rating.");
+      return;
+    }
+
+    setReviewSaving(true);
+    setReviewError("");
+
+    const payload = {
+      user_id: user.id,
+      order_id: reviewModalOrder.id,
+      target_type: "restaurant",
+      target_id: reviewModalOrder.restaurant_id,
+      rating,
+      title: String(reviewForm.title || "").trim() || null,
+      comment: String(reviewForm.comment || "").trim() || null,
+      is_visible: true,
+    };
+
+    try {
+      const existing = reviewByOrderId?.[reviewModalOrder.id];
+      if (existing?.id) {
+        const { error } = await supabase.from("reviews").update(payload).eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("reviews").insert(payload);
+        if (error) throw error;
+      }
+      await loadOwnReviews(user.id, orders);
+      setReviewModalOrder(null);
+    } catch (e) {
+      setReviewError(e?.message || String(e));
+    } finally {
+      setReviewSaving(false);
     }
   }
 
@@ -662,12 +996,43 @@ export default function OrdersPage() {
     }
   }
 
+  // ✅ column-safe order loader: tries fee columns first, falls back if DB doesn't have them
   async function loadOrders(currentUserId) {
-    // ✅ Restaurant orders only (table: orders)
-    const { data, error } = await supabase
-      .from("orders")
-      .select(
-        `
+    const selects = [
+      `
+        id,
+        user_id,
+        restaurant_id,
+        status,
+        total,
+        subtotal_amount,
+        discount_amount,
+        total_amount,
+        coupon_code,
+        created_at,
+        customer_name,
+        phone,
+        address_line1,
+        address_line2,
+        landmark,
+        instructions,
+        delivery_user_id,
+        stripe_session_id,
+        payment_method,
+        currency,
+        delivery_fee,
+        gst_amount,
+        tip_amount,
+        commission_amount,
+        order_items (
+          id,
+          qty,
+          price_each,
+          menu_item_id,
+          menu_items ( id, name, price )
+        )
+      `,
+      `
         id,
         user_id,
         restaurant_id,
@@ -692,23 +1057,67 @@ export default function OrdersPage() {
           menu_item_id,
           menu_items ( id, name, price )
         )
-      `
-      )
-      .eq("user_id", currentUserId)
-      .order("created_at", { ascending: false });
+      `,
+    ];
 
-    if (error) throw error;
+    let lastErr = null;
 
-    const list = Array.isArray(data) ? data : [];
-    setOrders(list);
+    for (const sel of selects) {
+      const { data, error } = await supabase
+        .from("orders")
+        .select(sel)
+        .eq("user_id", currentUserId)
+        .order("created_at", { ascending: false });
 
-    await loadDeliveryProfilesFromOrders(list);
-    await loadRestaurantCoordsFromOrders(list);
+      if (!error) {
+        let list = Array.isArray(data) ? data : [];
 
-    // ✅ If currently open order is gone (rare), close it safely
-    if (openOrderId && !list.find((x) => x.id === openOrderId)) {
-      setOpenOrderId(null);
+        const menuItemIds = list
+          .flatMap((o) => (Array.isArray(o?.order_items) ? o.order_items : []))
+          .map((it) => it?.menu_item_id)
+          .filter(Boolean);
+
+        const imageMap = await loadMenuItemImagesSafe(menuItemIds);
+
+        list = list.map((o) => ({
+          ...o,
+          order_items: (Array.isArray(o?.order_items) ? o.order_items : []).map((it) => ({
+            ...it,
+            menu_items: {
+              ...(it?.menu_items || {}),
+              image_url:
+                it?.menu_items?.image_url ||
+                it?.menu_items?.image ||
+                it?.menu_items?.photo_url ||
+                it?.menu_items?.photo ||
+                it?.menu_items?.item_image ||
+                it?.menu_items?.product_image ||
+                imageMap[it?.menu_item_id] ||
+                "",
+            },
+          })),
+        }));
+
+        setOrders(list);
+        return list;
+
+        await loadDeliveryProfilesFromOrders(list);
+        await loadRestaurantCoordsFromOrders(list);
+
+        // ✅ If currently open order is gone (rare), close it safely
+        if (openOrderId && !list.find((x) => x.id === openOrderId)) {
+          setOpenOrderId(null);
+        }
+        return;
+      }
+
+      lastErr = error;
+      const msg = error?.message || String(error);
+      if (isMissingColumnError(msg)) continue;
+      throw error;
     }
+
+    throw lastErr;
   }
 
   function cleanupRealtime() {
@@ -725,7 +1134,8 @@ export default function OrdersPage() {
       .channel(`realtime-customer-orders-${userId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `user_id=eq.${userId}` }, async () => {
         setLastRealtimeHit(new Date().toLocaleTimeString());
-        await loadOrders(userId);
+        const list = await loadOrders(userId);
+        await loadOwnReviews(userId, list);
       })
       .subscribe();
   }
@@ -819,6 +1229,23 @@ export default function OrdersPage() {
     setErrMsg("");
 
     try {
+      (async () => {
+        try {
+          const c = localStorage.getItem("foodapp_currency");
+          setCurrency(normalizeCurrency(c));
+        } catch {
+          setCurrency(DEFAULT_CURRENCY);
+        }
+
+        const dbCur = await fetchCurrencyFromDB();
+        const normalized = normalizeCurrency(dbCur);
+
+        setCurrency(normalized);
+        try {
+          localStorage.setItem("foodapp_currency", normalized);
+        } catch {}
+      })();
+
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr) throw userErr;
 
@@ -849,7 +1276,8 @@ export default function OrdersPage() {
         return;
       }
 
-      await loadOrders(u.id);
+      const loadedOrders = await loadOrders(u.id);
+      await loadOwnReviews(u.id, loadedOrders);
       await setupRealtime(u.id);
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -897,15 +1325,16 @@ export default function OrdersPage() {
             </div>
 
             <div style={statCard}>
-              <div style={statNum}>{formatMoney(totalSpend)}</div>
+              <div style={statNum}>{money(totalSpend, currency)}</div>
               <div style={statLabel}>Total Spend</div>
             </div>
+
+            <span style={pill}>Currency: {currency}</span>
 
             <Link href="/restaurants" style={pill}>
               ← Restaurants
             </Link>
 
-            {/* ✅ NEW: link to separate grocery orders page */}
             <Link href="/groceries/orders" style={pill}>
               Grocery Orders →
             </Link>
@@ -969,12 +1398,7 @@ export default function OrdersPage() {
               const itemsCount = items.reduce((s, it) => s + Number(it.qty || 0), 0);
 
               return (
-                <div
-                  key={o.id}
-                  style={listCard}
-                  onClick={() => setOpenOrderId(o.id)}
-                  title="Click to view details"
-                >
+                <div key={o.id} style={listCard} onClick={() => setOpenOrderId(o.id)} title="Click to view details">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <span
@@ -997,9 +1421,8 @@ export default function OrdersPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{formatMoney(total)}</div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(total, currency)}</div>
 
-                      {/* ✅ NEW: Invoice quick button */}
                       <Link
                         href={`/orders/invoice?id=${encodeURIComponent(String(o.id))}`}
                         onClick={(e) => e.stopPropagation()}
@@ -1008,6 +1431,18 @@ export default function OrdersPage() {
                       >
                         Invoice
                       </Link>
+
+                      {isReviewableStatus(o.status) ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openReviewModal(o);
+                          }}
+                          style={btnReview}
+                        >
+                          {reviewByOrderId?.[o.id] ? `Edit Review (${renderStars(reviewByOrderId[o.id].rating)})` : "Write Review"}
+                        </button>
+                      ) : null}
 
                       <button
                         onClick={(e) => {
@@ -1034,9 +1469,7 @@ export default function OrdersPage() {
                         </span>
                       ) : null}
                     </div>
-                    <div style={{ color: "rgba(17,24,39,0.55)", fontWeight: 850, fontSize: 12 }}>
-                      Click to open full tracking + items
-                    </div>
+                    <div style={{ color: "rgba(17,24,39,0.55)", fontWeight: 850, fontSize: 12 }}>Click to open full tracking + items</div>
                   </div>
                 </div>
               );
@@ -1058,6 +1491,12 @@ export default function OrdersPage() {
               const code = String(o.coupon_code || "").trim();
               const badge = statusBadge(o.status);
 
+              // ✅ keep these for old logic / safety (even if UI not showing breakdown)
+              const platformFee = calcPlatformFee(o);
+              const deliveryFee = calcDeliveryFee(o);
+              const gst = calcGst(o);
+              const tip = calcTip(o);
+
               const dp = o.delivery_user_id ? deliveryProfiles[o.delivery_user_id] : null;
               const dpName = dp?.full_name || dp?.name || "";
 
@@ -1067,7 +1506,6 @@ export default function OrdersPage() {
               const live = liveGpsByOrderId[o.id] || null;
               const liveOk = live?.lat != null && live?.lng != null && isActiveDeliveryStatus(o.status);
 
-              // ✅ show map only when user opens details
               const liveLabel = !isActiveDeliveryStatus(o.status)
                 ? "Live GPS available during delivery"
                 : liveOk
@@ -1075,6 +1513,9 @@ export default function OrdersPage() {
                 : "Waiting for driver GPS…";
 
               const hasAnyMapPoint = !!pickup || !!drop || (liveOk && live);
+
+              // ✅ clean the displayed instructions (UI only)
+              const instructionsClean = cleanCustomerInstructions(o.instructions);
 
               return (
                 <div style={cardGlass}>
@@ -1102,14 +1543,9 @@ export default function OrdersPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {formatMoney(total)}</div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {money(total, currency)}</div>
 
-                      {/* ✅ NEW: Invoice buttons */}
-                      <Link
-                        href={`/orders/invoice?id=${encodeURIComponent(String(o.id))}`}
-                        style={btnInvoiceLink}
-                        title="Open invoice"
-                      >
+                      <Link href={`/orders/invoice?id=${encodeURIComponent(String(o.id))}`} style={btnInvoiceLink} title="Open invoice">
                         View Invoice
                       </Link>
 
@@ -1120,6 +1556,12 @@ export default function OrdersPage() {
                       >
                         Print Invoice
                       </button>
+
+                      {isReviewableStatus(o.status) ? (
+                        <button onClick={() => openReviewModal(o)} style={btnReview}>
+                          {reviewByOrderId?.[o.id] ? `Edit Review (${renderStars(reviewByOrderId[o.id].rating)})` : "Write Review"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1129,28 +1571,28 @@ export default function OrdersPage() {
 
                   <StatusMessageCard status={o.status} deliveryPartnerName={dpName} />
 
+                  {reviewByOrderId?.[o.id] ? (
+                    <div style={reviewInfoBox}>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Your Review</div>
+                      <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.78)" }}>{renderStars(reviewByOrderId[o.id].rating)}</div>
+                      {reviewByOrderId[o.id].title ? <div style={{ marginTop: 6, fontWeight: 900, color: "#0b1220" }}>{reviewByOrderId[o.id].title}</div> : null}
+                      {reviewByOrderId[o.id].comment ? <div style={{ marginTop: 6, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>{reviewByOrderId[o.id].comment}</div> : null}
+                    </div>
+                  ) : null}
+
                   <div style={billBox}>
-                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Bill Summary</div>
-
-                    <div style={billLine}>
-                      <span>Subtotal</span>
-                      <span style={{ color: "#0b1220" }}>{formatMoney(subtotalAmt)}</span>
-                    </div>
-
-                    <div style={{ ...billLine, borderBottom: "none" }}>
-                      <span>Discount{code ? ` (${code})` : ""}</span>
-                      <span style={{ color: discountAmt > 0 ? "#065f46" : "#0b1220" }}>
-                        {discountAmt > 0 ? `- ${formatMoney(discountAmt)}` : formatMoney(0)}
-                      </span>
-                    </div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total</div>
 
                     <div style={billTotal}>
                       <span>Total Payable</span>
-                      <span>{formatMoney(total)}</span>
+                      <span>{money(total, currency)}</span>
                     </div>
+
+                    <span style={{ display: "none" }}>
+                      {subtotalAmt}-{discountAmt}-{code}-{platformFee}-{deliveryFee}-{gst}-{tip}
+                    </span>
                   </div>
 
-                  {/* ✅ Tracking only in details view */}
                   <div style={{ marginTop: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Live Tracking</div>
@@ -1244,7 +1686,7 @@ export default function OrdersPage() {
                       ) : null}
                       {o.instructions ? (
                         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                          <b>Instructions:</b> {o.instructions}
+                          <b>Instructions:</b> {instructionsClean || "—"}
                         </div>
                       ) : null}
                     </div>
@@ -1274,10 +1716,26 @@ export default function OrdersPage() {
                               background: "rgba(255,255,255,0.85)",
                             }}
                           >
-                            <div style={{ fontWeight: 950, color: "#0b1220" }}>{it.menu_items?.name || "Item"}</div>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                              <ItemThumb
+                                src={
+                                  it?.menu_items?.image_url ||
+                                  it?.menu_items?.image ||
+                                  it?.menu_items?.photo_url ||
+                                  it?.menu_items?.photo ||
+                                  it?.menu_items?.item_image ||
+                                  it?.menu_items?.product_image ||
+                                  ""
+                                }
+                                name={it?.menu_items?.name || "Item"}
+                              />
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 950, color: "#0b1220" }}>{it.menu_items?.name || "Item"}</div>
+                              </div>
+                            </div>
                             <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
                               Qty {it.qty}
-                              <span style={{ marginLeft: 10 }}>{formatMoney(Number(it.qty || 0) * Number(it.price_each || 0))}</span>
+                              <span style={{ marginLeft: 10 }}>{money(Number(it.qty || 0) * Number(it.price_each || 0), currency)}</span>
                             </div>
                           </div>
                         ))}
@@ -1303,6 +1761,48 @@ export default function OrdersPage() {
           </div>
         ) : null}
       </div>
+
+      {reviewModalOrder ? (
+        <div style={reviewModalBackdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) closeReviewModal(); }}>
+          <div style={reviewModalCard}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div style={{ fontWeight: 1000, fontSize: 18, color: "#0b1220" }}>Rate your order</div>
+              <button onClick={closeReviewModal} style={btnBack}>Close</button>
+            </div>
+            <div style={{ marginTop: 8, color: "rgba(17,24,39,0.7)", fontWeight: 800 }}>Order {String(reviewModalOrder.id).slice(0, 8)}?</div>
+            <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setReviewForm((prev) => ({ ...prev, rating: value }))}
+                  style={Number(reviewForm.rating) === value ? reviewStarBtnActive : reviewStarBtn}
+                >
+                  {value} Star{value === 1 ? "" : "s"}
+                </button>
+              ))}
+            </div>
+            <input
+              value={reviewForm.title}
+              onChange={(e) => setReviewForm((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder="Review title (optional)"
+              style={{ ...inputBase, marginTop: 14, width: "100%" }}
+            />
+            <textarea
+              value={reviewForm.comment}
+              onChange={(e) => setReviewForm((prev) => ({ ...prev, comment: e.target.value }))}
+              placeholder="Tell other customers about your experience"
+              rows={5}
+              style={{ ...inputBase, marginTop: 12, width: "100%", resize: "vertical", minHeight: 120 }}
+            />
+            {reviewError ? <div style={{ marginTop: 10, color: "#b42318", fontWeight: 900 }}>{reviewError}</div> : null}
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={closeReviewModal} style={btnBack} disabled={reviewSaving}>Cancel</button>
+              <button onClick={saveReview} style={btnReview} disabled={reviewSaving}>{reviewSaving ? "Saving..." : "Save Review"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
     </main>
   );
 }
@@ -1424,4 +1924,69 @@ const stepLineDone = {
 
 const stepLineTodo = {
   background: "rgba(0,0,0,0.10)",
+};
+
+
+const btnReview = {
+  padding: "10px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,140,0,0.35)",
+  background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
+  color: "#0b1220",
+  fontWeight: 950,
+  cursor: "pointer",
+  boxShadow: "0 10px 22px rgba(255,140,0,0.14)",
+};
+
+const reviewStarBtn = {
+  padding: "9px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "rgba(255,255,255,0.9)",
+  color: "#0b1220",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const reviewStarBtnActive = {
+  ...reviewStarBtn,
+  border: "1px solid rgba(255,140,0,0.35)",
+  background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
+  boxShadow: "0 10px 22px rgba(255,140,0,0.14)",
+};
+
+const reviewInfoBox = {
+  marginTop: 12,
+  padding: 14,
+  borderRadius: 16,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.8)",
+};
+
+const reviewModalBackdrop = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15,23,42,0.45)",
+  display: "grid",
+  placeItems: "center",
+  padding: 16,
+  zIndex: 9999,
+};
+
+const reviewModalCard = {
+  width: "min(680px, 100%)",
+  borderRadius: 18,
+  padding: 18,
+  background: "#fff",
+  border: "1px solid rgba(0,0,0,0.08)",
+  boxShadow: "0 20px 60px rgba(0,0,0,0.22)",
+};
+
+const inputBase = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(0,0,0,0.12)",
+  outline: "none",
+  fontWeight: 800,
+  background: "rgba(255,255,255,0.94)",
 };

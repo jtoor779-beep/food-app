@@ -9,9 +9,68 @@ import supabase from "@/lib/supabase";
    HELPERS
    ========================= */
 
-function money(v) {
+/* =========================================================
+   ✅ CURRENCY SUPPORT (DB + localStorage, SAFE)
+   - Source of truth: public.system_settings.default_currency
+   - Cache: localStorage "foodapp_currency"
+   ========================================================= */
+
+const DEFAULT_CURRENCY = "INR";
+
+function normalizeCurrency(c) {
+  const v = String(c || "").trim().toUpperCase();
+  if (v === "USD") return "USD";
+  if (v === "INR") return "INR";
+  return DEFAULT_CURRENCY;
+}
+
+function money(v, currency = DEFAULT_CURRENCY) {
   const n = Number(v || 0);
-  return `₹${n.toFixed(0)}`;
+  const cur = normalizeCurrency(currency);
+
+  if (!isFinite(n)) return cur === "USD" ? "$0.00" : "₹0";
+
+  const fractionDigits = cur === "INR" ? 0 : 2;
+
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: cur,
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(n);
+  } catch {
+    const fixed = n.toFixed(fractionDigits);
+    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+  }
+}
+
+async function fetchCurrencyFromDB() {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("key, default_currency, value_json, updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(10);
+
+    if (error) return DEFAULT_CURRENCY;
+
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length === 0) return DEFAULT_CURRENCY;
+
+    const globalRow = rows.find((r) => String(r?.key || "").toLowerCase() === "global");
+    const row = globalRow || rows[0];
+
+    const col = row?.default_currency;
+    if (col) return normalizeCurrency(col);
+
+    const jsonCur = row?.value_json?.default_currency;
+    if (jsonCur) return normalizeCurrency(jsonCur);
+
+    return DEFAULT_CURRENCY;
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
 }
 
 function safeStr(v) {
@@ -52,6 +111,78 @@ function safeNum(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 
+/* =========================================================
+   ✅ SAFE FEE READERS (COLUMN-AGNOSTIC)
+   - If your grocery_orders has different column names,
+     these will still catch them when present.
+   ========================================================= */
+
+function pickFirstNumber(obj, keys) {
+  if (!obj) return 0;
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      const n = safeNum(obj[k], 0);
+      return n;
+    }
+  }
+  return 0;
+}
+
+const TAX_KEYS = ["tax_amount", "tax", "gst_amount", "gst", "taxes", "tax_total"];
+const PLATFORM_KEYS = ["platform_fee", "platform_fee_amount", "service_fee", "service_fee_amount"];
+const DELIVERY_KEYS = ["delivery_fee", "delivery_fee_amount", "delivery_charge", "delivery_charge_amount"];
+const TIP_KEYS = ["tip_amount", "tip", "delivery_tip", "driver_tip"];
+
+/* =========================================================
+   ✅ PLATFORM SETTINGS (for invoice fallback calc)
+   - Used ONLY when grocery_orders does not store fees,
+     or DB defaults are clearly wrong.
+   ========================================================= */
+
+const PLATFORM_DEFAULTS = {
+  commission_percent: "10",
+  delivery_fee_base: "20",
+  delivery_free_over: "499",
+  gst_percent: "5",
+};
+
+function clampPercent(n) {
+  const x = safeNum(n, 0);
+  return Math.max(0, Math.min(100, x));
+}
+
+function cleanNumStr(v, fallbackStr) {
+  const s = String(v ?? "").trim();
+  if (!s) return fallbackStr;
+  const cleaned = s.replace(/[^\d.]/g, "");
+  return cleaned || fallbackStr;
+}
+
+async function loadPlatformSettingsSafe() {
+  try {
+    const { data, error } = await supabase
+      .from("system_settings")
+      .select("key, value_json, updated_at")
+      .eq("key", "platform")
+      .maybeSingle();
+
+    if (error) return { ...PLATFORM_DEFAULTS };
+
+    const json = data?.value_json && typeof data.value_json === "object" ? data.value_json : {};
+
+    return {
+      ...PLATFORM_DEFAULTS,
+      commission_percent: cleanNumStr(json?.commission_percent, PLATFORM_DEFAULTS.commission_percent),
+      delivery_fee_base: cleanNumStr(json?.delivery_fee_base, PLATFORM_DEFAULTS.delivery_fee_base),
+      delivery_free_over: cleanNumStr(json?.delivery_free_over, PLATFORM_DEFAULTS.delivery_free_over),
+      gst_percent: cleanNumStr(json?.gst_percent, PLATFORM_DEFAULTS.gst_percent),
+    };
+  } catch {
+    return { ...PLATFORM_DEFAULTS };
+  }
+}
+
+
 /* =========================
    ✅ FIX FOR NEXT BUILD:
    Wrap useSearchParams() in Suspense boundary
@@ -73,7 +204,8 @@ function GroceryInvoiceInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
-  const id = sp.get("id") || "";
+  // ✅ FIX: support multiple param names (this solves “click but not open” in many cases)
+  const id = sp.get("id") || sp.get("order_id") || sp.get("orderId") || "";
   const autoPrint = sp.get("print") === "1";
 
   const [loading, setLoading] = useState(true);
@@ -83,6 +215,12 @@ function GroceryInvoiceInner() {
   const [order, setOrder] = useState(null);
   const [store, setStore] = useState(null);
 
+  // ✅ currency
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
+
+  // ✅ platform settings (invoice fallback calc)
+  const [platform, setPlatform] = useState({ ...PLATFORM_DEFAULTS });
+
   const items = useMemo(() => {
     const arr = order?.grocery_order_items;
     return Array.isArray(arr) ? arr : [];
@@ -91,24 +229,61 @@ function GroceryInvoiceInner() {
   const subtotal = useMemo(() => {
     return (items || []).reduce((s, it) => {
       const qty = safeNum(it?.quantity ?? it?.qty, 0);
-      const unit = safeNum(it?.unit_price ?? it?.price_each, 0);
-      const line = safeNum(it?.line_total, qty * unit);
+      const unit = safeNum(it?.unit_price ?? it?.price_each ?? it?.price, 0);
+      const line = safeNum(it?.line_total ?? it?.total, qty * unit);
       return s + safeNum(line, 0);
     }, 0);
   }, [items]);
 
-  const deliveryFee = useMemo(() => safeNum(order?.delivery_fee, 0), [order]);
-  const tip = useMemo(() => safeNum(order?.tip_amount, 0), [order]);
+  // ✅ fees (schema-safe)
+  const storedDeliveryFee = useMemo(() => Math.max(0, pickFirstNumber(order, DELIVERY_KEYS)), [order]);
+  const tip = useMemo(() => Math.max(0, pickFirstNumber(order, TIP_KEYS)), [order]);
 
-  // GST/Tax: schema-safe (0 default). If you add column later it auto shows.
-  const gst = useMemo(() => {
-    const candidates = [order?.gst_amount, order?.tax_amount, order?.taxes, order?.gst, order?.tax];
-    for (const c of candidates) {
-      const n = Number(c);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    return 0;
+  const storedPlatformFee = useMemo(() => Math.max(0, pickFirstNumber(order, PLATFORM_KEYS)), [order]);
+
+  const storedGst = useMemo(() => {
+    const v = pickFirstNumber(order, TAX_KEYS);
+    return Math.max(0, v);
   }, [order]);
+
+  // ✅ platform settings (used only for fallback calculations)
+  const commissionPercent = useMemo(() => clampPercent(platform?.commission_percent), [platform]);
+  const gstPercent = useMemo(() => clampPercent(platform?.gst_percent), [platform]);
+  const deliveryBase = useMemo(() => Math.max(0, safeNum(platform?.delivery_fee_base, 0)), [platform]);
+  const deliveryFreeOver = useMemo(() => Math.max(0, safeNum(platform?.delivery_free_over, 0)), [platform]);
+
+  // ✅ computed (fallback) fees based on CURRENT platform settings
+  const computedPlatformFee = useMemo(
+    () => Math.round(Number(subtotal || 0) * (commissionPercent / 100)),
+    [subtotal, commissionPercent]
+  );
+  const computedGst = useMemo(() => Math.round(Number(subtotal || 0) * (gstPercent / 100)), [subtotal, gstPercent]);
+  const computedDeliveryFee = useMemo(() => {
+    if (deliveryFreeOver > 0 && Number(subtotal || 0) >= deliveryFreeOver) return 0;
+    return deliveryBase;
+  }, [subtotal, deliveryFreeOver, deliveryBase]);
+
+  // ✅ choose stored if present; otherwise fallback computed
+  // Also: if stored value is clearly wrong compared to order total (DB defaults), ignore it.
+  const orderTotal = useMemo(() => Math.max(0, safeNum(order?.total_amount, 0)), [order]);
+
+  const platformFee = useMemo(() => {
+    const val = storedPlatformFee > 0 ? storedPlatformFee : computedPlatformFee;
+    if (orderTotal > 0 && val > orderTotal) return computedPlatformFee;
+    return Math.max(0, val);
+  }, [storedPlatformFee, computedPlatformFee, orderTotal]);
+
+  const gst = useMemo(() => {
+    const val = storedGst > 0 ? storedGst : computedGst;
+    if (orderTotal > 0 && val > orderTotal) return computedGst;
+    return Math.max(0, val);
+  }, [storedGst, computedGst, orderTotal]);
+
+  const deliveryFee = useMemo(() => {
+    const val = storedDeliveryFee > 0 ? storedDeliveryFee : computedDeliveryFee;
+    if (orderTotal > 0 && val > orderTotal) return computedDeliveryFee;
+    return Math.max(0, val);
+  }, [storedDeliveryFee, computedDeliveryFee, orderTotal]);
 
   const discount = useMemo(() => {
     const candidates = [order?.discount_amount, order?.discount, order?.coupon_discount];
@@ -122,9 +297,11 @@ function GroceryInvoiceInner() {
   const grandTotal = useMemo(() => {
     const t = safeNum(order?.total_amount, 0);
     if (t > 0) return t;
-    const computed = subtotal + deliveryFee + tip + gst - discount;
+
+    // ✅ computed total includes platformFee too
+    const computed = subtotal + deliveryFee + platformFee + tip + gst - discount;
     return Math.max(0, computed);
-  }, [order, subtotal, deliveryFee, tip, gst, discount]);
+  }, [order, subtotal, deliveryFee, platformFee, tip, gst, discount]);
 
   const invoiceNo = useMemo(() => {
     const short = safeStr(order?.id).slice(0, 6).toUpperCase();
@@ -137,22 +314,110 @@ function GroceryInvoiceInner() {
     return `${s.slice(0, 6)}…${s.slice(-4)}`;
   }, [order]);
 
-  async function fetchItems(orderId) {
-    // ✅ IMPORTANT: Your DB has "item_name" column
+  async function fetchItems(orderId, seedRows = []) {
+    const baseRows = Array.isArray(seedRows) ? seedRows : [];
+
+    // ✅ SAFE: support every known grocery_order_items shape without breaking old logic
     const tries = [
-      "id, order_id, item_name, name, quantity, unit_price, line_total",
-      "id, order_id, item_name, quantity, unit_price, line_total",
-      "id, order_id, item_name, quantity",
-      "id, order_id, name, quantity, unit_price, line_total",
-      "id, order_id, name, quantity",
+      "id, order_id, grocery_item_id, item_id, item_name, name, quantity, qty, unit_price, price_each, price, line_total, total",
+      "id, order_id, grocery_item_id, item_id, item_name, quantity, qty, unit_price, price_each, price, line_total, total",
+      "id, order_id, grocery_item_id, item_id, name, quantity, qty, unit_price, price_each, price, line_total, total",
+      "id, order_id, grocery_item_id, item_id, quantity, qty, unit_price, price_each, price, line_total, total",
+      "id, order_id, grocery_item_id, item_id, quantity, qty, price_each, price",
+      "id, order_id, grocery_item_id, item_id, quantity, qty",
+      "*",
     ];
+
+    let fetchedRows = [];
 
     for (const sel of tries) {
       const r = await supabase.from("grocery_order_items").select(sel).eq("order_id", orderId);
-      if (!r.error) return Array.isArray(r.data) ? r.data : [];
+      if (!r.error) {
+        fetchedRows = Array.isArray(r.data) ? r.data : [];
+        break;
+      }
     }
 
-    return [];
+    const merged = [...baseRows, ...fetchedRows];
+    if (merged.length === 0) return [];
+
+    const groceryItemIds = Array.from(
+      new Set(
+        merged
+          .map((it) => it?.grocery_item_id || it?.item_id || null)
+          .filter(Boolean)
+          .map((v) => String(v))
+      )
+    );
+
+    let groceryItemMap = new Map();
+
+    if (groceryItemIds.length > 0) {
+      const itemSelectTries = [
+        "id, name, price, unit_price",
+        "id, item_name, price, unit_price",
+        "id, name, price",
+        "id, item_name, price",
+        "*",
+      ];
+
+      for (const sel of itemSelectTries) {
+        const r = await supabase.from("grocery_items").select(sel).in("id", groceryItemIds);
+        if (!r.error) {
+          const rows = Array.isArray(r.data) ? r.data : [];
+          groceryItemMap = new Map(rows.map((row) => [String(row?.id), row]));
+          break;
+        }
+      }
+    }
+
+    const normalized = merged.map((it, ix) => {
+      const groceryId = it?.grocery_item_id || it?.item_id || null;
+      const catalog = groceryId ? groceryItemMap.get(String(groceryId)) : null;
+
+      const qty = safeNum(it?.quantity ?? it?.qty, 0);
+      const unit = safeNum(
+        it?.unit_price ?? it?.price_each ?? it?.price ?? catalog?.unit_price ?? catalog?.price,
+        0
+      );
+      const line = safeNum(it?.line_total ?? it?.total, qty * unit);
+      const name =
+        safeStr(it?.item_name) ||
+        safeStr(it?.name) ||
+        safeStr(catalog?.name) ||
+        safeStr(catalog?.item_name) ||
+        "Item";
+
+      return {
+        ...it,
+        id: it?.id || `${orderId}-${groceryId || ix}`,
+        grocery_item_id: groceryId,
+        item_id: groceryId,
+        item_name: name,
+        name,
+        quantity: qty,
+        qty,
+        unit_price: unit,
+        price_each: unit,
+        price: unit,
+        line_total: line,
+        total: line,
+      };
+    });
+
+    const deduped = [];
+    const seen = new Set();
+
+    for (const row of normalized) {
+      const key = `${String(row?.id || "")}|${String(row?.grocery_item_id || row?.item_id || "")}|${String(
+        row?.item_name || row?.name || ""
+      )}|${String(row?.quantity ?? row?.qty ?? "")}|${String(row?.unit_price ?? row?.price_each ?? row?.price ?? "")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(row);
+    }
+
+    return deduped;
   }
 
   async function load() {
@@ -160,6 +425,32 @@ function GroceryInvoiceInner() {
     setErr("");
 
     try {
+      // ✅ Currency bootstrap (same as orders)
+      (async () => {
+        try {
+          const c = localStorage.getItem("foodapp_currency");
+          setCurrency(normalizeCurrency(c));
+        } catch {
+          setCurrency(DEFAULT_CURRENCY);
+        }
+
+        const dbCur = await fetchCurrencyFromDB();
+        const normalized = normalizeCurrency(dbCur);
+
+        setCurrency(normalized);
+        try {
+          localStorage.setItem("foodapp_currency", normalized);
+        } catch {}
+      })();
+
+      // ✅ Platform settings (for invoice fallback calc)
+      try {
+        const p = await loadPlatformSettingsSafe();
+        setPlatform(p);
+      } catch {
+        setPlatform({ ...PLATFORM_DEFAULTS });
+      }
+
       if (!id) {
         setErr("Missing order id.");
         setLoading(false);
@@ -176,7 +467,44 @@ function GroceryInvoiceInner() {
       }
       setUser(u);
 
-      // Try with embedded items (but include item_name not product_name)
+      // ✅ Try with embedded items + extra fee columns (column-safe)
+      const baseSelectWithFees = `
+        id,
+        customer_user_id,
+        store_id,
+        status,
+        total_amount,
+        delivery_fee,
+        tip_amount,
+        platform_fee,
+        platform_fee_amount,
+        service_fee,
+        service_fee_amount,
+        tax_amount,
+        gst_amount,
+        gst,
+        tax,
+        taxes,
+        created_at,
+        updated_at,
+        customer_name,
+        customer_phone,
+        delivery_address,
+        instructions,
+        grocery_order_items (
+          id,
+          order_id,
+          item_name,
+          name,
+          quantity,
+          qty,
+          unit_price,
+          price_each,
+          price,
+          line_total
+        )
+      `;
+
       const baseSelect = `
         id,
         customer_user_id,
@@ -197,7 +525,10 @@ function GroceryInvoiceInner() {
           item_name,
           name,
           quantity,
+          qty,
           unit_price,
+          price_each,
+          price,
           line_total
         )
       `;
@@ -220,25 +551,38 @@ function GroceryInvoiceInner() {
 
       let o = null;
 
-      const r1 = await supabase
+      // Try: with fees first (may fail if some columns don't exist)
+      const r0 = await supabase
         .from("grocery_orders")
-        .select(baseSelect)
+        .select(baseSelectWithFees)
         .eq("id", id)
         .eq("customer_user_id", u.id)
         .maybeSingle();
 
-      if (!r1.error && r1.data) {
-        o = r1.data;
+      if (!r0.error && r0.data) {
+        o = r0.data;
       } else {
-        const r2 = await supabase
+        // fallback: original baseSelect (old logic)
+        const r1 = await supabase
           .from("grocery_orders")
-          .select(altSelect)
+          .select(baseSelect)
           .eq("id", id)
           .eq("customer_user_id", u.id)
           .maybeSingle();
 
-        if (r2.error) throw r2.error;
-        o = r2.data;
+        if (!r1.error && r1.data) {
+          o = r1.data;
+        } else {
+          const r2 = await supabase
+            .from("grocery_orders")
+            .select(altSelect)
+            .eq("id", id)
+            .eq("customer_user_id", u.id)
+            .maybeSingle();
+
+          if (r2.error) throw r2.error;
+          o = r2.data;
+        }
       }
 
       if (!o) {
@@ -247,10 +591,11 @@ function GroceryInvoiceInner() {
         return;
       }
 
-      // If items missing, fetch from grocery_order_items using order_id
-      if (!Array.isArray(o.grocery_order_items) || o.grocery_order_items.length === 0) {
-        o.grocery_order_items = await fetchItems(o.id);
-      }
+      // ✅ IMPORTANT: always normalize/enrich invoice items so grocery invoice matches cart breakdown better
+      o.grocery_order_items = await fetchItems(
+        o.id,
+        Array.isArray(o.grocery_order_items) ? o.grocery_order_items : []
+      );
 
       setOrder(o);
 
@@ -259,7 +604,11 @@ function GroceryInvoiceInner() {
       try {
         const tries = ["id, name, address, phone", "id, store_name, address, phone", "id, name"];
         for (const sel of tries) {
-          const { data: s, error: sErr } = await supabase.from("grocery_stores").select(sel).eq("id", o.store_id).maybeSingle();
+          const { data: s, error: sErr } = await supabase
+            .from("grocery_stores")
+            .select(sel)
+            .eq("id", o.store_id)
+            .maybeSingle();
           if (!sErr && s) {
             sRow = s;
             break;
@@ -313,10 +662,13 @@ function GroceryInvoiceInner() {
               <div style={pill}>Invoice • Grocery</div>
               <div style={{ ...chip, ...statusChipStyle(status) }}>{status.toUpperCase()}</div>
               <div style={chip}>{invoiceNo}</div>
+              <div style={chip}>Currency: {currency}</div>
             </div>
 
             <h1 style={title}>Grocery Invoice</h1>
-            <div style={sub}>{loading ? "Loading invoice…" : err ? "Invoice error" : `Order #${String(order?.id || "").slice(0, 8)}…`}</div>
+            <div style={sub}>
+              {loading ? "Loading invoice…" : err ? "Invoice error" : `Order #${String(order?.id || "").slice(0, 8)}…`}
+            </div>
 
             {!loading && !err && order ? (
               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -364,8 +716,10 @@ function GroceryInvoiceInner() {
 
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.60)", fontSize: 12 }}>Invoice Total</div>
-                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>{money(grandTotal)}</div>
-                <div style={{ marginTop: 2, fontWeight: 850, color: "rgba(17,24,39,0.60)", fontSize: 12 }}>Generated: {formatTime(new Date())}</div>
+                <div style={{ fontWeight: 1100, color: "#0b1220", fontSize: 22 }}>{money(grandTotal, currency)}</div>
+                <div style={{ marginTop: 2, fontWeight: 850, color: "rgba(17,24,39,0.60)", fontSize: 12 }}>
+                  Generated: {formatTime(new Date())}
+                </div>
               </div>
             </div>
 
@@ -431,15 +785,15 @@ function GroceryInvoiceInner() {
                     // ✅ IMPORTANT: Use item_name first (your DB), fallback to name
                     const name = safeStr(it?.item_name) || safeStr(it?.name) || "Item";
                     const qty = safeNum(it?.quantity ?? it?.qty, 0);
-                    const unit = safeNum(it?.unit_price ?? it?.price_each, 0);
+                    const unit = safeNum(it?.unit_price ?? it?.price_each ?? it?.price, 0);
                     const line = safeNum(it?.line_total, qty * unit);
 
                     return (
                       <div key={it.id} style={tRow}>
                         <div style={{ fontWeight: 950, color: "#0b1220" }}>{name}</div>
                         <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{qty}</div>
-                        <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{money(unit)}</div>
-                        <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>{money(line)}</div>
+                        <div style={{ textAlign: "right", fontWeight: 900, color: "rgba(17,24,39,0.75)" }}>{money(unit, currency)}</div>
+                        <div style={{ textAlign: "right", fontWeight: 1000, color: "#0b1220" }}>{money(line, currency)}</div>
                       </div>
                     );
                   })
@@ -461,28 +815,40 @@ function GroceryInvoiceInner() {
               <div style={totalsBox}>
                 <div style={line}>
                   <span>Subtotal</span>
-                  <span style={{ color: "#0b1220" }}>{money(subtotal)}</span>
+                  <span style={{ color: "#0b1220" }}>{money(subtotal, currency)}</span>
+                </div>
+                <div style={line}>
+                  <span>Platform fee</span>
+                  <span style={{ color: "#0b1220" }}>{money(platformFee, currency)}</span>
                 </div>
                 <div style={line}>
                   <span>Delivery Fee</span>
-                  <span style={{ color: "#0b1220" }}>{money(deliveryFee)}</span>
+                  <span style={{ color: "#0b1220" }}>{money(deliveryFee, currency)}</span>
                 </div>
                 <div style={line}>
                   <span>Tip</span>
-                  <span style={{ color: "#0b1220" }}>{money(tip)}</span>
+                  <span style={{ color: "#0b1220" }}>{money(tip, currency)}</span>
                 </div>
                 <div style={line}>
-                  <span>Taxes / GST</span>
-                  <span style={{ color: "#0b1220" }}>{money(gst)}</span>
+                  <span>Tax</span>
+                  <span style={{ color: "#0b1220" }}>{money(gst, currency)}</span>
                 </div>
                 <div style={line}>
                   <span>Discount</span>
-                  <span style={{ color: discount > 0 ? "#065f46" : "#0b1220" }}>{discount > 0 ? `- ${money(discount)}` : money(0)}</span>
+                  <span style={{ color: discount > 0 ? "#065f46" : "#0b1220" }}>
+                    {discount > 0 ? `- ${money(discount, currency)}` : money(0, currency)}
+                  </span>
                 </div>
                 <div style={{ ...line, borderBottom: "none" }}>
                   <span style={{ fontWeight: 1000, color: "#0b1220" }}>Grand Total</span>
-                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>{money(grandTotal)}</span>
+                  <span style={{ fontWeight: 1000, color: "#0b1220" }}>{money(grandTotal, currency)}</span>
                 </div>
+
+                {platformFee === 0 && gst === 0 ? (
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.55)" }}>
+                    Note: If Platform fee/Tax shows 0 here, those values are not stored on the grocery_orders record after payment.
+                  </div>
+                ) : null}
               </div>
             </div>
 

@@ -29,11 +29,15 @@ const nextConfig: NextConfig = {
 };
 
 // ✅ next-pwa wrapper (TypeScript-safe in next.config.ts)
+// IMPORTANT:
+// We only enable PWA when you explicitly opt in with PWA_ENABLED=true.
+// This prevents service-worker/cache issues during normal local development
+// and avoids breaking app pages with stale cached assets.
 const withPWA = require("next-pwa")({
   dest: "public",
   register: true,
   skipWaiting: true,
-  disable: process.env.NODE_ENV === "development",
+  disable: process.env.PWA_ENABLED !== "true",
 });
 
 export default withPWA(nextConfig);

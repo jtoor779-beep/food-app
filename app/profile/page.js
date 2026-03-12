@@ -97,6 +97,55 @@ export default function ProfilePage() {
     marketing: false,
   });
 
+  function notifyProfileUpdated(extra = {}) {
+    if (typeof window === "undefined") return;
+    try {
+      const payload = {
+        user_id: profile.user_id || "",
+        email: profile.email || "",
+        role: profile.role || "",
+        full_name: extra.full_name ?? profile.full_name ?? "",
+        phone: extra.phone ?? profile.phone ?? "",
+        address_line1: extra.address_line1 ?? profile.address_line1 ?? "",
+        city: extra.city ?? profile.city ?? "",
+        state: extra.state ?? profile.state ?? "",
+        zip: extra.zip ?? profile.zip ?? "",
+        avatar_url: extra.avatar_url ?? profile.avatar_url ?? "",
+        ts: Date.now(),
+      };
+      localStorage.setItem("foodapp_profile_cache", JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+    try {
+      window.dispatchEvent(new Event("storage"));
+    } catch {
+      // ignore
+    }
+    try {
+      window.dispatchEvent(new Event("foodapp_profile_updated"));
+    } catch {
+      // ignore
+    }
+  }
+
+  async function upsertProfileRow(userId, patch, roleFallback = "") {
+    const payload = {
+      user_id: userId,
+      ...patch,
+    };
+
+    if (roleFallback) {
+      payload.role = roleFallback;
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .upsert(payload, { onConflict: "user_id" });
+
+    if (error) throw error;
+  }
+
   async function loadPrefs() {
     try {
       const emailUpdates = localStorage.getItem("pref_email_updates");
@@ -243,6 +292,8 @@ export default function ProfilePage() {
         zip: next.zip,
       });
 
+      notifyProfileUpdated(next);
+
       // ✅ NEW: pro extras
       await loadPrefs();
       await loadStats(user.id);
@@ -291,15 +342,18 @@ export default function ProfilePage() {
       const publicUrl = pub?.publicUrl || "";
       if (!publicUrl) throw new Error("Could not get public URL");
 
-      // Save URL into profiles.avatar_url
-      const { error: saveErr } = await supabase
-        .from("profiles")
-        .update({ avatar_url: publicUrl })
-        .eq("user_id", user.id);
+      // Save URL into profiles.avatar_url (update existing row OR create missing row)
+      await upsertProfileRow(
+        user.id,
+        { avatar_url: publicUrl },
+        profile.role || "customer"
+      );
 
-      if (saveErr) throw saveErr;
-
-      setProfile((p) => ({ ...p, avatar_url: publicUrl }));
+      setProfile((p) => {
+        const next = { ...p, avatar_url: publicUrl };
+        notifyProfileUpdated(next);
+        return next;
+      });
       setOk("✅ Photo updated!");
     } catch (e) {
       setErr(
@@ -334,10 +388,17 @@ export default function ProfilePage() {
         zip: String(edit.zip || "").trim(),
       };
 
-      const { error } = await supabase.from("profiles").update(payload).eq("user_id", user.id);
-      if (error) throw error;
+      await upsertProfileRow(
+        user.id,
+        payload,
+        profile.role || "customer"
+      );
 
-      setProfile((p) => ({ ...p, ...payload }));
+      setProfile((p) => {
+        const next = { ...p, ...payload };
+        notifyProfileUpdated(next);
+        return next;
+      });
       setOk("✅ Profile updated!");
     } catch (e) {
       setErr(e?.message || String(e));
@@ -1036,13 +1097,17 @@ export default function ProfilePage() {
                             router.push("/login");
                             return;
                           }
-                          const { error: saveErr } = await supabase
-                            .from("profiles")
-                            .update({ avatar_url: null })
-                            .eq("user_id", user.id);
-                          if (saveErr) throw saveErr;
+                          await upsertProfileRow(
+                            user.id,
+                            { avatar_url: null },
+                            profile.role || "customer"
+                          );
 
-                          setProfile((p) => ({ ...p, avatar_url: "" }));
+                          setProfile((p) => {
+                            const next = { ...p, avatar_url: "" };
+                            notifyProfileUpdated(next);
+                            return next;
+                          });
                           setOk("✅ Photo removed");
                         } catch (e) {
                           setErr(e?.message || String(e));

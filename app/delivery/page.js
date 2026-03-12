@@ -12,6 +12,7 @@ import supabase from "@/lib/supabase";
 // - We unify both sources into ONE delivery dashboard list with a `_source` field.
 
 const DELIVERY_FEE = 40;
+const OFFER_SECONDS_DEFAULT = 25;
 
 function normalizeRole(r) {
   return String(r || "")
@@ -19,6 +20,14 @@ function normalizeRole(r) {
     .toLowerCase()
     .replace(/\s+/g, "_");
 }
+
+function normStatus(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
 
 function normalizeDeliveryStatus(s) {
   const x = String(s || "")
@@ -145,8 +154,29 @@ function buildGoogleMapsUrl(address) {
 function buildGoogleMapsUrlLatLng(lat, lng) {
   const la = Number(lat);
   const ln = Number(lng);
+
+  // Treat missing/invalid values as unusable
   if (!isFinite(la) || !isFinite(ln)) return "";
+
+  // In this app, 0,0 means "not saved" (placeholder), so don't generate a URL
+  // (Real deliveries won't be in the ocean at 0,0.)
+  if (Math.abs(la) < 0.00001 && Math.abs(ln) < 0.00001) return "";
+
   return `https://www.google.com/maps/search/?api=1&query=${la},${ln}`;
+}
+
+function buildGoogleMapsNavUrlLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+
+  // Treat missing/invalid values as unusable
+  if (!isFinite(la) || !isFinite(ln)) return "";
+
+  // 0,0 means "not saved" in this app
+  if (Math.abs(la) < 0.00001 && Math.abs(ln) < 0.00001) return "";
+
+  // Directions with destination (lets driver start navigation immediately)
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${la},${ln}`)}&travelmode=driving`;
 }
 
 function buildGoogleMapsDirectionsUrl(originLat, originLng, destLat, destLng) {
@@ -154,10 +184,92 @@ function buildGoogleMapsDirectionsUrl(originLat, originLng, destLat, destLng) {
   const oln = Number(originLng);
   const dla = Number(destLat);
   const dln = Number(destLng);
+
   if (![ola, oln, dla, dln].every((x) => isFinite(x))) return "";
+
+  // Guard against placeholder "not saved" coords (0,0)
+  if (
+    (Math.abs(ola) < 0.00001 && Math.abs(oln) < 0.00001) ||
+    (Math.abs(dla) < 0.00001 && Math.abs(dln) < 0.00001)
+  ) {
+    return "";
+  }
+
   return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
     `${ola},${oln}`
   )}&destination=${encodeURIComponent(`${dla},${dln}`)}&travelmode=driving`;
+}
+
+/* =========================
+   Miles / Distance helpers (UI estimate)
+   ========================= */
+function isValidLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!isFinite(la) || !isFinite(ln)) return false;
+  // 0,0 is treated as "not saved" in this app
+  if (Math.abs(la) < 0.00001 && Math.abs(ln) < 0.00001) return false;
+  return true;
+}
+
+function pickFirstNumber(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    const n = Number(v);
+    if (isFinite(n)) return n;
+  }
+  return null;
+}
+
+function getPickupLatLng(o) {
+  if (!o) return { lat: null, lng: null };
+
+  // Restaurant orders commonly store pickup on the order
+  const rLat = pickFirstNumber(o, ["restaurant_lat", "pickup_lat", "origin_lat", "store_lat", "lat_pickup"]);
+  const rLng = pickFirstNumber(o, ["restaurant_lng", "pickup_lng", "origin_lng", "store_lng", "lng_pickup"]);
+  if (isValidLatLng(rLat, rLng)) return { lat: rLat, lng: rLng };
+
+  // Grocery orders: we enrich with _pickup_lat/_pickup_lng from grocery_stores
+  const gLat = pickFirstNumber(o, ["_pickup_lat", "store_lat", "lat"]);
+  const gLng = pickFirstNumber(o, ["_pickup_lng", "store_lng", "lng"]);
+  if (isValidLatLng(gLat, gLng)) return { lat: gLat, lng: gLng };
+
+  return { lat: null, lng: null };
+}
+
+function getDropLatLng(o) {
+  if (!o) return { lat: null, lng: null };
+
+  const dLat = pickFirstNumber(o, ["customer_lat", "delivery_lat", "drop_lat", "dest_lat", "lat_drop", "lat"]);
+  const dLng = pickFirstNumber(o, ["customer_lng", "delivery_lng", "drop_lng", "dest_lng", "lng_drop", "lng"]);
+  if (isValidLatLng(dLat, dLng)) return { lat: dLat, lng: dLng };
+
+  return { lat: null, lng: null };
+}
+
+function haversineMiles(lat1, lng1, lat2, lng2) {
+  try {
+    const toRad = (x) => (Number(x) * Math.PI) / 180;
+    const R = 3958.8; // Earth radius in miles
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const d = R * c;
+    if (!isFinite(d) || d <= 0) return null;
+    return d;
+  } catch {
+    return null;
+  }
+}
+
+function estimateOrderMiles(o) {
+  const p = getPickupLatLng(o);
+  const d = getDropLatLng(o);
+  if (!isValidLatLng(p.lat, p.lng) || !isValidLatLng(d.lat, d.lng)) return null;
+  return haversineMiles(p.lat, p.lng, d.lat, d.lng);
 }
 
 async function copyText(txt) {
@@ -246,6 +358,11 @@ export default function DeliveryHomePage() {
   const [searchText, setSearchText] = useState("");
   const [sortMode, setSortMode] = useState("newest");
 
+  // ✅ Order Details Panel (mobile full-screen / desktop drawer)
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsCtx, setDetailsCtx] = useState({ order: null, type: "available" });
+  const [isMobile, setIsMobile] = useState(false);
+
   // ✅ NEW: source filter (All / Restaurant / Grocery)
   const [sourceFilter, setSourceFilter] = useState("all"); // all | restaurant | grocery
 
@@ -256,9 +373,404 @@ export default function DeliveryHomePage() {
   const [toast, setToast] = useState({ show: false, text: "" });
   const toastTimer = useRef(null);
 
+
+  // =========================
+  // 🔔 New-order alerts (Sound + Vibration) - stored locally (no DB change)
+  // =========================
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    try {
+      const v = localStorage.getItem("delivery_sound_enabled");
+      if (v === null) return true;
+      return v === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  const [vibrateEnabled, setVibrateEnabled] = useState(() => {
+    try {
+      const v = localStorage.getItem("delivery_vibrate_enabled");
+      if (v === null) return true;
+      return v === "1";
+    } catch {
+      return true;
+    }
+  });
+
+
+  // =========================
+  // 🔔 Push Notifications (PWA) - works even when app is closed (requires Service Worker)
+  // =========================
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushPermission, setPushPermission] = useState("default"); // default | granted | denied
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+
+  function urlBase64ToUint8Array(base64String) {
+    try {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const rawData = window.atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+      return outputArray;
+    } catch {
+      return null;
+    }
+  }
+
+  async function getServiceWorkerRegistration() {
+    if (typeof window === "undefined") return null;
+    if (!("serviceWorker" in navigator)) return null;
+
+    // Prefer an existing registration at root scope
+    let reg = await navigator.serviceWorker.getRegistration("/");
+
+    // If not registered yet, register our SW (served from /public/sw.js)
+    if (!reg) {
+      reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    }
+
+    // Wait until the SW is ready (active)
+    await navigator.serviceWorker.ready;
+
+    // Re-fetch after ready (sometimes the returned reg is stale)
+    reg = await navigator.serviceWorker.getRegistration("/");
+
+    if (!reg) return null;
+
+    // Ensure we have an active worker before subscribing
+    if (!reg.active) {
+      const candidate = reg.installing || reg.waiting;
+      if (candidate) {
+        await new Promise((resolve) => {
+          const onState = () => {
+            if (candidate.state === "activated") {
+              candidate.removeEventListener("statechange", onState);
+              resolve(true);
+            }
+          };
+          candidate.addEventListener("statechange", onState);
+          // In case it's already activated
+          if (candidate.state === "activated") resolve(true);
+        });
+      }
+    }
+
+    return reg;
+  }
+
+  async function refreshPushState() {
+    try {
+      if (typeof window === "undefined") return;
+      const supported =
+        "Notification" in window && typeof navigator !== "undefined" && "serviceWorker" in navigator && "PushManager" in window;
+
+      setPushSupported(!!supported);
+      if (!supported) return;
+
+      setPushPermission(Notification.permission || "default");
+
+      const reg = await getServiceWorkerRegistration();
+      if (!reg?.pushManager) {
+        setPushEnabled(false);
+        return;
+      }
+
+      const sub = await reg.pushManager.getSubscription();
+      setPushEnabled(!!sub);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function enablePushNotifications() {
+    if (!deliveryAllowed) return showToast("Account not approved");
+    if (!userId) return showToast("Not logged in");
+    if (typeof window === "undefined") return;
+
+    const supported =
+      "Notification" in window && typeof navigator !== "undefined" && "serviceWorker" in navigator && "PushManager" in window;
+
+    if (!supported) {
+      showToast("Push not supported on this device/browser");
+      return;
+    }
+
+    setPushBusy(true);
+    setErrMsg("");
+
+    try {
+      const perm = await Notification.requestPermission();
+      setPushPermission(perm);
+
+      if (perm !== "granted") {
+        showToast("Permission denied for notifications");
+        return;
+      }
+
+      const reg = await getServiceWorkerRegistration();
+      if (!reg) {
+        showToast("Service worker not ready");
+        return;
+      }
+
+      const vapidPublicKey = String(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "").trim();
+      if (!vapidPublicKey) {
+        showToast("Missing VAPID key (NEXT_PUBLIC_VAPID_PUBLIC_KEY)");
+        return;
+      }
+
+      const appKey = urlBase64ToUint8Array(vapidPublicKey);
+      if (!appKey) {
+        showToast("Invalid VAPID public key");
+        return;
+      }
+
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+      }
+
+      setPushEnabled(true);
+      showToast("Push notifications enabled ✅");
+
+      // Save subscription in DB (matches your current table columns)
+      const json = sub.toJSON ? sub.toJSON() : sub;
+      const endpoint = json?.endpoint || sub?.endpoint || "";
+      const p256dh = json?.keys?.p256dh || "";
+      const auth = json?.keys?.auth || "";
+
+      const { error: upsertError } = await supabase
+        .from("push_subscriptions")
+        .upsert(
+          [
+            {
+              user_id: userId,
+              endpoint,
+              p256dh,
+              auth,
+              user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+              created_at: new Date().toISOString(),
+            },
+          ],
+          { onConflict: "user_id" }
+        );
+
+      if (upsertError) throw upsertError;
+
+      showToast("✅ Push enabled + saved");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+      showToast("Could not enable push");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function disablePushNotifications() {
+    if (!userId) return;
+    if (typeof window === "undefined") return;
+
+    setPushBusy(true);
+    setErrMsg("");
+
+    try {
+      const reg = await getServiceWorkerRegistration();
+      const sub = await reg?.pushManager?.getSubscription?.();
+      if (sub) {
+        try {
+          await sub.unsubscribe();
+        } catch {}
+      }
+
+      setPushEnabled(false);
+      showToast("Push notifications disabled");
+
+      // Best-effort DB cleanup
+      try {
+        await supabase.from("push_subscriptions").delete().eq("user_id", userId);
+      } catch {}
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  // Mobile browsers require a user gesture to play audio. We'll unlock audio after first tap/click.
+  const audioReadyRef = useRef(false);
+  const audioCtxRef = useRef(null);
+  const warnedSoundRef = useRef(false);
+
+  function persistSound(next) {
+    const val = !!next;
+    setSoundEnabled(val);
+    try {
+      localStorage.setItem("delivery_sound_enabled", val ? "1" : "0");
+    } catch {}
+    showToast(val ? "Sound ON" : "Sound OFF");
+  }
+
+  function persistVibrate(next) {
+    const val = !!next;
+    setVibrateEnabled(val);
+    try {
+      localStorage.setItem("delivery_vibrate_enabled", val ? "1" : "0");
+    } catch {}
+    if (val && typeof navigator !== "undefined" && "vibrate" in navigator) {
+      try {
+        navigator.vibrate([120, 60, 120]);
+      } catch {}
+    }
+    showToast(val ? "Vibrate ON" : "Vibrate OFF");
+  }
+
+  function unlockAudioIfNeeded() {
+    if (audioReadyRef.current) return true;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return false;
+      const ctx = audioCtxRef.current || new Ctx();
+      audioCtxRef.current = ctx;
+
+      // Some browsers start suspended; resume in a gesture.
+      if (ctx.state === "suspended" && typeof ctx.resume === "function") {
+        ctx.resume().catch(() => {});
+      }
+
+      // Create a tiny silent buffer to "prime" audio.
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start(0);
+      o.stop(0.01);
+
+      audioReadyRef.current = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function playNewOrderBeep() {
+    if (!soundEnabled) return;
+    if (typeof window === "undefined") return;
+
+    const ok = unlockAudioIfNeeded();
+    if (!ok) return;
+
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 880;
+
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.2);
+    } catch {
+      // ignore
+    }
+  }
+
+  function vibrateNewOrder() {
+    if (!vibrateEnabled) return;
+    if (typeof navigator === "undefined") return;
+    if (!("vibrate" in navigator)) return;
+    try {
+      navigator.vibrate([200, 120, 200, 120, 200]);
+    } catch {}
+  }
+
+  function playAlert() {
+    // Unified alert used by realtime delivery_events:
+    // keep behavior consistent with "new order" alerts.
+    try {
+      playNewOrderBeep();
+    } catch {}
+    try {
+      vibrateNewOrder();
+    } catch {}
+  }
+
+
+  useEffect(() => {
+    function onFirstGesture() {
+      unlockAudioIfNeeded();
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    }
+    window.addEventListener("pointerdown", onFirstGesture, { passive: true });
+    window.addEventListener("touchstart", onFirstGesture, { passive: true });
+    window.addEventListener("mousedown", onFirstGesture, { passive: true });
+    window.addEventListener("keydown", onFirstGesture);
+
+    return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    };
+    
+// eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
+
+  // ✅ Responsive helper (PWA / phones)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 640px)");
+    const apply = () => setIsMobile(!!mq.matches);
+    apply();
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", apply);
+    else mq.addListener?.(apply);
+    return () => {
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", apply);
+      else mq.removeListener?.(apply);
+    };
+  }, []);
+
+  // =========================
+  // 🔔 Push notification state (detect + keep in sync)
+  // =========================
+  useEffect(() => {
+    refreshPushState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    refreshPushState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // =========================
+  // ✅ Option 2: Offer Screen (Accept/Reject with timer)
+  // =========================
+  const [offerOpen, setOfferOpen] = useState(false);
+  const [offerOrder, setOfferOrder] = useState(null);
+  const [offerSecondsLeft, setOfferSecondsLeft] = useState(OFFER_SECONDS_DEFAULT);
+  const offerIntervalRef = useRef(null);
+  const [declinedOfferIds, setDeclinedOfferIds] = useState(() => new Set());
+
   // Realtime channels (prevent duplicates)
   const readyRestaurantChannelRef = useRef(null);
   const readyGroceryChannelRef = useRef(null);
+  const deliveryEventsChannelRef = useRef(null);
+  const seenDeliveryEventKeysRef = useRef(new Set());
   const myRestaurantChannelRef = useRef(null);
   const myGroceryChannelRef = useRef(null);
 
@@ -292,7 +804,50 @@ export default function DeliveryHomePage() {
     } catch {
       // ignore
     }
+  }  function closeOffer(silent = false) {
+    try {
+      if (offerIntervalRef.current) clearInterval(offerIntervalRef.current);
+    } catch {}
+    offerIntervalRef.current = null;
+    setOfferOpen(false);
+    setOfferOrder(null);
+    setOfferSecondsLeft(OFFER_SECONDS_DEFAULT);
+    if (!silent) {
+      // no toast by default
+    }
   }
+
+  function declineOffer(orderId, reason = "declined") {
+    try {
+      if (orderId) {
+        setDeclinedOfferIds((prev) => {
+          const next = new Set(Array.from(prev || []));
+          next.add(String(orderId));
+          return next;
+        });
+      }
+    } catch {}
+
+    closeOffer(true);
+
+    if (reason === "timeout") showToast("Offer expired");
+    else showToast("Offer declined");
+  }
+
+  function openOffer(orderRow) {
+    if (!orderRow?.id) return;
+
+    setOfferOrder(orderRow);
+    setOfferSecondsLeft(OFFER_SECONDS_DEFAULT);
+    setOfferOpen(true);
+
+    // vibrate on mobile (best effort)
+    try {
+      if (navigator?.vibrate) navigator.vibrate([120, 60, 120]);
+    } catch {}
+  }
+
+
 
   // Payout helpers (works for both tables if columns exist)
   function orderPayout(o) {
@@ -357,7 +912,7 @@ export default function DeliveryHomePage() {
       if (storeIds.length > 0) {
         const { data: stores, error: sErr } = await supabase
           .from("grocery_stores")
-          .select("id, name, store_name, lat, lng, location_lat, location_lng, store_lat, store_lng")
+          .select("id, name, address, phone, lat, lng")
           .in("id", storeIds);
 
         if (!sErr && stores) {
@@ -369,8 +924,8 @@ export default function DeliveryHomePage() {
             if (st) {
               r._store_name = pick(st, ["name", "store_name"], "");
               // try multiple column possibilities for gps
-              r._pickup_lat = pick(st, ["lat", "location_lat", "store_lat"], null);
-              r._pickup_lng = pick(st, ["lng", "location_lng", "store_lng"], null);
+              r._pickup_lat = pick(st, ["lat", "latitude", "location_lat", "store_lat"], null);
+              r._pickup_lng = pick(st, ["lng", "longitude", "location_lng", "store_lng"], null);
             }
           }
         }
@@ -410,7 +965,7 @@ export default function DeliveryHomePage() {
       if (storeIds.length > 0) {
         const { data: stores, error: sErr } = await supabase
           .from("grocery_stores")
-          .select("id, name, store_name, lat, lng, location_lat, location_lng, store_lat, store_lng")
+          .select("id, name, address, phone, lat, lng")
           .in("id", storeIds);
 
         if (!sErr && stores) {
@@ -421,8 +976,8 @@ export default function DeliveryHomePage() {
             const st = map[r.store_id];
             if (st) {
               r._store_name = pick(st, ["name", "store_name"], "");
-              r._pickup_lat = pick(st, ["lat", "location_lat", "store_lat"], null);
-              r._pickup_lng = pick(st, ["lng", "location_lng", "store_lng"], null);
+              r._pickup_lat = pick(st, ["lat", "latitude", "location_lat", "store_lat"], null);
+              r._pickup_lng = pick(st, ["lng", "longitude", "location_lng", "store_lng"], null);
             }
           }
         }
@@ -497,6 +1052,77 @@ export default function DeliveryHomePage() {
 
       readyGroceryChannelRef.current = ch;
     }
+
+    // Delivery events for this driver (used for in-app alerts + push/bell)
+    if (!deliveryEventsChannelRef.current) {
+      const ch = supabase
+        .channel(`delivery_events_${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "delivery_events",
+            filter: `delivery_user_id=eq.${userId}`,
+          },
+          (payload) => {
+            try {
+              const row = payload?.new || {};
+              const key =
+                row?.id ||
+                `${row?.event_type || "event"}:${row?.order_type || ""}:${row?.order_id || ""}:${row?.created_at || ""}`;
+
+              if (seenDeliveryEventKeysRef.current.has(key)) return;
+              seenDeliveryEventKeysRef.current.add(key);
+
+              const orderTypeLabel =
+                row?.order_type === "grocery"
+                  ? "Grocery"
+                  : row?.order_type === "restaurant"
+                  ? "Restaurant"
+                  : "Order";
+
+              const title = row?.title || `New ${orderTypeLabel} update`;
+              const body =
+                row?.message ||
+                (row?.event_type
+                  ? `${orderTypeLabel} • ${String(row.event_type).replaceAll("_", " ")}`
+                  : `You have a new update`);
+
+              const evt = String(row?.event_type || "").trim().toLowerCase();
+              const isSilentTrackingEvent =
+                evt === "gps" ||
+                evt === "location" ||
+                evt === "tracking" ||
+                evt === "heartbeat";
+
+              // ✅ SAFE FIX:
+              // Do not alert repeatedly for GPS/tracking inserts.
+              // Those events can fire every few seconds while the delivery app is open.
+              // We only alert for real order updates.
+              if (!isSilentTrackingEvent) {
+                showToast(`${title} — ${body}`);
+                playAlert();
+
+                // browser notification (only if already allowed)
+                if (typeof window !== "undefined" && "Notification" in window) {
+                  if (Notification.permission === "granted") {
+                    // eslint-disable-next-line no-new
+                    new Notification(title, { body });
+                  }
+                }
+              }
+            } catch (e) {
+              // never break delivery page if realtime payload is weird
+              console.error("delivery_events realtime error", e);
+            }
+          }
+        )
+        .subscribe();
+
+      deliveryEventsChannelRef.current = ch;
+    }
+
 
     // My restaurant orders
     if (!myRestaurantChannelRef.current) {
@@ -687,7 +1313,7 @@ export default function DeliveryHomePage() {
   async function autoStartIfNeeded(order) {
     try {
       if (!order?.id) return;
-      const st = String(order.status || "").toLowerCase();
+      const st = normStatus(order.status);
       if (st === "delivered" || st === "rejected") return;
       if (String(order.delivery_user_id || "") !== String(userId || "")) return;
       if (gpsState?.[order.id]?.on) return;
@@ -801,6 +1427,7 @@ export default function DeliveryHomePage() {
       const chans = [
         readyRestaurantChannelRef.current,
         readyGroceryChannelRef.current,
+        deliveryEventsChannelRef.current,
         myRestaurantChannelRef.current,
         myGroceryChannelRef.current,
       ].filter(Boolean);
@@ -813,6 +1440,7 @@ export default function DeliveryHomePage() {
 
       readyRestaurantChannelRef.current = null;
       readyGroceryChannelRef.current = null;
+      deliveryEventsChannelRef.current = null;
       myRestaurantChannelRef.current = null;
       myGroceryChannelRef.current = null;
 
@@ -835,7 +1463,7 @@ export default function DeliveryHomePage() {
 
       const list = myOrders || [];
       for (const o of list) {
-        const st = String(o.status || "").toLowerCase();
+        const st = normStatus(o.status);
         if (st !== "delivered") autoStartIfNeeded(o);
         else autoStopIfDelivered(o.id);
       }
@@ -844,14 +1472,36 @@ export default function DeliveryHomePage() {
   }, [myOrders, userId, deliveryAllowed]);
 
   useEffect(() => {
-    const current = (availableOrders || []).length;
+    const list = availableOrders || [];
+    const current = list.length;
     const prev = lastAvailableCountRef.current;
     lastAvailableCountRef.current = current;
 
-    if (!loading && isOnline && tab === "available" && current > prev && prev !== 0) {
-      showToast(`New order available (+${current - prev})`);
+    const shouldNotify = !loading && isOnline && deliveryAllowed && tab === "available" && current > prev && prev !== 0;
+
+    if (shouldNotify) {
+      // Pick the first order that hasn't been declined in this session.
+      const pick = list.find((x) => x && !declinedOfferIds?.has?.(x.id));
+      if (pick) {
+        // Open Offer (DoorDash-style) + trigger alerts.
+        setOfferOrder(pick);
+        setOfferSecondsLeft(OFFER_SECONDS_DEFAULT);
+        setOfferOpen(true);
+
+        // Alerts: beep + vibration (best-effort)
+        playNewOrderBeep();
+        vibrateNewOrder();
+
+        // If audio is blocked, show a one-time hint.
+        if (!audioReadyRef.current && !warnedSoundRef.current && soundEnabled) {
+          warnedSoundRef.current = true;
+          showToast("Tap once to enable sound 🔔");
+        }
+      } else {
+        showToast(`New order available (+${current - prev})`);
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-depshaustive-deps
   }, [availableOrders]);
 
   async function handleLogout() {
@@ -928,13 +1578,42 @@ export default function DeliveryHomePage() {
     }
   }
 
-  // ✅ Update status (restaurant OR grocery)
+  
+  // ✅ Status progression lock (prevents skipping steps / going backward)
+  function isAllowedStatusTransition(currentStatus, nextStatus) {
+    const cur = normStatus(currentStatus);
+    const nxt = normStatus(nextStatus);
+
+    // Delivery flow we enforce (for both restaurant + grocery)
+    const flow = ["delivering", "arrived_pickup", "picked_up", "on_the_way", "arrived_drop", "delivered"];
+
+    const curIdx = flow.indexOf(cur);
+    const nxtIdx = flow.indexOf(nxt);
+
+    // If either status is outside our known flow, don't block (backward-compat safety)
+    if (curIdx === -1 || nxtIdx === -1) return true;
+
+    // Allow staying the same (no-op)
+    if (curIdx === nxtIdx) return true;
+
+    // Only allow moving forward by exactly 1 step
+    return nxtIdx === curIdx + 1;
+  }
+
+// ✅ Update status (restaurant OR grocery)
   async function updateMyStatus(orderRow, status) {
     const orderId = orderRow?.id;
     const src = orderRow?._source;
     if (!orderId || !src) return;
 
     if (!deliveryAllowed) return showToast("Account not approved");
+
+    // ✅ Enforce correct step-by-step delivery status order (prevents skipping)
+    const curStatus = orderRow?.status;
+    if (!isAllowedStatusTransition(curStatus, status)) {
+      showToast("Invalid status step. Please follow the next action button order.");
+      return;
+    }
 
     setErrMsg("");
     setBusyId(orderId);
@@ -943,7 +1622,7 @@ export default function DeliveryHomePage() {
       const table = src === "grocery" ? "grocery_orders" : "orders";
       const patch = { status };
 
-      if (String(status).toLowerCase() === "delivered") {
+      if (normStatus(status) === "delivered") {
         patch.delivered_at = new Date().toISOString();
       }
 
@@ -958,12 +1637,43 @@ export default function DeliveryHomePage() {
       const res = await tryInsertDeliveryEvent({ orderId, eventType: `${status}_${src}`, note: null });
       if (!res.ok) showToast(`delivery_events insert failed: ${res.error}`);
 
-      if (String(status).toLowerCase() === "delivered") stopTracking(orderId, true);
+      if (normStatus(status) === "delivered") stopTracking(orderId, true);
+
+      // ✅ UI sync: update the open details panel + local list immediately
+      // (DB already updated; this prevents the action bar from staying on the previous step)
+      try {
+        const deliveredAt = normStatus(status) === "delivered" ? new Date().toISOString() : undefined;
+
+        // Update local myOrders state (fast UI)
+        setMyOrders((prev) =>
+          (prev || []).map((o) => (String(o?.id) === String(orderId) ? { ...o, status, ...(deliveredAt ? { delivered_at: deliveredAt } : {}) } : o))
+        );
+
+        // If the details drawer/sheet is open for this order, update it too
+        setDetailsCtx((ctx) => {
+          const curId = ctx?.order?.id;
+          if (!ctx?.order || String(curId) !== String(orderId)) return ctx;
+          return {
+            ...(ctx || {}),
+            order: {
+              ...(ctx.order || {}),
+              status,
+              ...(deliveredAt ? { delivered_at: deliveredAt } : {}),
+            },
+          };
+        });
+      } catch {
+        // ignore
+      }
 
       await loadMy();
 
-      if (status === "delivered") showToast("Delivered ✅");
-      else showToast("Status updated ✅");
+      if (normStatus(status) === "delivered") {
+        showToast("Delivered ✅");
+        setTab("completed");
+      } else {
+        showToast("Status updated ✅");
+      }
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -1011,9 +1721,9 @@ export default function DeliveryHomePage() {
         minHeight: "calc(100vh - 64px)",
         padding: 24,
         background:
-          "radial-gradient(1200px 600px at 20% 10%, rgba(90,180,255,0.22), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(255,180,120,0.18), transparent 55%), linear-gradient(180deg, #f7f7fb, #ffffff)",
+          "radial-gradient(1200px 650px at 18% 8%, rgba(59,130,246,0.18), transparent 62%), radial-gradient(900px 520px at 82% 22%, rgba(16,185,129,0.12), transparent 58%), linear-gradient(180deg, #f4f6fb, #ffffff)",
       },
-      wrap: { maxWidth: 1150, margin: "0 auto" },
+      wrap: { width: "100%", margin: "0 auto" },
       title: { margin: 0, fontSize: 34, fontWeight: 950, letterSpacing: -0.3 },
       sub: { marginTop: 6, color: "#666", fontSize: 14 },
 
@@ -1032,7 +1742,7 @@ export default function DeliveryHomePage() {
         padding: "10px 12px",
         borderRadius: 14,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: "#111",
+        background: "#0B1220",
         color: "#fff",
         cursor: "pointer",
         fontWeight: 950,
@@ -1049,7 +1759,7 @@ export default function DeliveryHomePage() {
         padding: "10px 12px",
         borderRadius: 14,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: "rgba(17,24,39,0.04)",
+        background: "rgba(11,18,32,0.05)",
         cursor: "pointer",
         fontWeight: 950,
       },
@@ -1142,7 +1852,7 @@ export default function DeliveryHomePage() {
         padding: "6px 10px",
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.10)",
-        background: "rgba(17,24,39,0.04)",
+        background: "rgba(11,18,32,0.05)",
         color: "#0b1220",
         fontWeight: 950,
         fontSize: 12,
@@ -1188,8 +1898,8 @@ export default function DeliveryHomePage() {
         padding: "8px 10px",
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: active ? "#111" : "rgba(255,255,255,0.8)",
-        color: active ? "#fff" : "#111",
+        background: active ? "#0B1220" : "rgba(255,255,255,0.86)",
+        color: active ? "#fff" : "#0B1220",
         cursor: "pointer",
         fontWeight: 950,
         fontSize: 12,
@@ -1245,8 +1955,8 @@ export default function DeliveryHomePage() {
         padding: "8px 10px",
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: active ? "#111" : "rgba(255,255,255,0.8)",
-        color: active ? "#fff" : "#111",
+        background: active ? "#0B1220" : "rgba(255,255,255,0.86)",
+        color: active ? "#fff" : "#0B1220",
         cursor: "pointer",
         fontWeight: 950,
         fontSize: 12,
@@ -1294,7 +2004,7 @@ export default function DeliveryHomePage() {
         zIndex: 9999,
         borderRadius: 14,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: "rgba(17,24,39,0.92)",
+        background: "rgba(11,18,32,0.94)",
         color: "#fff",
         padding: "10px 12px",
         boxShadow: "0 12px 40px rgba(0,0,0,0.22)",
@@ -1302,6 +2012,111 @@ export default function DeliveryHomePage() {
         fontSize: 13,
         maxWidth: 420,
       },
+
+      // ✅ Sticky summary bar (mobile pro)
+      stickySummary: {
+        position: "sticky",
+        top: 10,
+        zIndex: 60,
+        marginTop: 12,
+        borderRadius: 16,
+        border: "1px solid rgba(0,0,0,0.10)",
+        background: "rgba(255,255,255,0.90)",
+        boxShadow: "0 14px 40px rgba(0,0,0,0.10)",
+        backdropFilter: "blur(10px)",
+        padding: 12,
+      },
+      stickyRow: {
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+      },
+      stickyItem: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+        minWidth: 110,
+      },
+      stickyLabel: {
+        fontSize: 11,
+        fontWeight: 950,
+        color: "rgba(17,24,39,0.55)",
+        textTransform: "uppercase",
+        letterSpacing: 0.4,
+      },
+      stickyValue: {
+        fontSize: 16,
+        fontWeight: 1000,
+        color: "#0b1220",
+      },
+      onlinePill: (on) => ({
+        padding: "8px 10px",
+        borderRadius: 999,
+        border: on ? "1px solid rgba(16,185,129,0.25)" : "1px solid rgba(239,68,68,0.22)",
+        background: on ? "rgba(236,253,245,0.95)" : "rgba(254,242,242,0.95)",
+        color: on ? "#065f46" : "#7f1d1d",
+        fontWeight: 1000,
+        fontSize: 12,
+      }),
+
+      // =========================
+      // Offer Screen (Option 2)
+      // =========================
+      offerBackdrop: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(0,0,0,0.40)",
+        display: "flex",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        padding: 12,
+      },
+      offerSheet: {
+        width: "100%",
+        maxWidth: 520,
+        borderRadius: 18,
+        border: "1px solid rgba(255,255,255,0.16)",
+        background: "rgba(255,255,255,0.95)",
+        boxShadow: "0 18px 60px rgba(0,0,0,0.30)",
+        overflow: "hidden",
+      },
+      offerTopRow: {
+        display: "flex",
+        gap: 12,
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: 14,
+        borderBottom: "1px solid rgba(0,0,0,0.08)",
+        background: "linear-gradient(180deg, rgba(17,24,39,0.03), rgba(255,255,255,0.90))",
+      },
+      offerTitle: { fontSize: 16, fontWeight: 1000, color: "#0b1220" },
+      offerSub: { marginTop: 2, fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.65)" },
+      offerTimer: {
+        minWidth: 56,
+        textAlign: "center",
+        padding: "8px 10px",
+        borderRadius: 999,
+        border: "1px solid rgba(0,0,0,0.10)",
+        background: "rgba(0,0,0,0.04)",
+        fontWeight: 1000,
+      },
+      offerBody: {
+        padding: 14,
+        paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
+      },
+      offerCard: {
+        borderRadius: 16,
+        border: "1px solid rgba(0,0,0,0.08)",
+        background: "rgba(255,255,255,0.85)",
+        padding: 12,
+      },
+      offerBtns: { marginTop: 12, display: "flex", gap: 10 },
+      offerLabel: { fontSize: 12, fontWeight: 950, color: "rgba(17,24,39,0.65)" },
+      offerValue: { marginTop: 2, fontSize: 14, fontWeight: 950, color: "#0b1220", lineHeight: 1.35 },
+      offerHint: { marginTop: 10, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.60)" },
 
       avatar: {
         width: 44,
@@ -1331,7 +2146,7 @@ export default function DeliveryHomePage() {
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.12)",
         background: active ? "#111" : "rgba(255,255,255,0.85)",
-        color: active ? "#fff" : "#111",
+        color: active ? "#fff" : "#0B1220",
         cursor: "pointer",
         fontWeight: 950,
         fontSize: 12,
@@ -1351,7 +2166,7 @@ export default function DeliveryHomePage() {
         padding: "6px 10px",
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.12)",
-        background: "rgba(17,24,39,0.04)",
+        background: "rgba(11,18,32,0.05)",
         fontWeight: 950,
         fontSize: 12,
       },
@@ -1412,7 +2227,7 @@ export default function DeliveryHomePage() {
         borderRadius: 999,
         border: "1px solid rgba(0,0,0,0.12)",
         background: active ? "#111" : "rgba(255,255,255,0.85)",
-        color: active ? "#fff" : "#111",
+        color: active ? "#fff" : "#0B1220",
         cursor: "pointer",
         fontWeight: 950,
         fontSize: 12,
@@ -1434,12 +2249,12 @@ export default function DeliveryHomePage() {
 
   const myActiveOrders = useMemo(() => {
     const list = myOrders || [];
-    return list.filter((o) => String(o.status || "").toLowerCase() !== "delivered");
+    return list.filter((o) => normStatus(o.status) !== "delivered");
   }, [myOrders]);
 
   const completedOrders = useMemo(() => {
     const list = myOrders || [];
-    return list.filter((o) => String(o.status || "").toLowerCase() === "delivered");
+    return list.filter((o) => normStatus(o.status) === "delivered");
   }, [myOrders]);
 
   const now = new Date();
@@ -1651,6 +2466,67 @@ export default function DeliveryHomePage() {
     return sortList(applySourceFilter((availableOrders || []).filter(matchesSearch)));
   }, [availableOrders, searchText, sortMode, isOnline, deliveryAllowed, sourceFilter]);
 
+
+  // ✅ Option 2: Auto-show Offer Screen for next available order
+  useEffect(() => {
+    try {
+      if (!deliveryAllowed) return;
+      if (!isOnline) return;
+      if (tab !== "available") return;
+      if (loading) return;
+      if (offerOpen) return;
+      if (busyId) return;
+
+      const list = (visibleAvailable || []).filter((o) => {
+        const id = o?.id ? String(o.id) : "";
+        return id && !declinedOfferIds.has(id);
+      });
+
+      if (list.length === 0) return;
+
+      // Offer the newest/first visible order
+      openOffer(list[0]);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleAvailable, isOnline, tab, deliveryAllowed, loading, busyId, offerOpen]);
+
+  // ✅ Option 2: Offer countdown timer
+  useEffect(() => {
+    if (!offerOpen) return;
+
+    try {
+      if (offerIntervalRef.current) clearInterval(offerIntervalRef.current);
+    } catch {}
+
+    offerIntervalRef.current = setInterval(() => {
+      setOfferSecondsLeft((s) => {
+        const next = Number(s) - 1;
+        return next;
+      });
+    }, 1000);
+
+    return () => {
+      try {
+        if (offerIntervalRef.current) clearInterval(offerIntervalRef.current);
+      } catch {}
+      offerIntervalRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerOpen]);
+
+  // ✅ Option 2: Auto-expire offer
+  useEffect(() => {
+    if (!offerOpen) return;
+    if (!offerOrder?.id) return;
+
+    if (offerSecondsLeft <= 0) {
+      declineOffer(offerOrder.id, "timeout");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offerSecondsLeft, offerOpen, offerOrder]);
+
   const visibleMyActive = useMemo(() => {
     if (!deliveryAllowed) return [];
     return sortList(applySourceFilter((myActiveOrders || []).filter(matchesSearch)));
@@ -1670,12 +2546,69 @@ export default function DeliveryHomePage() {
 
     const instructions = pick(o, ["customer_instructions", "instructions", "note", "notes"], "");
     const items = pick(o, ["items", "order_items", "cart_items", "products"], "");
-    const total = orderTotal(o);
-    const st = String(o.status || "").toLowerCase();
+    
+const total = orderTotal(o);
+    const st = normStatus(o.status);
+
+    // ✅ Mobile/PWA: compact card + open full details in panel
+    if (isMobile && !detailsOpen) {
+      const srcLabel = src === "grocery" ? "GROCERY" : "RESTAURANT";
+      const payout = orderPayout(o);
+      const fee = orderFee(o);
+      const tip = orderTip(o);
+      const paid = earningStatus(o) === "paid";
+      const when = formatWhen(o.created_at || o.updated_at || o.delivered_at);
+
+      return (
+        <div key={`${src}_${o.id}`} style={{ ...styles.orderCard, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={styles.badge(st)}>{st || "status"}</span>
+                <span style={styles.subBadge}>{srcLabel}</span>
+                {type === "completed" ? <span style={styles.paidBadge(paid)}>{paid ? "PAID" : "UNPAID"}</span> : null}
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 15, lineHeight: 1.25, wordBreak: "break-word" }}>
+                  {customerName}
+                </div>
+                <div style={{ marginTop: 4, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12, wordBreak: "break-word" }}>
+                  {customerAddress}
+                </div>
+                <div style={{ marginTop: 6, color: "rgba(17,24,39,0.60)", fontWeight: 850, fontSize: 12 }}>
+                  {when}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <span style={styles.moneyBadge}>Fee: ₹{fee}</span>
+                <span style={styles.moneyBadge}>Tip: ₹{tip}</span>
+                <span style={styles.moneyBadge}>Payout: ₹{payout}</span>
+              </div>
+
+              <button
+                type="button"
+                style={styles.btn}
+                onClick={() => {
+                  setDetailsCtx({ order: o, type });
+                  setDetailsOpen(true);
+                }}
+              >
+                Open Details
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
 
     // Drop coords (both)
-    const dropLat = pick(o, ["customer_lat", "drop_lat", "delivery_lat"], null);
-    const dropLng = pick(o, ["customer_lng", "drop_lng", "delivery_lng"], null);
+    const dropLat = pick(o, ["customer_lat", "customer_latitude", "drop_lat", "delivery_lat", "latitude", "lat"], null);
+    const dropLng = pick(o, ["customer_lng", "customer_longitude", "customer_lon", "drop_lng", "delivery_lng", "longitude", "lng"], null);
     const dropMapsUrlLatLng = buildGoogleMapsUrlLatLng(dropLat, dropLng);
     const dropMapsUrl = dropMapsUrlLatLng || buildGoogleMapsUrl(customerAddress);
 
@@ -1693,6 +2626,8 @@ export default function DeliveryHomePage() {
     }
 
     const pickupMapsUrlLatLng = buildGoogleMapsUrlLatLng(pickLat, pickLng);
+    const pickupNavUrl = buildGoogleMapsNavUrlLatLng(pickLat, pickLng);
+    const dropNavUrl = buildGoogleMapsNavUrlLatLng(dropLat, dropLng);
     const routeUrl = buildGoogleMapsDirectionsUrl(pickLat, pickLng, dropLat, dropLng);
 
     const telUrl = `tel:${String(customerPhone || "").replace(/\s+/g, "")}`;
@@ -1738,7 +2673,7 @@ export default function DeliveryHomePage() {
 
         <div style={styles.line} />
 
-        <div style={styles.split}>
+        <div className="dp-split" style={styles.split}>
           <div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <span style={styles.locPill}>
@@ -1899,61 +2834,33 @@ export default function DeliveryHomePage() {
               </a>
 
               <a
-                href={routeUrl || "#"}
+                href={pickupNavUrl || pickupMapsUrlLatLng}
                 target="_blank"
                 rel="noreferrer"
                 style={{
                   ...styles.btnGhost,
                   textDecoration: "none",
-                  opacity: routeUrl ? 1 : 0.55,
-                  pointerEvents: routeUrl ? "auto" : "none",
+                  opacity: pickupNavUrl || pickupMapsUrlLatLng ? 1 : 0.55,
+                  pointerEvents: pickupNavUrl || pickupMapsUrlLatLng ? "auto" : "none",
                 }}
-                title={routeUrl ? "Open Route: Pickup → Customer" : "Route needs both pickup and drop coordinates"}
+                title={pickupNavUrl || pickupMapsUrlLatLng ? "Navigate to Pickup" : "Pickup location not saved"}
               >
-                Route →
+                Navigate Pickup
+              </a>
+
+              <a
+                href={dropNavUrl || dropMapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...styles.btnGhost, textDecoration: "none" }}
+                title="Navigate to Drop"
+              >
+                Navigate Drop
               </a>
 
               <a href={telUrl} style={{ ...styles.btnGhost, textDecoration: "none" }}>
                 Call
               </a>
-              <a href={waUrl} target="_blank" rel="noreferrer" style={{ ...styles.btnGhost, textDecoration: "none" }}>
-                WhatsApp
-              </a>
-
-              <button
-                type="button"
-                style={styles.btnSoft}
-                onClick={async () => {
-                  const ok = await copyText(customerAddress);
-                  showToast(ok ? "Address copied" : "Copy failed");
-                }}
-              >
-                Copy Address
-              </button>
-
-              <button
-                type="button"
-                style={styles.btnSoft}
-                onClick={async () => {
-                  const ok = await copyText(customerPhone);
-                  showToast(ok ? "Phone copied" : "Copy failed");
-                }}
-              >
-                Copy Phone
-              </button>
-
-              <button
-                type="button"
-                style={styles.btnSoft}
-                onClick={async () => {
-                  const txt = `pickup=${pickLat},${pickLng} | drop=${dropLat},${dropLng}`;
-                  const ok = await copyText(txt);
-                  showToast(ok ? "Coords copied" : "Copy failed");
-                }}
-                title="Copy pickup + drop coordinates"
-              >
-                Copy Coords
-              </button>
             </div>
 
             <div style={{ marginTop: 12 }}>
@@ -1972,7 +2879,14 @@ export default function DeliveryHomePage() {
 
               {type === "my" ? (
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {/* Pro step-by-step flow (shows ONLY the next action) */}
                   {st === "delivering" ? (
+                    <button onClick={() => updateMyStatus(o, "arrived_pickup")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
+                      {busyId === o.id ? "Updating…" : "Arrived Pickup"}
+                    </button>
+                  ) : null}
+
+                  {st === "arrived_pickup" ? (
                     <button onClick={() => updateMyStatus(o, "picked_up")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
                       {busyId === o.id ? "Updating…" : "Picked Up"}
                     </button>
@@ -1985,12 +2899,23 @@ export default function DeliveryHomePage() {
                   ) : null}
 
                   {st === "on_the_way" ? (
+                    <button onClick={() => updateMyStatus(o, "arrived_drop")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft}>
+                      {busyId === o.id ? "Updating…" : "Arrived Drop"}
+                    </button>
+                  ) : null}
+
+                  {st === "arrived_drop" ? (
                     <button onClick={() => updateMyStatus(o, "delivered")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btn}>
                       {busyId === o.id ? "Updating…" : "Delivered"}
                     </button>
                   ) : null}
 
-                  {st === "delivered" ? <span style={{ color: "#065f46", fontWeight: 950 }}>✅ Completed</span> : null}
+                  {/* Backward-compat safety: if status is something unexpected but still "my" */}
+                  {st && !["delivering","arrived_pickup","picked_up","on_the_way","arrived_drop","delivered"].includes(st) ? (
+                    <button onClick={() => updateMyStatus(o, "delivered")} disabled={busyId === o.id || !deliveryAllowed} style={styles.btnSoft} title="Fallback action">
+                      {busyId === o.id ? "Updating…" : "Mark Delivered"}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -2042,11 +2967,181 @@ export default function DeliveryHomePage() {
       .join("") || "DP";
 
   return (
-    <main style={styles.page}>
-      {toast.show ? <div style={styles.toast}>{toast.text}</div> : null}
+    <main className="dp-page" style={styles.page}>
+      {toast.show ? <div className="dp-toast" style={styles.toast}>{toast.text}</div> : null}
 
-      <div style={styles.wrap}>
-        <div style={styles.row}>
+      <style>{`
+        /* Mobile-first polish (Option B theme + clean layout) */
+        @media (max-width: 640px) {
+          .dp-page { padding: 12px !important; }
+          .dp-wrap { width: 100% !important; }
+          .dp-header { flex-direction: column !important; align-items: stretch !important; gap: 12px !important; }
+          .dp-controls { justify-content: flex-start !important; }
+          .dp-controls button { flex: 1 1 auto; }
+          .dp-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .dp-split { grid-template-columns: 1fr !important; }
+          .dp-input { min-width: 0 !important; width: 100% !important; flex: 1 1 100% !important; }
+          .dp-toast { left: 12px; right: 12px; bottom: 12px; max-width: none !important; }
+        }
+      `}</style>
+
+
+
+      {offerOpen && offerOrder ? (
+        <div style={styles.offerBackdrop} onClick={() => closeOffer(true)} role="presentation">
+          <div
+            style={styles.offerSheet}
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div style={styles.offerTopRow}>
+              <div>
+                <div style={styles.offerTitle}>New Delivery Offer</div>
+                <div style={styles.offerSub}>
+                  {offerOrder._source === "grocery" ? "Grocery" : "Restaurant"} • Order #{String(offerOrder.id || "").slice(0, 8)}
+                </div>
+              </div>
+
+              <div style={styles.offerTimer} title="Seconds left">
+                {Math.max(0, offerSecondsLeft)}s
+              </div>
+            </div>
+
+            <div style={styles.offerBody}>
+              <div style={styles.offerCard}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={styles.subBadge}>{String(offerOrder.status || "ready")}</span>
+                  <span style={styles.subBadge}>Miles: {(() => {
+                    const mi = estimateOrderMiles(offerOrder);
+                    return mi ? `${mi.toFixed(1)} mi` : "—";
+                  })()}</span>
+                  <span style={styles.subBadge}>Fee: ₹{orderFee(offerOrder)}</span>
+                                  </div>
+
+                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                  <div>
+                    <div style={styles.offerLabel}>Customer</div>
+                    <div style={styles.offerValue}>{pick(offerOrder, ["customer_name", "name", "full_name"], "-")}</div>
+                  </div>
+
+                  <div>
+                    <div style={styles.offerLabel}>Drop Address</div>
+                    <div style={styles.offerValue}>{buildFullAddress(offerOrder)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={styles.offerBtns}>
+                <button
+                  type="button"
+                  style={styles.btnGhost}
+                  onClick={() => declineOffer(offerOrder.id, "declined")}
+                  disabled={busyId === offerOrder.id}
+                >
+                  Reject
+                </button>
+
+                <button
+                  type="button"
+                  style={styles.btn}
+                  onClick={async () => {
+                    const cur = offerOrder;
+                    closeOffer(true);
+                    await acceptOrder(cur);
+                  }}
+                  disabled={busyId === offerOrder.id || !isOnline || !deliveryAllowed}
+                  title={!deliveryAllowed ? "Account not approved" : !isOnline ? "Go Online to accept" : "Accept this order"}
+                >
+                  {busyId === offerOrder.id ? "Accepting…" : "Accept"}
+                </button>
+              </div>
+
+              <div style={styles.offerHint}>Tip: If you reject, we hide this offer for you (for this session) so it won’t pop again.</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+
+
+{/* ✅ Order Details Panel (mobile: full sheet, desktop: right drawer) */}
+{detailsOpen && detailsCtx?.order ? (
+  <div
+    className="dp-details-backdrop"
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10001,
+      background: "rgba(0,0,0,0.45)",
+      display: "flex",
+      alignItems: isMobile ? "flex-end" : "stretch",
+      justifyContent: isMobile ? "center" : "flex-end",
+      padding: isMobile ? 12 : 0,
+    }}
+    onClick={() => {
+      setDetailsOpen(false);
+      setDetailsCtx({ order: null, type: "available" });
+    }}
+    role="presentation"
+  >
+    <div
+      className="dp-details-sheet"
+      style={{
+        width: isMobile ? "100%" : 460,
+        maxWidth: isMobile ? 520 : 460,
+        height: isMobile ? "92vh" : "100vh",
+        borderRadius: isMobile ? 18 : 0,
+        border: isMobile ? "1px solid rgba(255,255,255,0.16)" : "none",
+        background: "rgba(255,255,255,0.98)",
+        boxShadow: isMobile ? "0 18px 60px rgba(0,0,0,0.35)" : "0 0 60px rgba(0,0,0,0.28)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        style={{
+          padding: 14,
+          borderBottom: "1px solid rgba(0,0,0,0.08)",
+          background: "linear-gradient(180deg, rgba(17,24,39,0.03), rgba(255,255,255,0.92))",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 1000, color: "#0b1220" }}>Order Details</div>
+          <div style={{ marginTop: 2, fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.65)" }}>
+            {detailsCtx?.order?._source === "grocery" ? "Grocery" : "Restaurant"} • #{String(detailsCtx?.order?.id || "").slice(0, 8)}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          style={styles.btnGhost}
+          onClick={() => {
+            setDetailsOpen(false);
+            setDetailsCtx({ order: null, type: "available" });
+          }}
+        >
+          Close
+        </button>
+      </div>
+
+      <div style={{ padding: 14, overflowY: "auto", paddingBottom: "calc(14px + env(safe-area-inset-bottom))" }}>
+        {renderOrderCard(detailsCtx.order, detailsCtx.type)}
+      </div>
+    </div>
+  </div>
+) : null}
+
+      <div className="dp-wrap" style={styles.wrap}>
+        <div className="dp-header" style={styles.row}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
               <div style={styles.avatar}>
@@ -2074,7 +3169,7 @@ export default function DeliveryHomePage() {
             </div>
           </div>
 
-          <div style={styles.row}>
+          <div className="dp-controls" style={styles.row}>
             <div style={styles.toggleWrap}>
               <div style={styles.toggleDot(isOnline && deliveryAllowed)} />
               <div style={styles.toggleText}>
@@ -2098,6 +3193,62 @@ export default function DeliveryHomePage() {
               </button>
             </div>
 
+            <button
+              type="button"
+              style={{
+                ...styles.btnGhost,
+                border: soundEnabled ? "1px solid rgba(16,185,129,0.35)" : "1px solid rgba(0,0,0,0.12)",
+                opacity: deliveryAllowed ? 1 : 0.6,
+              }}
+              disabled={!deliveryAllowed}
+              onClick={() => persistSound(!soundEnabled)}
+              title="New order sound"
+            >
+              {soundEnabled ? "🔔 Sound: ON" : "🔕 Sound: OFF"}
+            </button>
+
+            <button
+              type="button"
+              style={{
+                ...styles.btnGhost,
+                border: vibrateEnabled ? "1px solid rgba(16,185,129,0.35)" : "1px solid rgba(0,0,0,0.12)",
+                opacity: deliveryAllowed ? 1 : 0.6,
+              }}
+              disabled={!deliveryAllowed}
+              onClick={() => persistVibrate(!vibrateEnabled)}
+              title={typeof navigator !== "undefined" && "vibrate" in navigator ? "New order vibration" : "Vibration not supported"}
+            >
+              {vibrateEnabled ? "📳 Vibrate: ON" : "📴 Vibrate: OFF"}
+            </button>
+
+
+            {pushSupported ? (
+              <button
+                type="button"
+                style={{
+                  ...styles.btnGhost,
+                  border:
+                    pushPermission === "granted" && pushEnabled
+                      ? "1px solid rgba(16,185,129,0.35)"
+                      : pushPermission === "denied"
+                      ? "1px solid rgba(239,68,68,0.35)"
+                      : "1px solid rgba(0,0,0,0.12)",
+                  opacity: deliveryAllowed ? 1 : 0.6,
+                }}
+                disabled={pushBusy || (!deliveryAllowed && !pushEnabled)}
+                onClick={() => (pushEnabled ? disablePushNotifications() : enablePushNotifications())}
+                title={
+                  pushPermission === "denied"
+                    ? "Notifications blocked in browser settings"
+                    : "Enable push notifications (PWA)"
+                }
+              >
+                {pushEnabled ? "✅ Push: ON" : "🔔 Push: Enable"}
+              </button>
+            ) : (
+              <span style={{ ...styles.pill, opacity: 0.7 }}>Push: Not supported</span>
+            )}
+
             <span style={styles.pill}>Available: {availableCount}</span>
             <span style={styles.pill}>Restaurant: {availableRestaurantCount}</span>
             <span style={styles.pill}>Grocery: {availableGroceryCount}</span>
@@ -2116,6 +3267,38 @@ export default function DeliveryHomePage() {
             </button>
           </div>
         </div>
+
+        {/* ✅ Sticky Summary (always visible, all tabs) */}
+        {deliveryAllowed ? (
+          <div className="dp-sticky-summary" style={styles.stickySummary}>
+            <div style={styles.stickyRow}>
+              <div style={styles.stickyItem}>
+                <div style={styles.stickyLabel}>Today Earnings</div>
+                <div style={styles.stickyValue}>₹{earningsStats.todayE}</div>
+              </div>
+
+              <div style={styles.stickyItem}>
+                <div style={styles.stickyLabel}>Today Completed</div>
+                <div style={styles.stickyValue}>{earningsStats.todayCount}</div>
+              </div>
+
+              <div style={styles.stickyItem}>
+                <div style={styles.stickyLabel}>This Week</div>
+                <div style={styles.stickyValue}>₹{earningsStats.weekE}</div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto" }}>
+                <span style={styles.onlinePill(isOnline && deliveryAllowed)}>
+                  {isOnline ? "🟢 Online" : "🔴 Offline"}
+                </span>
+
+                <button type="button" style={styles.btnGhost} onClick={hardRefresh}>
+                  Refresh
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {loading ? <div style={styles.loading}>Loading delivery profile…</div> : null}
         {errMsg ? <div style={styles.error}>{errMsg}</div> : null}
@@ -2163,8 +3346,8 @@ export default function DeliveryHomePage() {
                       address: buildFullAddress(o),
                       pickup_lat: pick(o, ["restaurant_lat", "_pickup_lat"], ""),
                       pickup_lng: pick(o, ["restaurant_lng", "_pickup_lng"], ""),
-                      drop_lat: pick(o, ["customer_lat"], ""),
-                      drop_lng: pick(o, ["customer_lng"], ""),
+                      drop_lat: pick(o, ["customer_lat", "customer_latitude", "drop_lat", "delivery_lat", "latitude", "lat"], ""),
+                      drop_lng: pick(o, ["customer_lng", "customer_longitude", "customer_lon", "drop_lng", "delivery_lng", "longitude", "lng"], ""),
                     }));
                     downloadCSV(rows, "delivery_completed_orders.csv");
                     showToast("Exported CSV");
@@ -2183,7 +3366,7 @@ export default function DeliveryHomePage() {
                 </div>
               </div>
 
-              <div style={styles.kpiGrid}>
+              <div className="dp-kpi-grid" style={styles.kpiGrid}>
                 <div style={styles.kpiCard}>
                   <div style={styles.kpiNum}>₹{earningsStats.todayE}</div>
                   <div style={styles.kpiLabel}>Today • {earningsStats.todayCount} deliveries</div>
@@ -2298,7 +3481,7 @@ export default function DeliveryHomePage() {
                   </div>
                 </div>
 
-                <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Search name / phone / address / id…" style={styles.input} />
+                <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Search name / phone / address / id…" className="dp-input" style={styles.input} />
 
                 <select value={sortMode} onChange={(e) => setSortMode(e.target.value)} style={styles.select}>
                   <option value="newest">Newest</option>
@@ -2352,8 +3535,8 @@ export default function DeliveryHomePage() {
                         address: buildFullAddress(o),
                         pickup_lat: pick(o, ["restaurant_lat", "_pickup_lat"], ""),
                         pickup_lng: pick(o, ["restaurant_lng", "_pickup_lng"], ""),
-                        drop_lat: pick(o, ["customer_lat"], ""),
-                        drop_lng: pick(o, ["customer_lng"], ""),
+                        drop_lat: pick(o, ["customer_lat", "customer_latitude", "drop_lat", "delivery_lat", "latitude", "lat"], ""),
+                        drop_lng: pick(o, ["customer_lng", "customer_longitude", "customer_lon", "drop_lng", "delivery_lng", "longitude", "lng"], ""),
                       }));
                       downloadCSV(rows, `delivery_${tab}_orders.csv`);
                       showToast("Exported CSV");

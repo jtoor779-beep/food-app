@@ -10,6 +10,7 @@ type SettingsState = {
   delivery_fee_base: string;
   delivery_fee_per_km: string;
   tax_note: string;
+  gst_percent: string; // Tax % (stored as gst_percent for compatibility)
 
   // ✅ kept
   feature_owner_multi_restaurants: boolean;
@@ -21,6 +22,7 @@ const DEFAULTS: SettingsState = {
   delivery_fee_base: "20",
   delivery_fee_per_km: "0",
   tax_note: "Taxes will be configured later as per country/state rules.",
+  gst_percent: "5",
 
   feature_owner_multi_restaurants: true,
   feature_admin_force_status: true,
@@ -333,6 +335,7 @@ export default function AdminSettingsPage() {
         delivery_fee_base: toNumberString(form.delivery_fee_base),
         delivery_fee_per_km: toNumberString(form.delivery_fee_per_km),
         tax_note: String(form.tax_note ?? ""),
+        gst_percent: toNumberString(form.gst_percent),
       };
 
       const { error } = await supabase.from("system_settings").upsert(
@@ -574,7 +577,7 @@ for each row execute function public.touch_updated_at();`}
         <div style={{ ...styles.card, gridColumn: "span 6" }}>
           <div style={styles.sectionTitle}>Platform commission</div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <div>
               <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Commission %</div>
               <input
@@ -585,7 +588,16 @@ for each row execute function public.touch_updated_at();`}
               />
               <div style={styles.small}>Used later to calculate admin revenue cut.</div>
             </div>
-
+            <div>
+  <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Tax %</div>
+  <input
+    value={form.gst_percent}
+    onChange={(e) => setForm((p) => ({ ...p, gst_percent: e.target.value }))}
+    style={styles.input}
+    placeholder="e.g. 5"
+  />
+  <div style={styles.small}>Used in Cart to calculate tax.</div>
+</div>
             <div>
               <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Tax note (display text)</div>
               <input

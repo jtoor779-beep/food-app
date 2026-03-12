@@ -2,10 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { readGlobalCity, subscribeGlobalCity } from "@/lib/globalLocation";
 
 function clean(v) {
   return String(v || "").trim();
+}
+
+
+
+function normalizeCityKey(v) {
+  return clean(v).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function cityMatches(inputCity, rowCity) {
+  const a = normalizeCityKey(inputCity);
+  const b = normalizeCityKey(rowCity);
+  if (!a) return true;
+  if (!b) return false;
+  if (b.includes(a) || a.includes(b)) return true;
+  const aFirst = a.split(" ")[0] || "";
+  const bFirst = b.split(" ")[0] || "";
+  return !!(aFirst && bFirst && (aFirst === bFirst || bFirst.startsWith(aFirst) || aFirst.startsWith(bFirst)));
 }
 
 // Demo helpers (stable rating/eta per restaurant id)
@@ -24,7 +43,7 @@ function demoEta(id) {
   return 18 + n; // 18..43 mins
 }
 
-// ✅ REAL: use database columns if present; otherwise fall back to demo
+// REAL: use database columns if present; otherwise fall back to demo
 function isApprovedRow(r) {
   const a = String(r?.approval_status || "").toLowerCase();
   if (a) return a === "approved";
@@ -44,7 +63,7 @@ function isOpenNowRow(r) {
   return (hashNum(r?.id) % 10) >= 2; // demo
 }
 function demoFreeDelivery(id) {
-  return (hashNum(id) % 10) >= 5; // 50% free delivery (demo)
+  return (hashNum(id) % 10) >= 5; // 50% free delivery 
 }
 function demoPureVeg(name) {
   const n = String(name || "").toLowerCase();
@@ -52,16 +71,17 @@ function demoPureVeg(name) {
 }
 
 export default function RestaurantsPage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
 
   const [restaurants, setRestaurants] = useState([]);
+  const [reviewStatsByRestaurant, setReviewStatsByRestaurant] = useState({});
 
   // Existing (your old work)
   const [profileCity, setProfileCity] = useState("");
   const [cityInput, setCityInput] = useState("");
   const [activeCity, setActiveCity] = useState("");
-  const [showAll, setShowAll] = useState(false);
 
   // Premium additions
   const [isGuest, setIsGuest] = useState(true);
@@ -77,10 +97,54 @@ export default function RestaurantsPage() {
   const [favorites, setFavorites] = useState({}); // { [id]: true }
 
   const title = useMemo(() => {
-    if (showAll) return "Restaurants (All)";
     if (activeCity) return `Restaurants near ${activeCity}`;
     return "Restaurants";
-  }, [activeCity, showAll]);
+  }, [activeCity]);
+  function getRatingNumber(restaurantId) {
+    const stat = reviewStatsByRestaurant?.[restaurantId];
+    if (stat?.count > 0) return Number(stat.average || 0);
+    return 0;
+  }
+
+  async function loadRestaurantReviewStats(restaurantIds) {
+    const ids = Array.from(new Set((restaurantIds || []).filter(Boolean)));
+    if (!ids.length) {
+      setReviewStatsByRestaurant({});
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("reviews")
+        .select("target_id, rating")
+        .eq("target_type", "restaurant")
+        .eq("is_visible", true)
+        .in("target_id", ids);
+
+      if (error) throw error;
+
+      const stats = {};
+      for (const id of ids) stats[id] = { sum: 0, count: 0, average: 0 };
+
+      for (const row of data || []) {
+        const id = row?.target_id;
+        const rating = Number(row?.rating || 0);
+        if (!id || !Number.isFinite(rating)) continue;
+        if (!stats[id]) stats[id] = { sum: 0, count: 0, average: 0 };
+        stats[id].sum += rating;
+        stats[id].count += 1;
+      }
+
+      for (const id of Object.keys(stats)) {
+        const count = Number(stats[id].count || 0);
+        stats[id].average = count > 0 ? stats[id].sum / count : 0;
+      }
+
+      setReviewStatsByRestaurant(stats);
+    } catch {
+      setReviewStatsByRestaurant({});
+    }
+  }
 
   async function loadProfileCity() {
     const { data: userData } = await supabase.auth.getUser();
@@ -108,31 +172,30 @@ export default function RestaurantsPage() {
     return c;
   }
 
-  async function loadRestaurants(city, all) {
+  async function loadRestaurants(city) {
     setLoading(true);
     setErrMsg("");
 
     try {
-      // ✅ IMPORTANT: now we select real status columns too
-      let q = supabase
+      // IMPORTANT: now we select real status columns too
+      const q = supabase
         .from("restaurants")
         .select("id, name, image_url, city, approval_status, is_disabled, accepting_orders")
         .order("name", { ascending: true });
 
-      // If not "show all", filter by city input (partial match)
-      if (!all) {
-        const c = clean(city);
-        if (c) q = q.ilike("city", `%${c}%`);
-      }
-
       const { data, error } = await q;
       if (error) throw error;
 
-      // ✅ Always store array
-      setRestaurants(Array.isArray(data) ? data : []);
+      const allRows = Array.isArray(data) ? data : [];
+      const rows = allRows;
+
+      // Always store array
+      setRestaurants(rows);
+      await loadRestaurantReviewStats(rows.map((row) => row?.id));
     } catch (e) {
       setErrMsg(e?.message || String(e));
       setRestaurants([]);
+      setReviewStatsByRestaurant({});
     } finally {
       setLoading(false);
     }
@@ -153,10 +216,10 @@ export default function RestaurantsPage() {
       } catch {}
 
       const c = await loadProfileCity();
-      setActiveCity(c);
-      setCityInput(c);
-
-      await loadRestaurants(c, false);
+      const selectedCity = clean(readGlobalCity() || c);
+      setActiveCity(selectedCity);
+      setCityInput(selectedCity);
+      await loadRestaurants(selectedCity);
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -166,23 +229,21 @@ export default function RestaurantsPage() {
 
   useEffect(() => {
     init();
+
+    const unsubscribe = subscribeGlobalCity((city) => {
+      const nextCity = clean(city);
+      setActiveCity(nextCity);
+      setCityInput(nextCity);
+      loadRestaurants(nextCity);
+    });
+
+    return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   async function applyCity() {
     const c = clean(cityInput);
     setActiveCity(c);
-    setShowAll(false);
-    await loadRestaurants(c, false);
-  }
-
-  async function toggleShowAll(next) {
-    setShowAll(next);
-    if (next) {
-      await loadRestaurants("", true);
-    } else {
-      await loadRestaurants(activeCity || profileCity, false);
-    }
+    await loadRestaurants(c);
   }
 
   function toggleFavorite(id) {
@@ -208,7 +269,7 @@ export default function RestaurantsPage() {
   const processed = useMemo(() => {
     let list = Array.isArray(restaurants) ? [...restaurants] : [];
 
-    // ✅ HARD filter (permanent logic) - only approved + enabled
+    // HARD filter (permanent logic) - only approved + enabled
     list = list.filter((r) => isApprovedRow(r) && isEnabledRow(r));
 
     const s = clean(search).toLowerCase();
@@ -229,7 +290,7 @@ export default function RestaurantsPage() {
     if (sortBy === "az") {
       list.sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")));
     } else if (sortBy === "rating") {
-      list.sort((a, b) => Number(demoRating(b?.id)) - Number(demoRating(a?.id)));
+      list.sort((a, b) => getRatingNumber(b?.id) - getRatingNumber(a?.id));
     } else if (sortBy === "eta") {
       list.sort((a, b) => Number(demoEta(a?.id)) - Number(demoEta(b?.id)));
     } else {
@@ -242,50 +303,7 @@ export default function RestaurantsPage() {
 
   return (
     <main style={pageBg}>
-      <div style={{ width: "100", margin: 0 }}>
-        {/* Header */}
-        <div style={heroGlass}>
-          <div>
-            <div style={pill}>Browse</div>
-            <h1 style={heroTitle}>{title}</h1>
-            <div style={subText}>Choose a restaurant to view menu</div>
-          </div>
-
-          {/* Location controls (your old work kept) */}
-          <div style={controlsGlass}>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ fontWeight: 950, color: "#0b1220" }}>Your City:</div>
-              <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 800 }}>
-                {profileCity || "Not set"}
-              </div>
-
-              <div style={{ width: 12 }} />
-
-              <div style={{ fontWeight: 950, color: "#0b1220" }}>Filter City:</div>
-              <input
-                value={cityInput}
-                onChange={(e) => setCityInput(e.target.value)}
-                placeholder="e.g. Bakersfield"
-                style={input}
-                disabled={showAll}
-              />
-
-              <button onClick={applyCity} disabled={showAll} style={btnPrimary}>
-                Apply
-              </button>
-            </div>
-
-            <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 900 }}>
-              <input
-                type="checkbox"
-                checked={showAll}
-                onChange={(e) => toggleShowAll(e.target.checked)}
-              />
-              Show all restaurants
-            </label>
-          </div>
-        </div>
-
+      <div style={{ width: "100%", margin: 0 }}>
         {/* Guest banner */}
         {isGuest ? (
           <div style={guestBanner}>
@@ -311,23 +329,23 @@ export default function RestaurantsPage() {
 
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={selectMini}>
             <option value="recommended">Recommended</option>
-            <option value="rating">Top Rated (demo)</option>
-            <option value="eta">Fast Delivery (demo)</option>
-            <option value="az">A–Z</option>
+            <option value="rating">Top Rated </option>
+            <option value="eta">Fast Delivery </option>
+            <option value="az">A-Z</option>
           </select>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button onClick={() => setFavOnly((v) => !v)} style={favOnly ? chipActive : chip}>
-              ❤️ Favorites
+              Favorites
             </button>
             <button onClick={() => setOpenOnly((v) => !v)} style={openOnly ? chipActive : chip}>
-              ✅ Open now
+              Open now
             </button>
             <button onClick={() => setFreeDeliveryOnly((v) => !v)} style={freeDeliveryOnly ? chipActive : chip}>
-              🛵 Free delivery
+              Free delivery
             </button>
             <button onClick={() => setVegOnly((v) => !v)} style={vegOnly ? chipActive : chip}>
-              🥗 Pure Veg
+              Pure Veg
             </button>
 
             <button onClick={clearFilters} style={chipGhost}>
@@ -344,13 +362,13 @@ export default function RestaurantsPage() {
 
         {loading ? (
           <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 800 }}>
-            Loading…
+            Loading...
           </div>
         ) : null}
 
         {!loading && processed.length === 0 ? (
           <div style={emptyBox}>
-            No restaurants found{showAll ? "." : activeCity ? ` in ${activeCity}.` : "."}
+            No restaurants found{activeCity ? ` in ${activeCity}.` : "."}
           </div>
         ) : null}
 
@@ -359,13 +377,25 @@ export default function RestaurantsPage() {
             {processed.map((r) => {
               const rid = r?.id;
               const fav = !!favorites?.[rid];
-              const rating = demoRating(rid);
+              const rating = getRatingNumber(rid).toFixed(1);
               const eta = demoEta(rid);
               const open = isOpenNowRow(r);
               const free = demoFreeDelivery(rid);
 
               return (
-                <div key={rid} style={cardGlass}>
+                                <div
+                  key={rid}
+                  style={{ ...cardGlass, cursor: "pointer" }}
+                  onClick={() => router.push(`/menu?restaurant_id=${rid}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      router.push(`/menu?restaurant_id=${rid}`);
+                    }
+                  }}
+                  role="link"
+                  tabIndex={0}
+                >
                   <div style={imgWrap}>
                     {r.image_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -375,16 +405,16 @@ export default function RestaurantsPage() {
                     )}
 
                     <div style={topBadges}>
-                      <span style={badgeDark}>⭐ {rating}</span>
+                      <span style={badgeDark}>Rating {rating}</span>
                       <span style={badgeLight}>{eta} mins</span>
                     </div>
 
                     <button
-                      onClick={() => toggleFavorite(rid)}
+                      onClick={(e) => { e.stopPropagation(); toggleFavorite(rid); }}
                       style={favBtn}
                       title={fav ? "Remove from favorites" : "Add to favorites"}
                     >
-                      {fav ? "❤️" : "🤍"}
+                      {fav ? "Saved" : "Save"}
                     </button>
                   </div>
 
@@ -397,7 +427,7 @@ export default function RestaurantsPage() {
                     </div>
 
                     <div style={{ fontSize: 12, color: "rgba(17,24,39,0.65)", marginTop: 6, fontWeight: 800 }}>
-                      {r.city ? `📍 ${r.city}` : "📍 City not set"} • {free ? "Free delivery (demo)" : "Delivery (demo)"}
+                      {r.city ? `${r.city}` : "City not set"} | {free ? "Free delivery " : "Delivery "}
                     </div>
 
                     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -408,10 +438,10 @@ export default function RestaurantsPage() {
                     </div>
 
                     <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <Link href={`/menu?restaurant_id=${rid}`} style={btnSmallDarkLink}>
+                      <Link href={`/menu?restaurant_id=${rid}`} style={btnSmallDarkLink} onClick={(e) => e.stopPropagation()}>
                         Open Menu
                       </Link>
-                      <Link href={`/restaurants/${rid}`} style={btnSmallOutlineLink}>
+                      <Link href={`/restaurants/${rid}`} style={btnSmallOutlineLink} onClick={(e) => e.stopPropagation()}>
                         View
                       </Link>
                     </div>
@@ -738,3 +768,23 @@ const tagStrong = {
   background: "rgba(17,24,39,0.92)",
   color: "#fff",
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

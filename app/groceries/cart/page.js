@@ -7,8 +7,11 @@ import supabase from "@/lib/supabase";
 
 /* =========================
    Grocery Cart (separate cart)
-   - Primary key: grocery_cart_items
-   - Fallback read: cart_items (auto-migrate)
+   - Primary keys:
+     1) grocery_cart_items
+     2) foodapp_grocery_cart
+   - Legacy fallback read:
+     3) cart_items
    ========================= */
 
 function safeJsonParse(v, fallback) {
@@ -22,8 +25,13 @@ function safeJsonParse(v, fallback) {
 function primaryKey() {
   return "grocery_cart_items";
 }
+
+function secondaryKey() {
+  return "foodapp_grocery_cart";
+}
+
 function fallbackKey() {
-  return "cart_items"; // ✅ your restaurant cart key (old). We will only read as fallback once.
+  return "cart_items"; // legacy restaurant cart key (read only as last fallback)
 }
 
 function readKey(k) {
@@ -36,6 +44,11 @@ function writeKey(k, items) {
   localStorage.setItem(k, JSON.stringify(items || []));
 }
 
+function removeKey(k) {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(k);
+}
+
 function moneyINR(v) {
   const n = Number(v || 0);
   return `₹${n.toFixed(0)}`;
@@ -45,18 +58,113 @@ function clean(v) {
   return String(v || "").trim();
 }
 
+function clampText(s, max = 44) {
+  const str = String(s ?? "");
+  if (str.length <= max) return str;
+  return str.slice(0, max - 1) + "…";
+}
+
+/* =========================
+   ✅ PRICE HELPERS (SAFE)
+   - Prefer unit_price (variant-selected price)
+   - Fallback to price (old behavior)
+   ========================= */
+function getUnitPrice(it) {
+  const up = Number(it?.unit_price);
+  if (Number.isFinite(up) && up > 0) return up;
+  const p = Number(it?.price);
+  if (Number.isFinite(p) && p >= 0) return p;
+  return 0;
+}
+
 function calcSubtotal(items) {
   return (items || []).reduce((sum, it) => {
-    const price = Number(it?.price || 0);
+    const price = getUnitPrice(it);
     const qty = Number(it?.qty || 1);
     return sum + price * qty;
   }, 0);
 }
 
-function clampText(s, max = 44) {
-  const str = String(s ?? "");
-  if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+/* =========================
+   ✅ Tax helpers (SAFE)
+   - If item.is_taxable missing => default true (backward compatible)
+   ========================= */
+function normalizeIsTaxable(it) {
+  if (typeof it?.is_taxable === "boolean") return it.is_taxable;
+  const s = String(it?.is_taxable ?? it?.taxable ?? "").toLowerCase();
+  if (s === "false" || s === "0" || s === "no") return false;
+  return true; // default true
+}
+
+function calcTaxableSubtotal(items) {
+  return (items || []).reduce((sum, it) => {
+    if (!normalizeIsTaxable(it)) return sum;
+    const price = getUnitPrice(it);
+    const qty = Number(it?.qty || 1);
+    return sum + price * qty;
+  }, 0);
+}
+
+/* =========================
+   ✅ Platform fee helpers (SAFE)
+   - Default 0 (so no breaking)
+   - Configurable via localStorage:
+     - grocery_platform_fee_mode: "percent" | "flat"
+     - grocery_platform_fee_value: number (e.g. 2 for 2% OR 10 for ₹10)
+     - grocery_platform_fee_cap: optional max cap
+   ========================= */
+function getPlatformFeeConfig() {
+  if (typeof window === "undefined") {
+    return { mode: "percent", value: 0, cap: null };
+  }
+
+  const modeRaw = String(localStorage.getItem("grocery_platform_fee_mode") || "percent")
+    .trim()
+    .toLowerCase();
+
+  const mode = modeRaw === "flat" ? "flat" : "percent";
+
+  const valueNum = Number(localStorage.getItem("grocery_platform_fee_value") || 0);
+  const value = Number.isFinite(valueNum) ? valueNum : 0;
+
+  const capNum = Number(localStorage.getItem("grocery_platform_fee_cap") || "");
+  const cap = Number.isFinite(capNum) && capNum > 0 ? capNum : null;
+
+  return { mode, value, cap };
+}
+
+function calcPlatformFee(subtotal) {
+  const s = Number(subtotal || 0);
+  if (!Number.isFinite(s) || s <= 0) return 0;
+
+  const cfg = getPlatformFeeConfig();
+  let fee = 0;
+
+  if (cfg.mode === "flat") {
+    fee = Number(cfg.value || 0);
+  } else {
+    const pct = Number(cfg.value || 0);
+    fee = (s * pct) / 100;
+  }
+
+  if (!Number.isFinite(fee) || fee < 0) fee = 0;
+
+  fee = Math.round(fee);
+
+  if (cfg.cap != null) {
+    fee = Math.min(fee, cfg.cap);
+  }
+
+  return fee;
+}
+
+/* =========================
+   ✅ Cart identity helper (SAFE)
+   - prefer cart_key (supports variants)
+   - fallback to id
+   ========================= */
+function getCartKey(it) {
+  return String(it?.cart_key || it?.key || it?.id || it?.item_id || "");
 }
 
 export default function GroceryCartPage() {
@@ -94,15 +202,22 @@ export default function GroceryCartPage() {
 
   const subtotal = useMemo(() => calcSubtotal(items), [items]);
 
+  const taxableSubtotal = useMemo(() => calcTaxableSubtotal(items), [items]);
+
   const deliveryFee = useMemo(() => {
     if (items.length === 0) return 0;
-    return 25; // demo
+    return 25;
   }, [items.length]);
 
-  const gst = useMemo(() => {
+  const platformFee = useMemo(() => {
+    if (items.length === 0) return 0;
+    return calcPlatformFee(subtotal);
+  }, [items.length, subtotal]);
+
+  const tax = useMemo(() => {
     const rate = 0.05;
-    return Math.round(subtotal * rate);
-  }, [subtotal]);
+    return Math.round(taxableSubtotal * rate);
+  }, [taxableSubtotal]);
 
   const couponDiscount = useMemo(() => {
     if (!couponApplied) return 0;
@@ -113,9 +228,9 @@ export default function GroceryCartPage() {
   }, [coupon, couponApplied]);
 
   const totalPayable = useMemo(() => {
-    const t = subtotal + deliveryFee + gst + tip - couponDiscount;
+    const t = subtotal + deliveryFee + platformFee + tax + tip - couponDiscount;
     return Math.max(0, Math.round(t));
-  }, [subtotal, deliveryFee, gst, tip, couponDiscount]);
+  }, [subtotal, deliveryFee, platformFee, tax, tip, couponDiscount]);
 
   const totalItems = useMemo(() => {
     return (items || []).reduce((sum, it) => sum + Number(it?.qty || 1), 0);
@@ -130,9 +245,28 @@ export default function GroceryCartPage() {
   }, [items.length, customerName, phone, addr1]);
 
   function persistAddressIfNeeded() {
+    if (typeof window === "undefined") return;
+
+    const groceryPayload = { customerName, phone, addr1, addr2, landmark, instructions };
+
+    const successPayload = {
+      customer_name: customerName,
+      phone: phone,
+      address_line1: addr1,
+      address_line2: addr2,
+      landmark: landmark,
+      instructions: instructions,
+    };
+
     if (!saveAddress) return;
-    const payload = { customerName, phone, addr1, addr2, landmark, instructions };
-    localStorage.setItem("grocery_delivery_details", JSON.stringify(payload));
+
+    try {
+      localStorage.setItem("grocery_delivery_details", JSON.stringify(groceryPayload));
+    } catch {}
+
+    try {
+      localStorage.setItem("foodapp_saved_address", JSON.stringify(successPayload));
+    } catch {}
   }
 
   function loadSavedAddress() {
@@ -144,31 +278,86 @@ export default function GroceryCartPage() {
       setAddr2(saved.addr2 || "");
       setLandmark(saved.landmark || "");
       setInstructions(saved.instructions || "");
+      return;
     }
+
+    const saved2 = safeJsonParse(localStorage.getItem("foodapp_saved_address") || "null", null);
+    if (saved2) {
+      setCustomerName(saved2.customer_name || "");
+      setPhone(saved2.phone || "");
+      setAddr1(saved2.address_line1 || "");
+      setAddr2(saved2.address_line2 || "");
+      setLandmark(saved2.landmark || "");
+      setInstructions(saved2.instructions || "");
+    }
+  }
+
+  function persistFeeBreakdownForSuccess() {
+    if (typeof window === "undefined") return;
+
+    const payload = {
+      totals: {
+        subtotal,
+        delivery_fee: deliveryFee,
+        platform_fee: platformFee,
+        tax,
+        tip,
+        discount: couponDiscount,
+        payable: totalPayable,
+      },
+      meta: {
+        order_type: "grocery",
+        store_id: storeId || "",
+        store_name: storeName || "",
+      },
+      ts: Date.now(),
+    };
+
+    try {
+      localStorage.setItem("grocery_cart_totals", JSON.stringify(payload));
+    } catch {}
+
+    try {
+      localStorage.setItem("foodapp_cart_breakdown", JSON.stringify(payload));
+    } catch {}
   }
 
   function sync(nextItems) {
     setItems(nextItems);
+
+    // ✅ write to BOTH grocery cart keys so all pages stay in sync
     writeKey(primaryKey(), nextItems);
+    writeKey(secondaryKey(), nextItems);
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+    }
   }
 
   function normalizeCartItem(it) {
-    // Make sure qty exists
     const qty = Math.max(1, Number(it?.qty || it?.quantity || 1));
+    const is_taxable = normalizeIsTaxable(it);
+    const unit_price = getUnitPrice(it);
+    const variant_label = clean(it?.variant_label || it?.variant || it?.weight_label || "");
+    const cart_key = clean(it?.cart_key || it?.key || "") || "";
+
     return {
       ...it,
       qty,
       price: Number(it?.price || 0),
+      unit_price,
       name: it?.name || it?.item_name || "Item",
       image_url: it?.image_url || it?.image || it?.photo_url || "",
       category: it?.category || it?.type || "",
       id: it?.id || it?.item_id || it?.menu_item_id || cryptoRandomId(),
+      cart_key,
+      is_taxable,
+      variant_label,
     };
   }
 
   function cryptoRandomId() {
     try {
-      // browser-safe random id
       return "tmp_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
     } catch {
       return "tmp_" + Date.now();
@@ -176,23 +365,29 @@ export default function GroceryCartPage() {
   }
 
   function loadCartWithFallbackAndMigrate() {
-    // 1) read primary grocery key
+    // 1) primary grocery key
     const primary = readKey(primaryKey());
     if (Array.isArray(primary) && primary.length > 0) {
-      return primary.map(normalizeCartItem);
+      const normalized = primary.map(normalizeCartItem);
+      writeKey(secondaryKey(), normalized);
+      return normalized;
     }
 
-    // 2) if empty, read fallback restaurant key
+    // 2) second grocery key used by home page
+    const secondary = readKey(secondaryKey());
+    if (Array.isArray(secondary) && secondary.length > 0) {
+      const normalized = secondary.map(normalizeCartItem);
+      writeKey(primaryKey(), normalized);
+      setInfoMsg("✅ Synced grocery cart items.");
+      return normalized;
+    }
+
+    // 3) last fallback: legacy cart_items
     const fallback = readKey(fallbackKey());
     if (Array.isArray(fallback) && fallback.length > 0) {
       const normalized = fallback.map(normalizeCartItem);
-
-      // ✅ migrate into grocery cart
       writeKey(primaryKey(), normalized);
-
-      // OPTIONAL: do NOT delete restaurant cart, just copy.
-      // If you want to clear restaurant cart later, we can do it safely.
-
+      writeKey(secondaryKey(), normalized);
       setInfoMsg("✅ Imported items into Grocery Cart.");
       return normalized;
     }
@@ -230,26 +425,49 @@ export default function GroceryCartPage() {
 
   useEffect(() => {
     init();
+
+    // ✅ keep page live-updated when cart changes elsewhere
+    const onStorage = () => {
+      const cart = loadCartWithFallbackAndMigrate();
+      setItems(cart);
+    };
+
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+    };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function clearCart() {
     const ok = confirm("Clear grocery cart?");
     if (!ok) return;
-    sync([]);
+
+    setItems([]);
+    removeKey(primaryKey());
+    removeKey(secondaryKey());
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+    }
+
     setCoupon("");
     setCouponApplied(false);
     setTip(0);
   }
 
-  function removeItem(id) {
-    const next = items.filter((x) => x?.id !== id);
+  function removeItem(keyOrId) {
+    const target = String(keyOrId || "");
+    const next = items.filter((x) => getCartKey(x) !== target);
     sync(next);
   }
 
-  function changeQty(id, delta) {
+  function changeQty(keyOrId, delta) {
+    const target = String(keyOrId || "");
     const next = items.map((x) => {
-      if (x?.id !== id) return x;
+      if (getCartKey(x) !== target) return x;
       const q = Number(x?.qty || 1) + delta;
       return { ...x, qty: Math.max(1, q) };
     });
@@ -288,7 +506,10 @@ export default function GroceryCartPage() {
     }
 
     persistAddressIfNeeded();
-    setInfoMsg("✅ Ready! Next step: connect Grocery checkout to DB order create.");
+    persistFeeBreakdownForSuccess();
+
+    setInfoMsg("✅ Details saved. Continue to payment…");
+
     try {
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch {}
@@ -304,9 +525,13 @@ export default function GroceryCartPage() {
             <div style={subText}>Review items • Delivery details • Checkout</div>
 
             <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Link href="/groceries" style={btnPillLight}>← Back to Stores</Link>
+              <Link href="/groceries" style={btnPillLight}>
+                ← Back to Stores
+              </Link>
               {storeId ? (
-                <Link href={`/groceries/menu?store_id=${storeId}`} style={btnPillLight}>← Back to Store</Link>
+                <Link href={`/groceries/menu?store_id=${storeId}`} style={btnPillLight}>
+                  ← Back to Store
+                </Link>
               ) : null}
               <button onClick={clearCart} style={btnPillDark} disabled={items.length === 0}>
                 Clear Cart
@@ -323,7 +548,7 @@ export default function GroceryCartPage() {
             </div>
 
             <div style={{ marginTop: 10, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
-              Reads grocery cart. If empty, imports items once from old cart automatically.
+              Reads both grocery cart keys and auto-syncs them.
             </div>
           </div>
         </div>
@@ -331,12 +556,9 @@ export default function GroceryCartPage() {
         {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
         {infoMsg ? <div style={alertOk}>{infoMsg}</div> : null}
 
-        {loading ? (
-          <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading…</div>
-        ) : null}
+        {loading ? <div style={{ marginTop: 14, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading…</div> : null}
 
         <div style={mainGrid}>
-          {/* LEFT */}
           <div style={panelGlass}>
             <div style={panelTitleRow}>
               <div>
@@ -352,21 +574,26 @@ export default function GroceryCartPage() {
             {items.length === 0 ? (
               <div style={emptyBox}>
                 Your grocery cart is empty. Go to{" "}
-                <Link href="/groceries" style={linkStrong}>Groceries</Link> and add items.
+                <Link href="/groceries" style={linkStrong}>
+                  Groceries
+                </Link>{" "}
+                and add items.
               </div>
             ) : (
               <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                {items.map((it) => {
+                {items.map((raw) => {
+                  const it = normalizeCartItem(raw);
+                  const key = getCartKey(it);
+
                   const qty = Number(it?.qty || 1);
-                  const price = Number(it?.price || 0);
-                  const line = qty * price;
+                  const unitPrice = getUnitPrice(it);
+                  const line = qty * unitPrice;
 
                   return (
-                    <div key={it?.id} style={itemRow}>
+                    <div key={key} style={itemRow}>
                       <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
                         <div style={thumb}>
                           {it?.image_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
                             <img src={it.image_url} alt={it?.name || "Item"} style={thumbImg} />
                           ) : (
                             <div style={thumbPh}>No Image</div>
@@ -377,20 +604,32 @@ export default function GroceryCartPage() {
                           <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>
                             {it?.name || "Item"}
                           </div>
-                          <div style={{ color: "rgba(17,24,39,0.68)", fontWeight: 850, fontSize: 12 }}>
-                            {it?.category ? clampText(it.category, 26) : "Grocery item"} • {moneyINR(price)} each • Line: {moneyINR(line)}
+
+                          {clean(it?.variant_label) ? (
+                            <div style={{ marginTop: 4, display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+                              <span style={variantPill}>Option: {it.variant_label}</span>
+                            </div>
+                          ) : null}
+
+                          <div style={{ marginTop: 4, color: "rgba(17,24,39,0.68)", fontWeight: 850, fontSize: 12 }}>
+                            {it?.category ? clampText(it.category, 26) : "Grocery item"} • {moneyINR(unitPrice)} each • Line:{" "}
+                            {moneyINR(line)}
+                          </div>
+
+                          <div style={{ marginTop: 4, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.58)" }}>
+                            {normalizeIsTaxable(it) ? "Taxable" : "Non-taxable"}
                           </div>
                         </div>
                       </div>
 
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <div style={qtyBox}>
-                          <button onClick={() => changeQty(it?.id, -1)} style={qtyBtn}>−</button>
+                          <button onClick={() => changeQty(key, -1)} style={qtyBtn}>−</button>
                           <div style={qtyNum}>{qty}</div>
-                          <button onClick={() => changeQty(it?.id, +1)} style={qtyBtn}>+</button>
+                          <button onClick={() => changeQty(key, +1)} style={qtyBtn}>+</button>
                         </div>
 
-                        <button onClick={() => removeItem(it?.id)} style={btnSmallDanger}>
+                        <button onClick={() => removeItem(key)} style={btnSmallDanger}>
                           Remove
                         </button>
                       </div>
@@ -400,7 +639,6 @@ export default function GroceryCartPage() {
               </div>
             )}
 
-            {/* Offers */}
             <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,0,0,0.08)", paddingTop: 14 }}>
               <div style={panelTitle}>Offers</div>
               <div style={panelSub}>Enter your coupon code</div>
@@ -412,7 +650,9 @@ export default function GroceryCartPage() {
                   placeholder="Enter coupon code"
                   style={{ ...input, flex: 1, minWidth: 240 }}
                 />
-                <button onClick={applyCoupon} style={btnPrimary}>Apply</button>
+                <button onClick={applyCoupon} style={btnPrimary}>
+                  Apply
+                </button>
               </div>
 
               <div style={{ marginTop: 12 }}>
@@ -428,7 +668,6 @@ export default function GroceryCartPage() {
             </div>
           </div>
 
-          {/* RIGHT */}
           <div style={panelGlass}>
             <div style={panelTitleRow}>
               <div>
@@ -499,14 +738,27 @@ export default function GroceryCartPage() {
                 <div style={summaryKey}>Subtotal</div>
                 <div style={summaryVal}>{moneyINR(subtotal)}</div>
               </div>
+
+              <div style={summaryRow}>
+                <div style={summaryKey}>Taxable subtotal</div>
+                <div style={summaryVal}>{moneyINR(taxableSubtotal)}</div>
+              </div>
+
               <div style={summaryRow}>
                 <div style={summaryKey}>Delivery fee</div>
                 <div style={summaryVal}>{moneyINR(deliveryFee)}</div>
               </div>
+
               <div style={summaryRow}>
-                <div style={summaryKey}>GST (demo 5%)</div>
-                <div style={summaryVal}>{moneyINR(gst)}</div>
+                <div style={summaryKey}>Platform fee</div>
+                <div style={summaryVal}>{moneyINR(platformFee)}</div>
               </div>
+
+              <div style={summaryRow}>
+                <div style={summaryKey}>Tax (5%)</div>
+                <div style={summaryVal}>{moneyINR(tax)}</div>
+              </div>
+
               <div style={summaryRow}>
                 <div style={summaryKey}>Tip</div>
                 <div style={summaryVal}>{moneyINR(tip)}</div>
@@ -534,6 +786,11 @@ export default function GroceryCartPage() {
 
               <div style={{ marginTop: 10, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
                 Note: DB order create will be next step.
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.60)" }}>
+                Platform fee config (optional): set <b>grocery_platform_fee_mode</b> (percent/flat) +{" "}
+                <b>grocery_platform_fee_value</b>.
               </div>
             </div>
           </div>
@@ -946,4 +1203,14 @@ const tagStrong = {
   border: "1px solid rgba(17,24,39,0.16)",
   background: "rgba(17,24,39,0.92)",
   color: "#fff",
+};
+
+const variantPill = {
+  fontSize: 12,
+  padding: "5px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(255,255,255,0.85)",
+  color: "rgba(17,24,39,0.82)",
+  fontWeight: 950,
 };

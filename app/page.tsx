@@ -648,8 +648,6 @@ export default function CustomerHomeDashboard() {
           disablePictureInPicture
           disableRemotePlayback
           controlsList="nodownload noplaybackrate noremoteplayback"
-
-
           onEnded={() => {
             if (bannerTimerRef.current) {
               window.clearTimeout(bannerTimerRef.current);
@@ -1310,7 +1308,7 @@ export default function CustomerHomeDashboard() {
         setHomeBanner(null);
         setBannerIndex(0);
         setBannerReady(true);
-      setHomeBannerFx(DEFAULT_HOME_BANNER_FX);
+        setHomeBannerFx(DEFAULT_HOME_BANNER_FX);
       }
     } finally {
       setLoading(false);
@@ -1458,7 +1456,6 @@ export default function CustomerHomeDashboard() {
     bannerPrevRef.current = next;
     setLeavingBanner(null);
   }, [activeBanner?.url, bannerIndex, homeBannerFx]);
-
 
   useEffect(() => {
     if (bannerTimerRef.current) {
@@ -2082,7 +2079,7 @@ export default function CustomerHomeDashboard() {
                   {c.label} <span style={countPill}>{c.key === "recommended" ? featuredItems.length : categoryCounts[c.key] || 0}</span>
                 </button>
               ))}
-              <button onClick={loadData} style={chip}>
+              <button onClick={() => loadData()} style={chip}>
                 Refresh
               </button>
 
@@ -2821,27 +2818,3 @@ const heroImgPlaceholder: React.CSSProperties = {
   fontWeight: 950,
   background: "rgba(255,255,255,0.70)",
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

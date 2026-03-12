@@ -1,23 +1,52 @@
 import webpush from "web-push";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-webpush.setVapidDetails(
-  "mailto:admin@homyfod.com",
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+  if (!supabaseUrl) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is required");
+  }
+
+  if (!serviceRoleKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is required");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey);
+}
+
+function ensureWebPushConfigured() {
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
+
+  if (!vapidPublicKey) {
+    throw new Error("NEXT_PUBLIC_VAPID_PUBLIC_KEY is required");
+  }
+
+  if (!vapidPrivateKey) {
+    throw new Error("VAPID_PRIVATE_KEY is required");
+  }
+
+  webpush.setVapidDetails(
+    "mailto:admin@homyfod.com",
+    vapidPublicKey,
+    vapidPrivateKey
+  );
+}
 
 export async function POST(req) {
   try {
+    const supabase = getSupabaseAdmin();
+    ensureWebPushConfigured();
+
     const { user_id, title, body, url } = await req.json();
 
     if (!user_id) {
-      return Response.json({ success: false, error: "Missing user_id" }, { status: 400 });
+      return Response.json(
+        { success: false, error: "Missing user_id" },
+        { status: 400 }
+      );
     }
 
     const { data: subs, error } = await supabase
@@ -26,11 +55,18 @@ export async function POST(req) {
       .eq("user_id", user_id);
 
     if (error) {
-      return Response.json({ success: false, error: error.message }, { status: 500 });
+      return Response.json(
+        { success: false, error: error.message },
+        { status: 500 }
+      );
     }
 
     if (!subs || subs.length === 0) {
-      return Response.json({ success: true, sent: 0, note: "No subscriptions for user" });
+      return Response.json({
+        success: true,
+        sent: 0,
+        note: "No subscriptions for user",
+      });
     }
 
     let sent = 0;

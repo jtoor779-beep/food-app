@@ -66,6 +66,39 @@ function safeNum(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAbortAuthError(e) {
+  const msg = String(e?.message || e || "").toLowerCase();
+  return (
+    msg.includes("signal is aborted without reason") ||
+    msg.includes("aborterror") ||
+    msg.includes("aborted") ||
+    (msg.includes("lock") && msg.includes("timeout"))
+  );
+}
+
+async function getUserWithRetry(maxAttempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error && data?.user) return { user: data.user, error: null };
+      lastError = error || null;
+      if (error && !isAbortAuthError(error)) break;
+    } catch (e) {
+      lastError = e;
+      if (!isAbortAuthError(e)) break;
+    }
+
+    if (i < maxAttempts - 1) await sleep(220);
+  }
+
+  return { user: null, error: lastError };
+}
+
 /* =========================
    PREMIUM THEME (match your style)
    ========================= */
@@ -375,6 +408,14 @@ function pickLatLng(obj) {
   }
 
   return null;
+}
+
+function safeImgUrl(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("/")) return s;
+  return "";
 }
 
 function isActiveDeliveryStatus(status) {
@@ -722,23 +763,75 @@ export default function GroceryOrdersPage() {
 
     const list = Array.isArray(data) ? data : [];
     const hasEmbedded = list.some((o) => Array.isArray(o.grocery_order_items));
+
+    const normalizeItem = (it, fallbackOrderId = null) => ({
+      id: it?.id,
+      order_id: it?.order_id ?? fallbackOrderId ?? null,
+      item_ref_id: it?.grocery_item_id ?? it?.item_id ?? it?.product_id ?? it?.menu_item_id ?? null,
+      product_name: it?.product_name ?? it?.item_name ?? it?.name ?? "",
+      quantity: Number(it?.quantity ?? it?.qty ?? it?.count ?? 0) || 0,
+      unit_price: Number(it?.unit_price ?? it?.price_each ?? it?.price ?? it?.unit_amount ?? 0) || 0,
+      image_url: safeImgUrl(it?.image_url ?? it?.img ?? it?.photo_url ?? it?.picture_url ?? ""),
+      line_total:
+        Number(it?.line_total ?? it?.total ?? it?.amount ?? it?.subtotal ?? 0) ||
+        (Number(it?.quantity ?? it?.qty ?? it?.count ?? 0) || 0) * (Number(it?.unit_price ?? it?.price_each ?? it?.price ?? it?.unit_amount ?? 0) || 0),
+    });
+
     if (!hasEmbedded && list.length > 0) {
       const ids = list.map((o) => o.id).filter(Boolean);
-      const { data: itemsData } = await supabase
-        .from("grocery_order_items")
-        .select("id, order_id, product_name, quantity, unit_price, line_total")
-        .in("order_id", ids);
+      const { data: itemsData } = await supabase.from("grocery_order_items").select("*").in("order_id", ids);
 
       const byOrder = {};
       for (const it of itemsData || []) {
         const k = it.order_id;
         if (!byOrder[k]) byOrder[k] = [];
-        byOrder[k].push(it);
+        byOrder[k].push(normalizeItem(it, k));
       }
 
       for (const o of list) {
         o.grocery_order_items = byOrder[o.id] || [];
       }
+    } else if (hasEmbedded) {
+      for (const o of list) {
+        const embedded = Array.isArray(o.grocery_order_items) ? o.grocery_order_items : [];
+        o.grocery_order_items = embedded.map((it) => normalizeItem(it, o.id));
+      }
+    }
+
+    // Enrich missing item names/images from grocery_items table when item id is available.
+    const refIds = Array.from(
+      new Set(
+        list
+          .flatMap((o) => (Array.isArray(o.grocery_order_items) ? o.grocery_order_items : []))
+          .map((it) => it?.item_ref_id)
+          .filter(Boolean)
+          .map(String)
+      )
+    );
+    if (refIds.length > 0) {
+      try {
+        const { data: rows, error: itemMetaErr } = await supabase.from("grocery_items").select("id, name, image_url").in("id", refIds);
+        if (!itemMetaErr) {
+          const metaById = new Map();
+          for (const r of rows || []) {
+            metaById.set(String(r.id), {
+              name: String(r?.name || "").trim(),
+              image_url: safeImgUrl(r?.image_url),
+            });
+          }
+          for (const o of list) {
+            const its = Array.isArray(o.grocery_order_items) ? o.grocery_order_items : [];
+            o.grocery_order_items = its.map((it) => {
+              const meta = it?.item_ref_id ? metaById.get(String(it.item_ref_id)) : null;
+              return {
+                ...it,
+                product_name: String(it?.product_name || "").trim() || meta?.name || "Item",
+                image_url: safeImgUrl(it?.image_url) || safeImgUrl(meta?.image_url),
+              };
+            });
+          }
+        }
+      } catch {}
     }
 
     setOrders(list);
@@ -771,11 +864,14 @@ export default function GroceryOrdersPage() {
     setErrMsg("");
 
     try {
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
+      const { user: u, error: userErr } = await getUserWithRetry(3);
+      if (userErr && !isAbortAuthError(userErr)) throw userErr;
 
-      const u = userData?.user;
       if (!u) {
+        if (isAbortAuthError(userErr)) {
+          setErrMsg("Temporary session sync issue. Please wait a moment and refresh.");
+          return;
+        }
         router.push("/login");
         return;
       }
@@ -1182,9 +1278,9 @@ export default function GroceryOrdersPage() {
                         {items.length === 0 ? (
                           <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>Items will appear here.</div>
                         ) : (
-                          items.map((it) => (
+                          items.map((it, idx) => (
                             <div
-                              key={it.id}
+                              key={`${it.id || it.item_ref_id || it.product_name || "item"}-${idx}`}
                               style={{
                                 display: "flex",
                                 justifyContent: "space-between",
@@ -1196,7 +1292,23 @@ export default function GroceryOrdersPage() {
                                 background: "rgba(255,255,255,0.85)",
                               }}
                             >
-                              <div style={{ fontWeight: 950, color: "#0b1220" }}>{it.product_name || "Item"}</div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                {it?.image_url ? (
+                                  <img
+                                    src={it.image_url}
+                                    alt={it.product_name || "Item"}
+                                    style={{
+                                      width: 42,
+                                      height: 42,
+                                      borderRadius: 10,
+                                      objectFit: "cover",
+                                      border: "1px solid rgba(0,0,0,0.08)",
+                                      background: "rgba(255,255,255,0.8)",
+                                    }}
+                                  />
+                                ) : null}
+                                <div style={{ fontWeight: 950, color: "#0b1220" }}>{it.product_name || "Item"}</div>
+                              </div>
                               <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
                                 Qty {Number(it.quantity || 0)}
                                 <span style={{ marginLeft: 10 }}>

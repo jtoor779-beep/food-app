@@ -1077,9 +1077,6 @@ function GroceryMenuInner() {
                         ) : null}
 
                         <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {displaySubcategoryLabel(it) ? <span style={tag}>{displaySubcategoryLabel(it)}</span> : null}
-                          {it.is_best_seller ? <span style={tagStrong}>Best</span> : null}
-                          {it.is_recommended ? <span style={tagStrong}>Rec</span> : null}
                           {isTaxableGrocery(it) ? <span style={tagStrong}>TAXABLE</span> : null}
                         </div>
 
@@ -1159,8 +1156,6 @@ function GroceryMenuInner() {
 
                   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <span style={activeItem?.in_stock ? openPill : closedPill}>{activeItem?.in_stock ? "In stock" : "Out of stock"}</span>
-                    {activeItem?.is_best_seller ? <span style={tagStrong}>Best</span> : null}
-                    {activeItem?.is_recommended ? <span style={tagStrong}>Rec</span> : null}
                     {activeItem ? (isTaxableGrocery(activeItem) ? <span style={tagStrong}>TAXABLE</span> : null) : null}
                   </div>
 
@@ -1705,6 +1700,9 @@ const catPanel = {
   border: "1px solid rgba(0,0,0,0.08)",
   boxShadow: "0 12px 36px rgba(0,0,0,0.07)",
   backdropFilter: "blur(10px)",
+  maxHeight: "calc(100vh - 104px)",
+  overflowY: "auto",
+  overscrollBehavior: "contain",
 };
 
 const catItemBase = {

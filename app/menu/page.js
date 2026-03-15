@@ -6,7 +6,7 @@ import supabase from "@/lib/supabase";
 import { fetchReviewsByTarget, summarizeReviews } from "@/lib/reviews";
 
 /* =========================================================
-   âœ… CURRENCY SUPPORT (SAFE, FORMATTING ONLY)
+   ✅ CURRENCY SUPPORT (SAFE, FORMATTING ONLY)
    - Reads localStorage "foodapp_currency"
    - Default INR
    - INR: no decimals
@@ -52,7 +52,7 @@ function normCuisine(v) {
 
 /**
  * Cart helpers (localStorage)
- * âœ… COMPAT MODE: supports BOTH keys so nothing breaks
+ * ✅ COMPAT MODE: supports BOTH keys so nothing breaks
  * - Old key: foodapp_cart
  * - New key used elsewhere: cart_items
  */
@@ -120,13 +120,13 @@ export default function MenuPage() {
   const [viewerUserId, setViewerUserId] = useState("");
   const [viewerName, setViewerName] = useState("");
 
-  // âœ… currency
+  // ✅ currency
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
   const [restaurantReviews, setRestaurantReviews] = useState([]);
   const [reviewsLoading, setReviewsLoading] = useState(false);
 
-  // âœ… UI: detect narrow screens for pro mobile layout (no data/logic change)
+  // ✅ UI: detect narrow screens for pro mobile layout (no data/logic change)
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const check = () => setIsMobile(typeof window !== "undefined" && window.innerWidth <= 640);
@@ -162,7 +162,7 @@ export default function MenuPage() {
 
   async function loadRestaurants() {
     /**
-     * âœ… IMPORTANT:
+     * ✅ IMPORTANT:
      * Use PUBLIC VIEW so customers only see ENABLED restaurants
      * View name: restaurants_public
      */
@@ -194,11 +194,11 @@ export default function MenuPage() {
     }
 
     /**
-     * âœ… IMPORTANT:
+     * ✅ IMPORTANT:
      * Use PUBLIC VIEW so customers only see items from ENABLED restaurants
      * View name: menu_items_public
      *
-     * âœ… Your DB/view DOES NOT have cuisine right now, so we DO NOT request it.
+     * ✅ Your DB/view DOES NOT have cuisine right now, so we DO NOT request it.
      */
     const { data, error } = await supabase
       .from("menu_items_public")
@@ -208,7 +208,7 @@ export default function MenuPage() {
 
     if (error) throw error;
 
-    // Keep UI compatible even if cuisine doesnâ€™t exist
+    // Keep UI compatible even if cuisine doesn’t exist
     const safe = (data || []).map((x) => ({
       ...x,
       cuisine: x.cuisine ?? null,
@@ -307,7 +307,7 @@ export default function MenuPage() {
     }
   }
   useEffect(() => {
-    // âœ… read currency preference once
+    // ✅ read currency preference once
     try {
       const c = localStorage.getItem("foodapp_currency");
       setCurrency(normalizeCurrency(c));
@@ -418,7 +418,7 @@ export default function MenuPage() {
     if (bestOnly) base = base.filter((x) => x.is_best_seller === true);
     if (inStockOnly) base = base.filter((x) => x.in_stock !== false);
 
-    // âœ… Keep logic same: still compares numeric price
+    // ✅ Keep logic same: still compares numeric price
     if (under199Only) base = base.filter((x) => Number(x.price || 0) > 0 && Number(x.price || 0) <= 199);
 
     const list = [...base];
@@ -429,7 +429,7 @@ export default function MenuPage() {
     return list;
   }, [items, q, vegMode, bestOnly, inStockOnly, under199Only, sortKey]);
 
-  // âœ… Group items by category for mobile horizontal rows (keeps existing filters/sort/cart logic intact)
+  // ✅ Group items by category for mobile horizontal rows (keeps existing filters/sort/cart logic intact)
   const groupedByCategory = useMemo(() => {
     const toTitle = (v) => {
       const s = String(v || "").trim();
@@ -439,18 +439,11 @@ export default function MenuPage() {
         .replace(/_/g, " ")
         .replace(/\s+/g, " ")
         .trim()
-        .replace(/\w/g, (c) => c.toUpperCase());
+        .replace(/\b\w/g, (c) => c.toUpperCase());
     };
 
     const getCat = (it) => {
-      return (
-        it?.category ||
-        it?.item_category ||
-        it?.menu_category ||
-        it?.cuisine ||
-        it?.cuisine_type ||
-        "Other"
-      );
+      return it?.category || it?.item_category || it?.menu_category || it?.cuisine || it?.cuisine_type || "Other";
     };
 
     const map = new Map();
@@ -463,7 +456,7 @@ export default function MenuPage() {
     return Array.from(map.entries());
   }, [filtered]);
 
-  // âœ… Shared card renderer so desktop + mobile use the exact same UI/logic (no behavior changes)
+  // ✅ Shared card renderer so desktop + mobile use the exact same UI/logic (no behavior changes)
   const renderItemCard = (it) => {
     const isVeg = it.is_veg === true;
     const isNonVeg = it.is_veg === false;
@@ -471,36 +464,48 @@ export default function MenuPage() {
     const qty = getQty(it.id);
 
     return (
-      <div style={cardGlass}>
-        <div style={imgWrapClickable} onClick={() => openDishModal(it)} title="Click to view details">
+      <div style={isMobile ? mobileCardGlass : cardGlass}>
+        <div
+          style={isMobile ? mobileImgWrapClickable : imgWrapClickable}
+          onClick={() => openDishModal(it)}
+          title="Click to view details"
+        >
           {it.image_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={it.image_url} alt={it.name || "item"} style={img} />
           ) : (
             <div style={imgPlaceholder}>No image</div>
           )}
-          <div style={detailsHint}>Tap for details</div>
+          {!isMobile ? <div style={detailsHint}>Tap for details</div> : null}
         </div>
 
-        <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
-          <button onClick={() => openDishModal(it)} style={dishTitleBtn} title="Open details">
-            <div style={{ fontWeight: 950, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              {it.name || "Item"}
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+          <button onClick={() => openDishModal(it)} style={isMobile ? mobileDishTitleBtn : dishTitleBtn} title="Open details">
+            <div style={isMobile ? mobileTitleRow : desktopTitleRow}>
+              <span style={isMobile ? mobileDishNameText : desktopDishNameText}>{it.name || "Item"}</span>
               {isVeg ? <span style={badgeVeg}>VEG</span> : null}
               {isNonVeg ? <span style={badgeNonVeg}>NON-VEG</span> : null}
-              {out ? <span style={badgeOut}>OUT</span> : null}
+              {!isMobile && out ? <span style={badgeOut}>OUT</span> : null}
             </div>
           </button>
 
-          {/* âœ… Currency formatted */}
-          <div style={{ fontWeight: 950 }}>{money(it.price, currency)}</div>
+          {/* ✅ Currency formatted */}
+          <div style={isMobile ? mobilePriceText : desktopPriceText}>{money(it.price, currency)}</div>
         </div>
 
-        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {it.cuisine ? <span style={tag}>{normCuisine(it.cuisine)}</span> : null}
-          {it.is_best_seller ? <span style={tagStrong}>BEST</span> : null}
-          {it.in_stock === false ? <span style={tag}>out</span> : <span style={tag}>in_stock</span>}
-        </div>
+        {isMobile ? (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {it.cuisine ? <span style={tag}>{normCuisine(it.cuisine)}</span> : null}
+            {it.is_best_seller ? <span style={tagStrong}>BEST</span> : null}
+            {out ? <span style={badgeOut}>Out of stock</span> : null}
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {it.cuisine ? <span style={tag}>{normCuisine(it.cuisine)}</span> : null}
+            {it.is_best_seller ? <span style={tagStrong}>BEST</span> : null}
+            {it.in_stock === false ? <span style={tag}>out</span> : <span style={tag}>in_stock</span>}
+          </div>
+        )}
 
         <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {qty > 0 ? (
@@ -526,7 +531,6 @@ export default function MenuPage() {
       </div>
     );
   };
-
 
   const restaurantName = useMemo(() => {
     const r = restaurants.find((x) => x.id === restaurantId);
@@ -633,7 +637,9 @@ export default function MenuPage() {
           <div>
             <div style={{ fontWeight: 1000, color: "#0b1220" }}>Customer Reviews</div>
             <div style={{ marginTop: 4, color: "rgba(17,24,39,0.65)", fontWeight: 800, fontSize: 13 }}>
-              {reviewSummary.count ? `${reviewSummary.averageText}/5 from ${reviewSummary.count} customer review${reviewSummary.count === 1 ? "" : "s"}` : "No reviews yet. Delivered customers can add the first review from their orders page."}
+              {reviewSummary.count
+                ? `${reviewSummary.averageText}/5 from ${reviewSummary.count} customer review${reviewSummary.count === 1 ? "" : "s"}`
+                : "No reviews yet. Delivered customers can add the first review from their orders page."}
             </div>
           </div>
           {reviewSummary.count ? (
@@ -669,7 +675,6 @@ export default function MenuPage() {
         ) : null}
       </div>
 
-
       <div style={panelGlass}>
         <div style={controlsGrid}>
           <div>
@@ -689,7 +694,7 @@ export default function MenuPage() {
 
           <div>
             <div style={label}>Search</div>
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search menu..." style={input} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search menu..." style={input} />
           </div>
 
           <button
@@ -722,8 +727,8 @@ export default function MenuPage() {
           <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} style={selectMini}>
             <option value="recommended">Sort: Recommended</option>
             <option value="newest">Sort: Newest</option>
-                    <option value="price_low">Sort: Price Low to High</option>
-                    <option value="price_high">Sort: Price High to Low</option>
+            <option value="price_low">Sort: Price Low to High</option>
+            <option value="price_high">Sort: Price High to Low</option>
           </select>
 
           <button onClick={() => setBestOnly((v) => !v)} style={bestOnly ? chipActive : chip}>
@@ -733,9 +738,9 @@ export default function MenuPage() {
             In stock
           </button>
 
-          {/* âœ… Dynamic label */}
+          {/* ✅ Dynamic label */}
           <button onClick={() => setUnder199Only((v) => !v)} style={under199Only ? chipActive : chip}>
-                Under {currency === "USD" ? "$199" : "Rs 199"}
+            Under {currency === "USD" ? "$199" : "Rs 199"}
           </button>
 
           <button
@@ -756,7 +761,7 @@ export default function MenuPage() {
         </div>
       </div>
 
-              {loading ? <div style={{ marginTop: 12, color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>Loading...</div> : null}
+      {loading ? <div style={{ marginTop: 12, color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>Loading...</div> : null}
 
       {!loading ? (
         filtered.length === 0 ? (
@@ -766,29 +771,27 @@ export default function MenuPage() {
               Items appear here only if the restaurant is enabled (is_active = true).
             </div>
           </div>
-        ) : (
-          isMobile ? (
-            <div>
-              {groupedByCategory.map(([cat, list]) => (
-                <div key={cat}>
-                  <div style={catSectionTitle}>{cat}</div>
-                  <div style={hRow}>
-                    {list.map((it) => (
-                      <div key={it.id} style={hCard}>
-                        {renderItemCard(it)}
-                      </div>
-                    ))}
-                  </div>
+        ) : isMobile ? (
+          <div>
+            {groupedByCategory.map(([cat, list]) => (
+              <div key={cat}>
+                <div style={catSectionTitle}>{cat}</div>
+                <div style={hRow}>
+                  {list.map((it) => (
+                    <div key={it.id} style={hCard}>
+                      {renderItemCard(it)}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div style={grid}>
-              {filtered.map((it) => (
-                <div key={it.id}>{renderItemCard(it)}</div>
-              ))}
-            </div>
-          )
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={grid}>
+            {filtered.map((it) => (
+              <div key={it.id}>{renderItemCard(it)}</div>
+            ))}
+          </div>
         )
       ) : null}
 
@@ -836,7 +839,7 @@ export default function MenuPage() {
                   {openDish.in_stock === false ? <span style={badgeOut}>OUT</span> : <span style={tag}>In stock</span>}
                 </div>
 
-                {/* âœ… Currency formatted */}
+                {/* ✅ Currency formatted */}
                 <div style={{ marginTop: 10, fontWeight: 1000, fontSize: 18 }}>{money(openDish.price, currency)}</div>
 
                 <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>
@@ -975,8 +978,7 @@ const badgeLight = {
   border: "1px solid rgba(0,0,0,0.12)",
 };
 
-
-// âœ… Fix: qtyPill style (was referenced in renderItemCard but not defined)
+// ✅ Fix: qtyPill style (was referenced in renderItemCard but not defined)
 const qtyPill = {
   padding: "6px 10px",
   borderRadius: 999,
@@ -1053,11 +1055,10 @@ const grid = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(240px, 280px))",
   gap: 16,
-  justifyContent: "start", // ðŸ‘ˆ LEFT align
+  justifyContent: "start",
 };
 
-
-// âœ… Pro mobile: category-wise horizontal rows (one category = one row)
+// ✅ Pro mobile: category-wise horizontal rows (one category = one row)
 const catSectionTitle = {
   marginTop: 16,
   marginBottom: 10,
@@ -1079,8 +1080,8 @@ const hRow = {
 };
 
 const hCard = {
-  flex: "0 0 84%",
-  maxWidth: 360,
+  flex: "0 0 88%",
+  maxWidth: 380,
   scrollSnapAlign: "start",
 };
 
@@ -1091,6 +1092,12 @@ const cardGlass = {
   padding: 12,
   boxShadow: "0 12px 32px rgba(0,0,0,0.08)",
   backdropFilter: "blur(10px)",
+};
+
+const mobileCardGlass = {
+  ...cardGlass,
+  borderRadius: 18,
+  padding: 12,
 };
 
 const imgWrapClickable = {
@@ -1105,6 +1112,12 @@ const imgWrapClickable = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+};
+
+const mobileImgWrapClickable = {
+  ...imgWrapClickable,
+  height: 142,
+  borderRadius: 16,
 };
 
 const detailsHint = {
@@ -1181,6 +1194,47 @@ const badgeOut = {
   fontSize: 11,
 };
 
+const desktopTitleRow = {
+  fontWeight: 950,
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const mobileTitleRow = {
+  display: "flex",
+  gap: 8,
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+};
+
+const desktopDishNameText = {};
+
+const mobileDishNameText = {
+  fontSize: 17,
+  lineHeight: 1.12,
+  letterSpacing: -0.25,
+  fontWeight: 1000,
+  color: "#0b1220",
+  display: "-webkit-box",
+  WebkitLineClamp: 3,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+};
+
+const desktopPriceText = {
+  fontWeight: 950,
+};
+
+const mobilePriceText = {
+  fontWeight: 1000,
+  fontSize: 16,
+  lineHeight: 1.05,
+  whiteSpace: "nowrap",
+  color: "#0b1220",
+};
+
 const emptyBox = {
   marginTop: 14,
   background: "rgba(255,255,255,0.78)",
@@ -1236,7 +1290,6 @@ const btnPrimary = {
 };
 
 const btnDarkFull = { ...btnPrimary, width: "100%" };
-
 
 const btnOutlineBtn = {
   padding: "10px 12px",
@@ -1308,6 +1361,11 @@ const dishTitleBtn = {
   textAlign: "left",
   cursor: "pointer",
   flex: 1,
+};
+
+const mobileDishTitleBtn = {
+  ...dishTitleBtn,
+  minWidth: 0,
 };
 
 const qtyBox = {
@@ -1465,12 +1523,3 @@ const reviewComment = {
   fontWeight: 700,
   fontSize: 13,
 };
-
-
-
-
-
-
-
-
-

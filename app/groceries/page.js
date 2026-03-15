@@ -10,8 +10,6 @@ function clean(v) {
   return String(v || "").trim();
 }
 
-
-
 function normalizeCityKey(v) {
   return clean(v).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -317,7 +315,7 @@ export default function GroceriesPage() {
               const open = isOpenNowRow(r);
 
               return (
-                                <div
+                <div
                   key={rid}
                   style={{ ...cardGlass, cursor: "pointer" }}
                   onClick={() => router.push(`/groceries/menu?store_id=${rid}`)}
@@ -554,6 +552,9 @@ const emptyBox = {
 
 const grid = {
   marginTop: 14,
+  marginLeft: -12,
+  marginRight: -12,
+  width: "calc(100% + 24px)",
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
   gap: 12,
@@ -657,18 +658,3 @@ const tagStrong = {
   background: "rgba(17,24,39,0.92)",
   color: "#fff",
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

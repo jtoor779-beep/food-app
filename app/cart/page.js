@@ -1860,19 +1860,22 @@ export default function CartPage() {
   const wrap = {
     width: "100%",
     margin: "0 auto",
-    paddingBottom: isMobile ? 140 : 90,
+    paddingBottom: isMobile ? 150 : 90,
   };
 
   const hero = {
     ...heroGlass,
     padding: isMobile ? 14 : heroGlass.padding,
     alignItems: isMobile ? "stretch" : heroGlass.alignItems,
+    borderRadius: isMobile ? 18 : heroGlass.borderRadius,
+    gap: isMobile ? 10 : heroGlass.gap,
   };
 
   const heroTitleR = {
     ...heroTitle,
     fontSize: isMobile ? 26 : heroTitle.fontSize,
     lineHeight: isMobile ? "30px" : "40px",
+    letterSpacing: isMobile ? -0.5 : heroTitle.letterSpacing,
   };
 
   const gridMain = {
@@ -1883,13 +1886,44 @@ export default function CartPage() {
   };
 
   const itemCard = {
-    borderRadius: 16,
+    borderRadius: isMobile ? 18 : 16,
     border: "1px solid rgba(0,0,0,0.08)",
     background: "rgba(255,255,255,0.82)",
-    padding: 12,
+    padding: isMobile ? 12 : 12,
     display: "grid",
     gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
-    gap: 10,
+    gap: isMobile ? 12 : 10,
+    boxShadow: isMobile ? "0 10px 28px rgba(15,23,42,0.06)" : "none",
+  };
+
+  const itemHeadRow = {
+    display: "flex",
+    gap: 12,
+    alignItems: isMobile ? "flex-start" : "center",
+  };
+
+  const itemTitleText = {
+    fontWeight: 1000,
+    color: "#0b1220",
+    fontSize: isMobile ? 16 : 16,
+    lineHeight: isMobile ? 1.15 : 1.2,
+    letterSpacing: isMobile ? -0.25 : 0,
+  };
+
+  const itemMetaText = {
+    marginTop: 6,
+    color: "rgba(17,24,39,0.65)",
+    fontWeight: 850,
+    fontSize: isMobile ? 12 : 13,
+    lineHeight: isMobile ? 1.35 : 1.3,
+  };
+
+  const itemNoteText = {
+    marginTop: 6,
+    color: "rgba(17,24,39,0.62)",
+    fontWeight: 850,
+    fontSize: 12,
+    lineHeight: 1.35,
   };
 
   const itemActions = {
@@ -1898,6 +1932,20 @@ export default function CartPage() {
     gap: 8,
     flexWrap: "wrap",
     justifyContent: isMobile ? "space-between" : "flex-start",
+  };
+
+  const qtyGroup = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: isMobile ? "100%" : "auto",
+    justifyContent: isMobile ? "space-between" : "flex-start",
+  };
+
+  const mobileRemoveBtn = {
+    ...btnSmallGhost,
+    width: isMobile ? "100%" : "auto",
+    borderRadius: isMobile ? 12 : btnSmallGhost.borderRadius,
   };
 
   const offerRow = {
@@ -1912,6 +1960,7 @@ export default function CartPage() {
     paddingBottom: "calc(14px + env(safe-area-inset-bottom))",
     flexDirection: isMobile ? "column" : "row",
     alignItems: isMobile ? "stretch" : "center",
+    gap: isMobile ? 10 : stickyBar.gap,
   };
 
   function scrollToDelivery() {
@@ -2006,16 +2055,14 @@ export default function CartPage() {
                       return (
                         <div key={`${it.cart_key || it.id}-${ix}`} style={itemCard}>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                            <div style={itemHeadRow}>
                               <ItemThumb src={it?.image_url} name={it?.name} />
-                              <div style={{ minWidth: 0 }}>
-                                <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
-                                  {it.name || "Item"}
-                                </div>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={itemTitleText}>{it.name || "Item"}</div>
 
                                 {it?.variant_label ? <div style={variantPill}>Option: {it.variant_label}</div> : null}
 
-                                <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
+                                <div style={itemMetaText}>
                                   {money(unit, currency)} each • Line: <b>{money(line, currency)}</b>
                                 </div>
                               </div>
@@ -2023,17 +2070,19 @@ export default function CartPage() {
                           </div>
 
                           <div style={itemActions}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                                −
-                              </button>
-                              <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
-                              <button onClick={() => incQty(ix)} style={btnSmallGhost}>
-                                +
-                              </button>
+                            <div style={qtyGroup}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <button onClick={() => decQty(ix)} style={btnSmallGhost}>
+                                  −
+                                </button>
+                                <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
+                                <button onClick={() => incQty(ix)} style={btnSmallGhost}>
+                                  +
+                                </button>
+                              </div>
                             </div>
 
-                            <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
+                            <button onClick={() => removeItem(ix)} style={mobileRemoveBtn}>
                               Remove
                             </button>
                           </div>
@@ -2043,39 +2092,35 @@ export default function CartPage() {
                   : items.map((it, ix) => (
                       <div key={`${it.menu_item_id}-${ix}`} style={itemCard}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                          <div style={itemHeadRow}>
                             <ItemThumb src={it?.image_url} name={it?.name} />
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: isMobile ? 15 : 16 }}>
-                                {it.name || "Item"}
-                              </div>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={itemTitleText}>{it.name || "Item"}</div>
 
-                              <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 13 }}>
+                              <div style={itemMetaText}>
                                 {money(it.price_each, currency)} each • Line:{" "}
                                 <b>{money(Number(it.qty || 0) * Number(it.price_each || 0), currency)}</b>
                               </div>
 
-                              {it.note ? (
-                                <div style={{ marginTop: 6, color: "rgba(17,24,39,0.62)", fontWeight: 850, fontSize: 12 }}>
-                                  Note: {it.note}
-                                </div>
-                              ) : null}
+                              {it.note ? <div style={itemNoteText}>Note: {it.note}</div> : null}
                             </div>
                           </div>
                         </div>
 
                         <div style={itemActions}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                              −
-                            </button>
-                            <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
-                            <button onClick={() => incQty(ix)} style={btnSmallGhost}>
-                              +
-                            </button>
+                          <div style={qtyGroup}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <button onClick={() => decQty(ix)} style={btnSmallGhost}>
+                                −
+                              </button>
+                              <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
+                              <button onClick={() => incQty(ix)} style={btnSmallGhost}>
+                                +
+                              </button>
+                            </div>
                           </div>
 
-                          <button onClick={() => removeItem(ix)} style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}>
+                          <button onClick={() => removeItem(ix)} style={mobileRemoveBtn}>
                             Remove
                           </button>
                         </div>
@@ -2152,7 +2197,7 @@ export default function CartPage() {
                   <input value={address_line1} onChange={(e) => setAddress1(e.target.value)} style={input} />
                 </div>
 
-                                <div>
+                <div>
                   <div style={inputLabel}>City</div>
                   <input value={city} onChange={(e) => setCity(e.target.value)} style={input} />
                 </div>
@@ -2302,7 +2347,7 @@ export default function CartPage() {
 
         {activeItems.length > 0 ? (
           <div style={sticky}>
-            <div style={{ fontWeight: 1000 }}>
+            <div style={{ fontWeight: 1000, textAlign: isMobile ? "center" : "left" }}>
               {itemCount} item{itemCount === 1 ? "" : "s"} • Payable <b>{money(payable, currency)}</b>
             </div>
 

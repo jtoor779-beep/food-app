@@ -400,7 +400,6 @@ function GroceryMenuInner() {
     refreshCartCount();
   }
 
-
   function removeFromCart(item) {
     if (!item?.id) return;
 
@@ -481,7 +480,9 @@ function GroceryMenuInner() {
               lineHeight: 1,
               color: idx <= value ? "#F4B400" : "rgba(15,23,42,0.22)",
             }}
-          > {"\u2605"} </span>
+          >
+            {"\u2605"}
+          </span>
         ))}
       </div>
     );
@@ -697,22 +698,25 @@ function GroceryMenuInner() {
           .grocery_items_grid {
             grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
             gap: 10px !important;
+            margin-left: -16px !important;
+            margin-right: -16px !important;
+            width: calc(100% + 20px) !important;
           }
           .grocery_item_card {
-            border-radius: 14px !important;
+            border-radius: 18px !important;
           }
           .grocery_item_media {
-            height: 132px !important;
+            height: 138px !important;
           }
           .grocery_top_badges {
-            top: 6px !important;
-            left: 6px !important;
-            right: 6px !important;
+            top: 8px !important;
+            left: 8px !important;
+            right: 8px !important;
             gap: 6px !important;
           }
           .grocery_badge_price,
           .grocery_badge_category {
-            padding: 4px 8px !important;
+            padding: 5px 9px !important;
             font-size: 10px !important;
             line-height: 1.15 !important;
           }
@@ -723,22 +727,36 @@ function GroceryMenuInner() {
             text-overflow: ellipsis !important;
           }
           .grocery_tap_hint {
-            bottom: 6px !important;
-            left: 6px !important;
-            padding: 4px 8px !important;
-            font-size: 10px !important;
-            opacity: 0.95 !important;
+            display: none !important;
           }
           .grocery_item_body {
-            padding: 10px !important;
+            padding: 12px !important;
           }
           .grocery_item_title {
-            font-size: 13px !important;
-            line-height: 1.2 !important;
+            font-size: 16px !important;
+            line-height: 1.12 !important;
+            font-weight: 1000 !important;
+            letter-spacing: -0.3px !important;
+            display: -webkit-box !important;
+            -webkit-line-clamp: 3 !important;
+            -webkit-box-orient: vertical !important;
+            overflow: hidden !important;
+            min-height: 54px !important;
           }
           .grocery_item_desc {
             font-size: 11px !important;
-            line-height: 1.3 !important;
+            line-height: 1.35 !important;
+          }
+          .grocery_stock_pill_in {
+            display: none !important;
+          }
+          .grocery_stock_pill_out {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 5px 10px !important;
+            font-size: 11px !important;
+            font-weight: 950 !important;
           }
           .grocery_item_actions {
             margin-top: 10px !important;
@@ -836,8 +854,12 @@ function GroceryMenuInner() {
         <div style={heroWrap} className="grocery_store_hero">
           <div style={heroLeft} className="grocery_store_hero_left">
             <div style={pill}>Groceries</div>
-            <h1 style={heroTitle} className="grocery_store_title">{store?.name || "Grocery Store"}</h1>
-            <div style={subText} className="grocery_store_sub">In {store?.city || "City not set"}</div>
+            <h1 style={heroTitle} className="grocery_store_title">
+              {store?.name || "Grocery Store"}
+            </h1>
+            <div style={subText} className="grocery_store_sub">
+              In {store?.city || "City not set"}
+            </div>
 
             <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }} className="grocery_store_actions">
               <button onClick={() => router.push("/groceries")} style={btnLight}>
@@ -850,16 +872,25 @@ function GroceryMenuInner() {
                 Cart {cartCount > 0 ? `(${cartCount})` : ""}
               </Link>
             </div>
-
           </div>
           <div style={heroRight} className="grocery_store_hero_right">
             <div style={infoCard} className="grocery_store_info">
-              <div style={{ fontWeight: 1000, color: "#0b1220" }} className="grocery_store_info_title">Snapshot</div>
+              <div style={{ fontWeight: 1000, color: "#0b1220" }} className="grocery_store_info_title">
+                Snapshot
+              </div>
               <div style={infoRow} className="grocery_store_info_row">
-                <span style={miniPill} className="grocery_store_chip">Items {stats.total}</span>
-                <span style={miniPill} className="grocery_store_chip">Stock {stats.inS}</span>
-                <span style={miniPill} className="grocery_store_chip">Best {stats.best}</span>
-                <span style={storeOpen ? openPill : closedPill} className="grocery_store_chip">{storeOpen ? "Open" : "Closed"}</span>
+                <span style={miniPill} className="grocery_store_chip">
+                  Items {stats.total}
+                </span>
+                <span style={miniPill} className="grocery_store_chip">
+                  Stock {stats.inS}
+                </span>
+                <span style={miniPill} className="grocery_store_chip">
+                  Best {stats.best}
+                </span>
+                <span style={storeOpen ? openPill : closedPill} className="grocery_store_chip">
+                  {storeOpen ? "Open" : "Closed"}
+                </span>
               </div>
 
               {!storeOpen ? <div style={alertMini}>Store is not accepting orders right now (or pending/disabled).</div> : null}
@@ -918,8 +949,13 @@ function GroceryMenuInner() {
           <section style={{ minWidth: 0 }}>
             {/* FILTER BAR */}
             <div style={panelGlass} className="grocery_search_panel">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="grocery_search_head">
-                <div style={{ fontWeight: 1000, color: "#0b1220" }} className="grocery_search_title">Search</div>
+              <div
+                style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}
+                className="grocery_search_head"
+              >
+                <div style={{ fontWeight: 1000, color: "#0b1220" }} className="grocery_search_title">
+                  Search
+                </div>
 
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} className="grocery_search_tools">
                   <button className="grocery_catbtn" onClick={() => setCatDrawerOpen(true)} style={btnCatMobile} title="Open categories">
@@ -942,7 +978,14 @@ function GroceryMenuInner() {
               </div>
 
               <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.6fr", gap: 10 }} className="grocery_search_inputs">
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search items..." style={input} autoComplete="off" className="grocery_search_input_main" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search items..."
+                  style={input}
+                  autoComplete="off"
+                  className="grocery_search_input_main"
+                />
 
                 <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={input} className="grocery_search_select">
                   <option value="recommended">Sort: Recommended</option>
@@ -991,66 +1034,84 @@ function GroceryMenuInner() {
                   const itemQty = cartQtyMap.get(String(it?.id || "")) || 0;
 
                   return (
-                  <div key={it.id} style={cardGlass} className="grocery_item_card">
-                    <div style={imgWrap} className="grocery_item_media" onClick={() => openDetails(it)} title="Tap for details">
-                      {it.image_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={it.image_url} alt={it.name} style={img} />
-                      ) : (
-                        <div style={imgPlaceholder}>No Image</div>
-                      )}
-
-                      <div style={topBadges} className="grocery_top_badges">
-                        <span style={badgeDark} className="grocery_badge_price">{money(getItemPrice(it, currency), currency)}</span>
-                        <span style={badgeLight} className="grocery_badge_category">{displayCategoryLabel(it)}</span>
-                      </div>
-
-                      <div style={tapHint} className="grocery_tap_hint">Tap for details</div>
-                    </div>
-
-                    <div style={{ padding: 12 }} className="grocery_item_body">
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                        <div style={{ fontSize: 15, fontWeight: 1000, color: "#0b1220" }} className="grocery_item_title">{it.name || "Item"}</div>
-                        <span style={it.in_stock ? openPill : closedPill}>{it.in_stock ? "In stock" : "Out"}</span>
-                      </div>
-
-                      {it.description ? (
-                        <div style={{ marginTop: 6, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.68)" }} className="grocery_item_desc">
-                          {clampText(it.description, 80)}
-                        </div>
-                      ) : null}
-
-                      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {displaySubcategoryLabel(it) ? <span style={tag}>{displaySubcategoryLabel(it)}</span> : null}
-                        {it.is_best_seller ? <span style={tagStrong}>Best</span> : null}
-                        {it.is_recommended ? <span style={tagStrong}>Rec</span> : null}
-                        {isTaxableGrocery(it) ? <span style={tagStrong}>TAXABLE</span> : null}
-                      </div>
-
-                      <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="grocery_item_actions">
-                        {itemQty > 0 ? (
-                          <div style={qtyBox}>
-                            <button onClick={() => removeFromCart(it)} style={qtyBtn}>-</button>
-                            <div style={{ fontWeight: 1000 }}>{itemQty}</div>
-                            <button onClick={() => addToCart(it)} style={qtyBtn} disabled={!storeOpen || !it?.in_stock}>+</button>
-                          </div>
+                    <div key={it.id} style={cardGlass} className="grocery_item_card">
+                      <div style={imgWrap} className="grocery_item_media" onClick={() => openDetails(it)} title="Tap for details">
+                        {it.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={it.image_url} alt={it.name} style={img} />
                         ) : (
-                          <button
-                            onClick={() => addToCart(it)}
-                            style={btnAdd} className="grocery_btn_add"
-                            disabled={!storeOpen || !it?.in_stock}
-                            title={!storeOpen ? "Store closed" : !it?.in_stock ? "Out of stock" : "Add to cart"}
-                          >
-                            + Add to Cart
-                          </button>
+                          <div style={imgPlaceholder}>No Image</div>
                         )}
 
-                        <button onClick={() => openDetails(it)} style={btnGhost} className="grocery_btn_details">
-                          Details
-                        </button>
+                        <div style={topBadges} className="grocery_top_badges">
+                          <span style={badgeDark} className="grocery_badge_price">
+                            {money(getItemPrice(it, currency), currency)}
+                          </span>
+                          <span style={badgeLight} className="grocery_badge_category">
+                            {displayCategoryLabel(it)}
+                          </span>
+                        </div>
+
+                        <div style={tapHint} className="grocery_tap_hint">
+                          Tap for details
+                        </div>
+                      </div>
+
+                      <div style={{ padding: 12 }} className="grocery_item_body">
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                          <div style={{ fontSize: 15, fontWeight: 1000, color: "#0b1220", flex: 1, minWidth: 0 }} className="grocery_item_title">
+                            {it.name || "Item"}
+                          </div>
+                          <span
+                            style={it.in_stock ? openPill : closedPill}
+                            className={it.in_stock ? "grocery_stock_pill_in" : "grocery_stock_pill_out"}
+                          >
+                            {it.in_stock ? "In stock" : "Out of stock"}
+                          </span>
+                        </div>
+
+                        {it.description ? (
+                          <div style={{ marginTop: 6, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.68)" }} className="grocery_item_desc">
+                            {clampText(it.description, 80)}
+                          </div>
+                        ) : null}
+
+                        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {displaySubcategoryLabel(it) ? <span style={tag}>{displaySubcategoryLabel(it)}</span> : null}
+                          {it.is_best_seller ? <span style={tagStrong}>Best</span> : null}
+                          {it.is_recommended ? <span style={tagStrong}>Rec</span> : null}
+                          {isTaxableGrocery(it) ? <span style={tagStrong}>TAXABLE</span> : null}
+                        </div>
+
+                        <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="grocery_item_actions">
+                          {itemQty > 0 ? (
+                            <div style={qtyBox}>
+                              <button onClick={() => removeFromCart(it)} style={qtyBtn}>
+                                -
+                              </button>
+                              <div style={{ fontWeight: 1000 }}>{itemQty}</div>
+                              <button onClick={() => addToCart(it)} style={qtyBtn} disabled={!storeOpen || !it?.in_stock}>
+                                +
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => addToCart(it)}
+                              style={btnAdd}
+                              className="grocery_btn_add"
+                              disabled={!storeOpen || !it?.in_stock}
+                              title={!storeOpen ? "Store closed" : !it?.in_stock ? "Out of stock" : "Add to cart"}
+                            >
+                              + Add to Cart
+                            </button>
+                          )}
+
+                          <button onClick={() => openDetails(it)} style={btnGhost} className="grocery_btn_details">
+                            Details
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
                   );
                 })}
               </div>
@@ -1063,7 +1124,9 @@ function GroceryMenuInner() {
           <div style={modalBackdrop} className="grocery_modal_backdrop" onClick={() => setDetailsOpen(false)}>
             <div style={modalCard} className="grocery_modal_card" onClick={(e) => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }} className="grocery_modal_head">
-                <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }} className="grocery_modal_title">{activeItem?.name || "Item details"}</div>
+                <div style={{ fontWeight: 1000, fontSize: 16, color: "#0b1220" }} className="grocery_modal_title">
+                  {activeItem?.name || "Item details"}
+                </div>
                 <button onClick={() => setDetailsOpen(false)} style={btnClose}>
                   X
                 </button>
@@ -1095,26 +1158,32 @@ function GroceryMenuInner() {
                   ) : null}
 
                   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <span style={activeItem?.in_stock ? openPill : closedPill}>
-                      {activeItem?.in_stock ? "In stock" : "Out of stock"}
-                    </span>
+                    <span style={activeItem?.in_stock ? openPill : closedPill}>{activeItem?.in_stock ? "In stock" : "Out of stock"}</span>
                     {activeItem?.is_best_seller ? <span style={tagStrong}>Best</span> : null}
                     {activeItem?.is_recommended ? <span style={tagStrong}>Rec</span> : null}
                     {activeItem ? (isTaxableGrocery(activeItem) ? <span style={tagStrong}>TAXABLE</span> : null) : null}
                   </div>
 
                   {activeItem?.description ? (
-                    <div style={{ marginTop: 12, fontWeight: 850, color: "rgba(17,24,39,0.75)" }} className="grocery_modal_desc">{activeItem.description}</div>
+                    <div style={{ marginTop: 12, fontWeight: 850, color: "rgba(17,24,39,0.75)" }} className="grocery_modal_desc">
+                      {activeItem.description}
+                    </div>
                   ) : (
-                    <div style={{ marginTop: 12, fontWeight: 850, color: "rgba(17,24,39,0.55)" }} className="grocery_modal_desc">No description added.</div>
+                    <div style={{ marginTop: 12, fontWeight: 850, color: "rgba(17,24,39,0.55)" }} className="grocery_modal_desc">
+                      No description added.
+                    </div>
                   )}
 
                   <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }} className="grocery_modal_actions">
                     {(cartQtyMap.get(String(activeItem?.id || "")) || 0) > 0 ? (
                       <div style={qtyBox}>
-                        <button onClick={() => removeFromCart(activeItem)} style={qtyBtn}>-</button>
+                        <button onClick={() => removeFromCart(activeItem)} style={qtyBtn}>
+                          -
+                        </button>
                         <div style={{ fontWeight: 1000 }}>{cartQtyMap.get(String(activeItem?.id || "")) || 0}</div>
-                        <button onClick={() => addToCart(activeItem)} style={qtyBtn} disabled={!storeOpen || !activeItem?.in_stock}>+</button>
+                        <button onClick={() => addToCart(activeItem)} style={qtyBtn} disabled={!storeOpen || !activeItem?.in_stock}>
+                          +
+                        </button>
                       </div>
                     ) : (
                       <button onClick={() => addToCart(activeItem)} style={btnAdd} className="grocery_modal_add" disabled={!storeOpen || !activeItem?.in_stock}>
@@ -1125,9 +1194,9 @@ function GroceryMenuInner() {
                       Go to Cart {cartCount > 0 ? `(${cartCount})` : ""}
                     </Link>
                   </div>
+                </div>
               </div>
             </div>
-          </div>
           </div>
         ) : null}
       </div>
@@ -1727,12 +1796,6 @@ const drawerSheet = {
   boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
 };
 
-
-
-
-
-
-
 const reviewCard = {
   padding: "10px 12px",
   borderRadius: 12,
@@ -1798,21 +1861,3 @@ const reviewComment = {
   fontWeight: 700,
   fontSize: 13,
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

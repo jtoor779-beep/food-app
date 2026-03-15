@@ -106,6 +106,22 @@ const btnLight = {
   gap: 8,
 };
 
+const btnDanger = {
+  border: "1px solid #dc2626",
+  background: "#dc2626",
+  color: "#fff",
+  fontWeight: 950,
+  padding: "10px 14px",
+  borderRadius: 999,
+  cursor: "pointer",
+  textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  boxShadow: "0 12px 30px rgba(220,38,38,0.18)",
+};
+
 const alertErr = {
   marginTop: 12,
   padding: 12,
@@ -207,6 +223,7 @@ export default function GroceryOwnerSettingsPage() {
 
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
@@ -391,6 +408,49 @@ export default function GroceryOwnerSettingsPage() {
       setErr(e?.message || String(e));
     } finally {
       setSavingLoc(false);
+    }
+  }
+
+  async function deleteStore() {
+    setErr("");
+    setInfo("");
+
+    if (!storeId) {
+      setErr("No store found to delete.");
+      return;
+    }
+
+    const ok = window.confirm(
+      "Are you sure you want to delete this grocery store? This action cannot be undone."
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("grocery_stores")
+        .delete()
+        .eq("id", storeId)
+        .eq("owner_user_id", userId);
+
+      if (error) throw error;
+
+      setStore(null);
+      setName("");
+      setCity("");
+      setImageUrl("");
+      setPhone("");
+      setAddress("");
+      setLat("");
+      setLng("");
+      resetImagePicker();
+
+      setInfo("✅ Grocery store deleted successfully.");
+      router.push("/groceries/owner/dashboard");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -900,7 +960,7 @@ export default function GroceryOwnerSettingsPage() {
               </div>
 
               <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button onClick={saveStore} style={btnDark} disabled={loading}>
+                <button onClick={saveStore} style={btnDark} disabled={loading || deleting}>
                   {loading ? "Saving…" : "Save Changes"}
                 </button>
 
@@ -910,6 +970,10 @@ export default function GroceryOwnerSettingsPage() {
 
                 <button onClick={() => router.push("/groceries/owner/items")} style={btnLight}>
                   Manage Menu
+                </button>
+
+                <button onClick={deleteStore} style={btnDanger} disabled={deleting || loading}>
+                  {deleting ? "Deleting…" : "Delete Store"}
                 </button>
               </div>
 

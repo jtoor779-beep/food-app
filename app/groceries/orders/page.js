@@ -36,10 +36,15 @@ function normalizeRole(r) {
     .replace(/\s+/g, "_");
 }
 
-function formatMoney(v) {
+function formatMoney(v, currency = "USD") {
   const n = Number(v || 0);
-  // keeping your existing style (Rs )
-  return `Rs ${n.toFixed(0)}`;
+  const c = String(currency || "USD").toUpperCase();
+
+  if (c === "INR") {
+    return `₹${n.toFixed(0)}`;
+  }
+
+  return `$${n.toFixed(0)}`;
 }
 
 function formatTime(ts) {
@@ -386,6 +391,7 @@ export default function GroceryOrdersPage() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState("");
   const [orders, setOrders] = useState([]);
+  const [defaultCurrency, setDefaultCurrency] = useState("USD");
 
   const [lastRealtimeHit, setLastRealtimeHit] = useState("");
   const channelRef = useRef(null);
@@ -420,6 +426,21 @@ export default function GroceryOrdersPage() {
   function renderStars(rating) {
     const value = Math.max(1, Math.min(5, Math.round(Number(rating || 0))));
     return "\u2605".repeat(value) + "\u2606".repeat(5 - value);
+  }
+
+  async function loadDefaultCurrencyFromSettings() {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("key, default_currency")
+        .eq("key", "global")
+        .maybeSingle();
+
+      if (error) return;
+
+      const c = String(data?.default_currency || "USD").toUpperCase();
+      setDefaultCurrency(c === "INR" ? "INR" : "USD");
+    } catch {}
   }
 
   async function loadOwnReviews(userId, ordersList) {
@@ -740,6 +761,7 @@ export default function GroceryOrdersPage() {
         setLastRealtimeHit(new Date().toLocaleTimeString());
         const list = await loadGroceryOrders(customerId);
         await loadOwnReviews(customerId, list);
+        await loadDefaultCurrencyFromSettings();
       })
       .subscribe();
   }
@@ -779,6 +801,7 @@ export default function GroceryOrdersPage() {
         return;
       }
 
+      await loadDefaultCurrencyFromSettings();
       const loadedOrders = await loadGroceryOrders(u.id);
       await loadOwnReviews(u.id, loadedOrders);
       await setupRealtime(u.id);
@@ -829,7 +852,7 @@ export default function GroceryOrdersPage() {
             </div>
 
             <div style={statCard}>
-              <div style={statNum}>{formatMoney(totalSpend)}</div>
+              <div style={statNum}>{formatMoney(totalSpend, defaultCurrency)}</div>
               <div style={statLabel}>Total Spend</div>
             </div>
 
@@ -910,7 +933,7 @@ export default function GroceryOrdersPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{formatMoney(total)}</div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{formatMoney(total, defaultCurrency)}</div>
                       {isReviewableStatus(o.status) && o.store_id ? (
                         <button
                           onClick={(e) => {
@@ -1007,7 +1030,7 @@ export default function GroceryOrdersPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {formatMoney(total)}</div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {formatMoney(total, defaultCurrency)}</div>
                       {isReviewableStatus(o.status) && o.store_id ? (
                         <button onClick={() => openReviewModal(o)} style={reviewByOrderId[o.id] ? btnReviewGhost : btnReview}>
                           {reviewByOrderId[o.id] ? "Edit Review" : "Write Review"}
@@ -1177,7 +1200,7 @@ export default function GroceryOrdersPage() {
                               <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
                                 Qty {Number(it.quantity || 0)}
                                 <span style={{ marginLeft: 10 }}>
-                                  {formatMoney(Number(it.line_total || 0) || Number(it.quantity || 0) * Number(it.unit_price || 0))}
+                                  {formatMoney(Number(it.line_total || 0) || Number(it.quantity || 0) * Number(it.unit_price || 0), defaultCurrency)}
                                 </span>
                               </div>
                             </div>
@@ -1424,8 +1447,3 @@ const stepLineDone = {
 const stepLineTodo = {
   background: "rgba(0,0,0,0.10)",
 };
-
-
-
-
-

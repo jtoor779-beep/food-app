@@ -152,56 +152,105 @@ export default function NavBar() {
   const profileBtnRef = useRef<HTMLButtonElement | null>(null);
   const [profilePos, setProfilePos] = useState<{ top: number; right: number } | null>(null);
   const profileWrapRef = useRef<HTMLDivElement | null>(null);
+  const authLoadPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshTimerRef = useRef<number | null>(null);
 
   //  FIX: you already have app/help/page.tsx so route is /help (NOT /support)
   const SUPPORT_HREF = "/help";
   const SUPPORT_MAILTO = "mailto:support@yourdomain.com?subject=Help%20%7C%20HomyFod";
 
-  async function loadSessionAndRole() {
-    setErr("");
-    setLoading(true);
+  function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
 
-    try {
-      const { data } = await supabase.auth.getSession();
-      const session = data?.session;
+  function isAbortLikeError(e: unknown) {
+    const msg = String((e as any)?.message || e || "").toLowerCase();
+    return (
+      msg.includes("signal is aborted without reason") ||
+      msg.includes("aborterror") ||
+      msg.includes("aborted") ||
+      (msg.includes("lock") && msg.includes("timeout"))
+    );
+  }
 
-      if (!session?.user) {
-        setUserEmail("");
-        setRole("");
-        setProfileName("");
-        setAvatarUrl("");
-        setLoading(false);
-        return;
+  async function getSessionWithRetry(retries = 1) {
+    let lastError: any = null;
+    for (let i = 0; i <= retries; i += 1) {
+      const { data, error } = await supabase.auth.getSession();
+      if (!error) return { data, error: null };
+      lastError = error;
+      if (i < retries && isAbortLikeError(error)) {
+        await sleep(160);
+        continue;
       }
+      break;
+    }
+    return { data: null, error: lastError };
+  }
 
-      setUserEmail(String(session.user.email || ""));
+  function queueSessionRefresh(delayMs = 120) {
+    if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void loadSessionAndRole();
+    }, delayMs);
+  }
 
-      //  Try to infer role + header profile safely from profiles table
-      // (keeps old logic intact; do NOT break if schema changes)
-      let foundRole = "";
-      let foundName = "";
-      let foundAvatar = "";
+  async function loadSessionAndRole() {
+    if (authLoadPromiseRef.current) return authLoadPromiseRef.current;
+
+    const run = (async () => {
+      setErr("");
+      setLoading(true);
 
       try {
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select("role, full_name, avatar_url")
-          .eq("user_id", session.user.id)
-          .maybeSingle();
+        const { data, error } = await getSessionWithRetry(1);
+        if (error) throw error;
 
-        foundRole = normalizeRole((prof as any)?.role);
-        foundName = String((prof as any)?.full_name || "").trim();
-        foundAvatar = String((prof as any)?.avatar_url || "").trim();
-      } catch {}
+        const session = data?.session;
+        if (!session?.user) {
+          setUserEmail("");
+          setRole("");
+          setProfileName("");
+          setAvatarUrl("");
+          return;
+        }
 
-      setRole(foundRole || "");
-      setProfileName(foundName || "");
-      setAvatarUrl(foundAvatar || "");
-    } catch (e: any) {
-      setErr(e?.message || "Failed to load session");
-    } finally {
-      setLoading(false);
-    }
+        setUserEmail(String(session.user.email || ""));
+
+        //  Try to infer role + header profile safely from profiles table
+        // (keeps old logic intact; do NOT break if schema changes)
+        let foundRole = "";
+        let foundName = "";
+        let foundAvatar = "";
+
+        try {
+          const { data: prof } = await supabase
+            .from("profiles")
+            .select("role, full_name, avatar_url")
+            .eq("user_id", session.user.id)
+            .maybeSingle();
+
+          foundRole = normalizeRole((prof as any)?.role);
+          foundName = String((prof as any)?.full_name || "").trim();
+          foundAvatar = String((prof as any)?.avatar_url || "").trim();
+        } catch {}
+
+        setRole(foundRole || "");
+        setProfileName(foundName || "");
+        setAvatarUrl(foundAvatar || "");
+      } catch (e: any) {
+        if (!isAbortLikeError(e)) {
+          setErr(e?.message || "Failed to load session");
+        }
+      } finally {
+        setLoading(false);
+        authLoadPromiseRef.current = null;
+      }
+    })();
+
+    authLoadPromiseRef.current = run;
+    return run;
   }
 
   async function handleLogout() {
@@ -278,14 +327,18 @@ export default function NavBar() {
 
   useEffect(() => {
     setMounted(true);
-    loadSessionAndRole();
+    void loadSessionAndRole();
 
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
-      loadSessionAndRole();
+      queueSessionRefresh(80);
     });
 
     return () => {
       sub?.subscription?.unsubscribe?.();
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -309,17 +362,25 @@ export default function NavBar() {
     if (!mounted) return;
 
     const refreshHeaderProfile = () => {
-      loadSessionAndRole();
+      queueSessionRefresh(120);
+    };
+    const refreshOnVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      queueSessionRefresh(120);
     };
 
     window.addEventListener("focus", refreshHeaderProfile);
-    document.addEventListener("visibilitychange", refreshHeaderProfile);
+    document.addEventListener("visibilitychange", refreshOnVisible);
     window.addEventListener("storage", refreshHeaderProfile);
 
     return () => {
       window.removeEventListener("focus", refreshHeaderProfile);
-      document.removeEventListener("visibilitychange", refreshHeaderProfile);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
       window.removeEventListener("storage", refreshHeaderProfile);
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, pathname]);
@@ -348,7 +409,7 @@ export default function NavBar() {
 
     async function loadNotifs() {
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await getSessionWithRetry(1);
         const user = data?.session?.user;
 
         // If user is logged in: load from DB
@@ -420,7 +481,7 @@ const unreadCount = useMemo(() => notifs.filter((n) => !n.read).length, [notifs]
     //  Supabase (logged in)
     if (!useLocalNotifsRef.current) {
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await getSessionWithRetry(1);
         const user = data?.session?.user;
         if (user?.id) {
           await supabase
@@ -517,7 +578,7 @@ const unreadCount = useMemo(() => notifs.filter((n) => !n.read).length, [notifs]
       }
 
       // Save subscription in DB for this user
-      const { data } = await supabase.auth.getSession();
+      const { data } = await getSessionWithRetry(1);
       const user = data?.session?.user;
       if (!user?.id) {
         // Logged-out fallback (keep safe)

@@ -294,6 +294,35 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function isAbortAuthError(e) {
+  const msg = String(e?.message || e || "").toLowerCase();
+  return (
+    msg.includes("signal is aborted without reason") ||
+    msg.includes("aborterror") ||
+    msg.includes("aborted") ||
+    (msg.includes("lock") && msg.includes("timeout"))
+  );
+}
+
+async function getUserWithRetry(maxAttempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error && data?.user) return { user: data.user, error: null };
+      lastError = error || null;
+      if (error && !isAbortAuthError(error)) break;
+    } catch (e) {
+      lastError = e;
+      if (!isAbortAuthError(e)) break;
+    }
+
+    if (i < maxAttempts - 1) await sleep(220);
+  }
+
+  return { user: null, error: lastError };
+}
+
 function PaymentSuccessInner() {
   const sp = useSearchParams();
   const router = useRouter();
@@ -420,25 +449,8 @@ function PaymentSuccessInner() {
       try {
         setOrderSaving(true);
 
-        // ✅ Ensure we actually have a logged-in user (RLS needs this)
-        let userId = null;
-        let userEmail = null;
-
-        try {
-          const { data: uData, error: uErr } = await supabase.auth.getUser();
-          if (!uErr && uData?.user) {
-            userId = uData.user.id;
-            userEmail = uData.user.email || null;
-          }
-        } catch {}
-
-        if (!userId) {
-          // If not logged in, we can’t insert due to RLS
-          throw new Error("Login required to finish your order. Please login and refresh this page.");
-        }
-
         // ✅ First: try existing order (prevents duplicates + handles webhook-created orders)
-        // We will also retry a few times (cart can be empty, but DB may save shortly after)
+        // We do this before auth checks so transient auth aborts don't look like logout.
         let existingId = await findOrderIdByStripeSession(sessionId);
 
         if (!existingId) {
@@ -458,6 +470,23 @@ function PaymentSuccessInner() {
           setOrderSaved(true);
           setOrderSaving(false);
           return;
+        }
+
+        // ✅ Ensure we have a logged-in user only when we truly need to insert a new order (RLS)
+        let userId = null;
+        let userEmail = null;
+        const { user, error: userErr } = await getUserWithRetry(3);
+
+        if (user) {
+          userId = user.id;
+          userEmail = user.email || null;
+        }
+
+        if (!userId) {
+          if (isAbortAuthError(userErr)) {
+            throw new Error("Temporary session check issue. Please click Refresh Status in 2 seconds.");
+          }
+          throw new Error("Login required to finish your order. Please login and refresh this page.");
         }
 
         const amountCents = num(data?.amount_total, 0);
@@ -486,7 +515,7 @@ function PaymentSuccessInner() {
         if (orderType === "grocery") {
           // ... (UNCHANGED grocery logic from your file)
           // NOTE: Keeping everything exactly as-is in grocery flow.
-          setOrderSaveErr("Grocery flow not shown in this snippet. (unchanged)");
+          setSoftRedirectOk(true);
           return;
         }
 

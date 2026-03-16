@@ -204,6 +204,36 @@ function getEmailFromRow(o) {
   );
 }
 
+function normalizeSubstitutionPreference(v) {
+  const s = clean(v).toLowerCase();
+  if (!s) return "";
+  if (s === "allow_substitutions") return "Allow substitutions";
+  if (s === "no_substitutions") return "No substitutions";
+  if (s === "contact_me_first") return "Contact me first";
+  return clean(v);
+}
+
+function getSubstitutionPreferenceFromRow(o) {
+  const direct = clean(
+    pickDeep(
+      o,
+      [
+        "substitution_preference",
+        "item_substitution_preference",
+        "replacement_preference",
+        "customer_substitution_preference",
+        "meta.substitution_preference",
+      ],
+      ""
+    )
+  );
+  if (direct) return normalizeSubstitutionPreference(direct);
+
+  const instructions = clean(pickDeep(o, ["instructions", "delivery_instructions", "notes", "note"], ""));
+  const m = instructions.match(/\[substitution:\s*([^\]]+)\]/i);
+  return m ? normalizeSubstitutionPreference(m[1]) : "";
+}
+
 /* =========================
    Safe table detection (NO CRASH)
    ========================= */
@@ -891,6 +921,7 @@ export default function GroceryOwnerOrdersPage() {
                 const name = clean(getNameFromRow(o) || o.__cust_name || "");
                 const email2 = clean(getEmailFromRow(o) || o.__cust_email || "");
                 const addr = buildAddressFromRow(o);
+                const substitutionPref = getSubstitutionPreferenceFromRow(o);
 
                 const items = safeArr(o.order_items || o.items);
                 const itemsCount = countItems(o);
@@ -1006,6 +1037,13 @@ export default function GroceryOwnerOrdersPage() {
                           <div style={{ marginTop: 12 }}>
                             <div style={miniTitle}>Instructions</div>
                             <div style={noteBox}>{o.instructions}</div>
+                          </div>
+                        ) : null}
+
+                        {substitutionPref ? (
+                          <div style={{ marginTop: 12 }}>
+                            <div style={miniTitle}>Substitution Preference</div>
+                            <div style={noteBox}>{substitutionPref}</div>
                           </div>
                         ) : null}
 

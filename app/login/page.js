@@ -11,6 +11,37 @@ function normalizeRole(r) {
     .replace(/\s+/g, "_");
 }
 
+async function ensureProfileForUser(user) {
+  if (!user?.id) return null;
+
+  const { data: prof, error: profErr } = await supabase
+    .from("profiles")
+    .select("user_id, role")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (profErr) throw profErr;
+  if (prof?.user_id) return prof;
+
+  const fallbackName = String(user?.user_metadata?.full_name || user?.email || "")
+    .split("@")[0]
+    .trim();
+  const fallbackRole = normalizeRole(user?.user_metadata?.role || "customer") || "customer";
+
+  const payload = {
+    user_id: user.id,
+    role: fallbackRole,
+    full_name: fallbackName || "User",
+    phone: String(user?.user_metadata?.phone || "").trim() || null,
+    country: String(user?.user_metadata?.country || "").trim() || null,
+  };
+
+  const { error: upsertErr } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
+  if (upsertErr) throw upsertErr;
+
+  return { user_id: user.id, role: fallbackRole };
+}
+
 async function getRoleAndRedirect(router) {
   const { data: userData, error: userErr } = await supabase.auth.getUser();
   if (userErr) throw userErr;
@@ -18,13 +49,7 @@ async function getRoleAndRedirect(router) {
   const user = userData?.user;
   if (!user) return;
 
-  const { data: prof, error: profErr } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (profErr) throw profErr;
+  const prof = await ensureProfileForUser(user);
 
   const role = normalizeRole(prof?.role);
 

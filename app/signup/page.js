@@ -138,9 +138,10 @@ export default function SignupPage() {
 
       const createdUser = signData?.user;
 
-      // If confirm email is ON, sometimes there is no session yet — that’s OK.
-      // We still create the profile if we have a user id.
-      if (createdUser?.id) {
+      // If email confirmation is ON, there may be no authenticated session yet.
+      // In that case, skip profile upsert now (RLS would block) and let profile
+      // creation happen after verified login/session is available.
+      if (createdUser?.id && signData?.session) {
         const profilePayload = {
           user_id: createdUser.id,
           role,

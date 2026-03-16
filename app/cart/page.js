@@ -496,6 +496,13 @@ function isMissingColumnError(msg) {
   return m.includes("column") && m.includes("does not exist");
 }
 
+function grocerySubstitutionLabel(v) {
+  const s = String(v || "").toLowerCase();
+  if (s === "no_substitutions") return "No substitutions";
+  if (s === "contact_me_first") return "Contact me first";
+  return "Allow substitutions";
+}
+
 async function insertGroceryOrderAuto(payload) {
   const attempts = [
     { ...payload, store_id: payload.store_id },
@@ -1037,6 +1044,7 @@ export default function CartPage() {
   const [zip, setZip] = useState("");
   const [landmark, setLandmark] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [grocerySubstitutionPref, setGrocerySubstitutionPref] = useState("allow_substitutions");
 
   // Premium fields (restaurant only)
   const [coupon, setCoupon] = useState("");
@@ -1208,6 +1216,7 @@ export default function CartPage() {
             setAddress2(a?.address_line2 || "");
             setLandmark(a?.landmark || "");
             setInstructions(a?.instructions || "");
+            setGrocerySubstitutionPref(a?.grocery_substitution_pref || "allow_substitutions");
           }
         } catch {}
 
@@ -1423,10 +1432,11 @@ export default function CartPage() {
           phone,
           address_line1,
           address_line2,
-          landmark,
-          instructions,
-        })
-      );
+            landmark,
+            instructions,
+            grocery_substitution_pref: grocerySubstitutionPref,
+          })
+        );
     } catch {}
   }
 
@@ -1491,7 +1501,6 @@ export default function CartPage() {
         address_line2: (address_line2 || "").trim(),
         landmark: (landmark || "").trim(),
         instructions: (instructions || "").trim() || "",
-
         address: buildFullAddress({
           address_line1: address_line1.trim(),
           address_line2: (address_line2 || "").trim(),
@@ -1577,6 +1586,8 @@ export default function CartPage() {
         const geo = await geocodeAddressClient(fullAddr);
 
         const platformFee = Number(groceryPlatformFeeAmount || 0);
+        const subPrefLabel = grocerySubstitutionLabel(grocerySubstitutionPref);
+        const groceryInstructions = [(instructions || "").trim(), `[Substitution: ${subPrefLabel}]`].filter(Boolean).join(" ");
 
         const total_amount = Math.max(
           0,
@@ -1589,7 +1600,7 @@ export default function CartPage() {
           customer_name: customer_name.trim(),
           customer_phone: phone.trim(),
           delivery_address: fullAddr,
-          instructions: (instructions || "").trim() || null,
+          instructions: groceryInstructions || null,
           status: "pending",
           total_amount,
           customer_lat: geo?.lat ?? null,
@@ -2225,6 +2236,110 @@ export default function CartPage() {
                   <div style={inputLabel}>Delivery Instructions (optional)</div>
                   <input value={instructions} onChange={(e) => setInstructions(e.target.value)} style={input} />
                 </div>
+
+                {cartMode === "grocery" ? (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={inputLabel}>Item Substitution Preference</div>
+                    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => setGrocerySubstitutionPref("allow_substitutions")}
+                        style={grocerySubstitutionPref === "allow_substitutions" ? chipActive : chip}
+                        title="If item is unavailable, replace it with a similar item."
+                      >
+                        Option A - Allow substitutions{" "}
+                        <span
+                          title="If item is unavailable, replace it with a similar item."
+                          style={{
+                            display: "inline-flex",
+                            width: 20,
+                            height: 20,
+                            borderRadius: 999,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            border: "1px solid rgba(148,163,184,0.45)",
+                            background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98))",
+                            color: "#0f172a",
+                            boxShadow: "0 4px 10px rgba(15,23,42,0.12)",
+                            lineHeight: 1,
+                            marginLeft: 2,
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <line x1="12" y1="10" x2="12" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="12" cy="7" r="1.2" fill="currentColor" />
+                          </svg>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGrocerySubstitutionPref("no_substitutions")}
+                        style={grocerySubstitutionPref === "no_substitutions" ? chipActive : chip}
+                        title="If exact item is unavailable, do not replace it."
+                      >
+                        Option B - No substitutions{" "}
+                        <span
+                          title="If exact item is unavailable, do not replace it."
+                          style={{
+                            display: "inline-flex",
+                            width: 20,
+                            height: 20,
+                            borderRadius: 999,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            border: "1px solid rgba(148,163,184,0.45)",
+                            background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98))",
+                            color: "#0f172a",
+                            boxShadow: "0 4px 10px rgba(15,23,42,0.12)",
+                            lineHeight: 1,
+                            marginLeft: 2,
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <line x1="12" y1="10" x2="12" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="12" cy="7" r="1.2" fill="currentColor" />
+                          </svg>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGrocerySubstitutionPref("contact_me_first")}
+                        style={grocerySubstitutionPref === "contact_me_first" ? chipActive : chip}
+                        title="Before any replacement, contact me for approval."
+                      >
+                        Option C - Contact me first{" "}
+                        <span
+                          title="Before any replacement, contact me for approval."
+                          style={{
+                            display: "inline-flex",
+                            width: 20,
+                            height: 20,
+                            borderRadius: 999,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            border: "1px solid rgba(148,163,184,0.45)",
+                            background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98))",
+                            color: "#0f172a",
+                            boxShadow: "0 4px 10px rgba(15,23,42,0.12)",
+                            lineHeight: 1,
+                            marginLeft: 2,
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <line x1="12" y1="10" x2="12" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                            <circle cx="12" cy="7" r="1.2" fill="currentColor" />
+                          </svg>
+                        </span>
+                      </button>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
+                      Selected: {grocerySubstitutionLabel(grocerySubstitutionPref)}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div style={{ marginTop: 6 }}>
                   <div style={inputLabel}>Payment Method</div>

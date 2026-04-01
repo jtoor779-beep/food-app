@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { DEFAULT_APP_CURRENCY, formatAppMoney, getStoredAppCurrency, syncAppCurrency } from "@/lib/appCurrency";
 
 /* =========================
    Premium theme (same vibe)
@@ -320,9 +321,8 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function fmtMoney(v) {
-  const n = safeNum(v);
-  return n.toFixed(0);
+function fmtMoney(v, currency = DEFAULT_APP_CURRENCY) {
+  return formatAppMoney(v, currency);
 }
 
 function statusTone(s) {
@@ -452,6 +452,7 @@ export default function GroceryOwnerDashboardPage() {
 
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
+  const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   const [userEmail, setUserEmail] = useState("");
   const [role, setRole] = useState("");
@@ -505,6 +506,24 @@ export default function GroceryOwnerDashboardPage() {
   ]);
 
   const storeId = useMemo(() => store?.id || "", [store]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrency() {
+      if (typeof window !== "undefined") {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      }
+
+      const nextCurrency = await syncAppCurrency(DEFAULT_APP_CURRENCY);
+      if (!cancelled) setCurrency(nextCurrency);
+    }
+
+    loadCurrency();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const approval = String(store?.approval_status || "pending").toLowerCase();
   const isApproved = approval === "approved";
@@ -936,12 +955,12 @@ export default function GroceryOwnerDashboardPage() {
           <div style={{ minWidth: 260 }}>
             <div style={pill}>Grocery Owner</div>
             <h1 style={heroTitle}>Dashboard</h1>
-            <div style={subText}>Overview • Orders • Products • Controls</div>
+            <div style={subText}>Overview - Orders - Products - Controls</div>
           </div>
 
           <div style={topTabsWrap}>
             <button onClick={loadAll} style={btnLight} disabled={loading}>
-              {loading ? "Refreshing…" : "Refresh"}
+              {loading ? "Refreshing..." : "Refresh"}
             </button>
 
             <button
@@ -1100,7 +1119,7 @@ export default function GroceryOwnerDashboardPage() {
                   title={!storeId ? "Create store first" : "Refresh"}
                 >
                   {(ordersViewMode === "orders" && ordersLoading) || (ordersViewMode === "customers" && customersLoading)
-                    ? "Loading…"
+                    ? "Loading..."
                     : "Refresh"}
                 </button>
 
@@ -1167,7 +1186,7 @@ export default function GroceryOwnerDashboardPage() {
                       {ordersLoading ? (
                         <tr>
                           <td style={td} colSpan={5}>
-                            Loading orders…
+                            Loading orders...
                           </td>
                         </tr>
                       ) : !storeId ? (
@@ -1191,7 +1210,7 @@ export default function GroceryOwnerDashboardPage() {
                               </td>
                               <td style={{ ...td, fontWeight: 1000 }}>{String(ord).slice(0, 10)}</td>
                               <td style={td}>{String(cust).slice(0, 26)}</td>
-                              <td style={td}>{fmtMoney(total)}</td>
+                              <td style={td}>{fmtMoney(total, currency)}</td>
                               <td style={{ ...td, color: "rgba(15,23,42,0.72)" }}>{created}</td>
                             </tr>
                           );
@@ -1258,7 +1277,7 @@ export default function GroceryOwnerDashboardPage() {
                   </div>
                 ) : customersLoading ? (
                   <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>
-                    Loading customers…
+                    Loading customers...
                   </div>
                 ) : !selectedCustomer ? (
                   <div style={tableWrap}>
@@ -1334,7 +1353,7 @@ export default function GroceryOwnerDashboardPage() {
 
                                 <td style={td}>{safeNum(c.orders_count)}</td>
                                 <td style={td}>{safeNum(c.delivered_count)}</td>
-                                <td style={td}>{fmtMoney(c.revenue_total)}</td>
+                                <td style={td}>{fmtMoney(c.revenue_total, currency)}</td>
                                 <td style={{ ...td, color: "rgba(15,23,42,0.72)" }}>{fmtWhen(c.last_order_at)}</td>
 
                                 <td style={td}>
@@ -1394,7 +1413,7 @@ export default function GroceryOwnerDashboardPage() {
                                     <span style={badge(statusTone(st))}>{st}</span>
                                   </td>
                                   <td style={{ ...td, fontWeight: 1000 }}>{String(ord).slice(0, 14)}</td>
-                                  <td style={td}>{fmtMoney(total)}</td>
+                                  <td style={td}>{fmtMoney(total, currency)}</td>
                                   <td style={{ ...td, color: "rgba(15,23,42,0.72)" }}>{created}</td>
                                   <td style={td}>
                                     <button style={miniBtn} onClick={() => openOrderInFullPage(o.id || o.order_id)} title="Open in full orders page">
@@ -1514,7 +1533,7 @@ export default function GroceryOwnerDashboardPage() {
                         <div style={{ height: "100%", width: w, borderRadius: 999, background: "rgba(17,24,39,0.85)" }} />
                       </div>
                       <div style={{ textAlign: "right", fontSize: 12, fontWeight: 1000, color: "#0b1220" }}>
-                        {weekMode === "orders" ? safeNum(x.v) : fmtMoney(x.v)}
+                        {weekMode === "orders" ? safeNum(x.v) : fmtMoney(x.v, currency)}
                       </div>
                     </div>
                   );

@@ -8,7 +8,7 @@ import supabase from "@/lib/supabase";
 function clampText(s, max = 140) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "...";
 }
 
 function moneyFromCents(cents, currency = "USD") {
@@ -30,7 +30,7 @@ function num(v, d = 0) {
 }
 
 /* =========================================================
-   ✅ CART READERS (ROBUST) - MATCH YOUR CART PAGE KEYS
+    CART READERS (ROBUST) - MATCH YOUR CART PAGE KEYS
    ========================================================= */
 
 function safeParse(raw) {
@@ -67,7 +67,7 @@ function clearRestaurantCart() {
   } catch {}
 }
 
-/** ✅ Grocery cart keys used in your app/cart/page.js */
+/**  Grocery cart keys used in your app/cart/page.js */
 const GROCERY_CART_KEY = "grocery_cart_items";
 const GROCERY_FALLBACK_KEY = "grocery_cart";
 
@@ -218,7 +218,7 @@ function readSavedAddress() {
 }
 
 /* =========================================================
-   ✅ NEW: Read address from Stripe metadata (fallback)
+    NEW: Read address from Stripe metadata (fallback)
    ========================================================= */
 function readAddressFromStripeMeta(md) {
   if (!md || typeof md !== "object") return null;
@@ -272,26 +272,123 @@ function detectOrderTypeFromLocalStorage() {
 }
 
 /* =========================================================
-   ✅ NEW: Best-effort fetch order by stripe_session_id
+    NEW: Best-effort fetch order by stripe_session_id
    (helps when cart is cleared OR webhook saved order)
    ========================================================= */
-async function findOrderIdByStripeSession(sessionId) {
+async function findOrderIdByStripeSession(sessionId, preferredOrderType = "") {
   if (!sessionId) return null;
-  try {
-    const ex = await supabase
-      .from("orders")
-      .select("id")
-      .eq("stripe_session_id", sessionId)
-      .limit(1)
-      .maybeSingle();
+  const type = String(preferredOrderType || "").trim().toLowerCase();
+  const tableOrder =
+    type === "grocery"
+      ? ["grocery_orders", "orders"]
+      : type === "restaurant"
+        ? ["orders", "grocery_orders"]
+        : ["orders", "grocery_orders"];
 
-    if (ex?.data?.id) return String(ex.data.id);
-  } catch {}
+  for (const table of tableOrder) {
+    try {
+      const ex = await supabase
+        .from(table)
+        .select("id")
+        .eq("stripe_session_id", sessionId)
+        .limit(1)
+        .maybeSingle();
+
+      if (ex?.data?.id) return String(ex.data.id);
+    } catch {}
+  }
   return null;
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function appendQueryParams(url, params) {
+  const base = String(url || "").trim();
+  if (!base) return "";
+  try {
+    const next = new URL(base);
+    Object.entries(params || {}).forEach(([key, value]) => {
+      const text = String(value || "").trim();
+      if (text) next.searchParams.set(key, text);
+    });
+    return next.toString();
+  } catch {
+    return base;
+  }
+}
+
+function getConfirmedOrderId(payload, savedOrderId, queryOrderId) {
+  const searchOrderId = String(queryOrderId || "").trim();
+  const metadataOrderId = String(payload?.metadata?.order_id || "").trim();
+  const fallbackOrderId = String(savedOrderId || payload?.client_reference_id || "").trim();
+  return metadataOrderId || searchOrderId || fallbackOrderId || "";
+}
+
+async function sendPostPaymentOrderEmails({ sessionId, orderId, orderType }) {
+  const confirmedOrderId = String(orderId || "").trim();
+  const confirmedOrderType = String(orderType || "").trim().toLowerCase();
+
+  if (!sessionId || !confirmedOrderId) return;
+  if (confirmedOrderType !== "restaurant" && confirmedOrderType !== "grocery") return;
+
+  const storageKey = `foodapp_payment_email_sent_${sessionId}`;
+
+  if (typeof window !== "undefined") {
+    try {
+      if (localStorage.getItem(storageKey) === "done") return;
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  await Promise.allSettled([
+    fetch("/api/send-order-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "owner_new_order_received",
+        orderType: confirmedOrderType,
+        orderId: confirmedOrderId,
+      }),
+    }),
+    fetch("/api/send-order-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "customer_order_placed",
+        orderType: confirmedOrderType,
+        orderId: confirmedOrderId,
+      }),
+    }),
+  ]);
+
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem(storageKey, "done");
+    } catch {
+      // ignore storage failures
+    }
+  }
+}
+
+async function finalizePaidOrder({ orderId, orderType, sessionId }) {
+  const confirmedOrderId = String(orderId || "").trim();
+  const confirmedOrderType = String(orderType || "").trim().toLowerCase();
+
+  if (!confirmedOrderId) return;
+
+  await fetch("/api/stripe/order-state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "mark_paid",
+      orderId: confirmedOrderId,
+      orderType: confirmedOrderType,
+      sessionId,
+    }),
+  });
 }
 
 function isAbortAuthError(e) {
@@ -327,6 +424,8 @@ function PaymentSuccessInner() {
   const sp = useSearchParams();
   const router = useRouter();
   const sessionId = sp.get("session_id") || "";
+  const orderIdFromQuery = sp.get("order_id") || "";
+  const appReturn = sp.get("app_return") || "";
 
   const [loading, setLoading] = useState(true);
   const [errMsg, setErrMsg] = useState("");
@@ -339,7 +438,7 @@ function PaymentSuccessInner() {
   const [orderId, setOrderId] = useState("");
   const [orderSaveErr, setOrderSaveErr] = useState("");
 
-  // ✅ NEW: Soft redirect flag (used when cart is empty but payment is confirmed)
+  //  NEW: Soft redirect flag (used when cart is empty but payment is confirmed)
   const [softRedirectOk, setSoftRedirectOk] = useState(false);
 
   const [redirectIn, setRedirectIn] = useState(null);
@@ -347,13 +446,15 @@ function PaymentSuccessInner() {
   const createdOnceRef = useRef(false);
   const redirectOnceRef = useRef(false);
   const clearCartOnceRef = useRef(false);
+  const postPaymentEmailRef = useRef(false);
 
   const [orderType, setOrderType] = useState("restaurant");
   const [successRedirect, setSuccessRedirect] = useState("");
+  const [appRedirecting, setAppRedirecting] = useState(false);
 
   const shortId = useMemo(() => {
     if (!sessionId) return "";
-    return sessionId.length > 32 ? sessionId.slice(0, 24) + "…" + sessionId.slice(-8) : sessionId;
+    return sessionId.length > 32 ? sessionId.slice(0, 24) + "..." + sessionId.slice(-8) : sessionId;
   }, [sessionId]);
 
   useEffect(() => {
@@ -370,13 +471,14 @@ function PaymentSuccessInner() {
       setOrderSaveErr("");
       createdOnceRef.current = false;
 
-      // ✅ reset
+      //  reset
       setSoftRedirectOk(false);
 
       setRedirectIn(null);
       redirectOnceRef.current = false;
 
       clearCartOnceRef.current = false;
+      postPaymentEmailRef.current = false;
 
       setOrderType("restaurant");
       setSuccessRedirect("");
@@ -428,7 +530,7 @@ function PaymentSuccessInner() {
   }, [sessionId]);
 
   /* =========================================================
-     ✅ CREATE ORDER AFTER PAID
+      CREATE ORDER AFTER PAID
      FIX: if cart is empty, DO NOT fail.
      We try to find the order from DB by stripe_session_id.
      ========================================================= */
@@ -449,16 +551,29 @@ function PaymentSuccessInner() {
       try {
         setOrderSaving(true);
 
-        // ✅ First: try existing order (prevents duplicates + handles webhook-created orders)
+        const queryOrderId = String(orderIdFromQuery || "").trim();
+        if (appReturn && queryOrderId) {
+          await finalizePaidOrder({
+            orderId: queryOrderId,
+            orderType,
+            sessionId,
+          });
+          setOrderId(queryOrderId);
+          setOrderSaved(true);
+          setOrderSaving(false);
+          return;
+        }
+
+        //  First: try existing order (prevents duplicates + handles webhook-created orders)
         // We do this before auth checks so transient auth aborts don't look like logout.
-        let existingId = await findOrderIdByStripeSession(sessionId);
+        let existingId = await findOrderIdByStripeSession(sessionId, orderType);
 
         if (!existingId) {
           // small polling (max ~4 seconds)
           for (let i = 0; i < 5; i++) {
             if (cancelled) return;
             await sleep(800);
-            existingId = await findOrderIdByStripeSession(sessionId);
+            existingId = await findOrderIdByStripeSession(sessionId, orderType);
             if (existingId) break;
           }
         }
@@ -466,13 +581,18 @@ function PaymentSuccessInner() {
         if (cancelled) return;
 
         if (existingId) {
+          await finalizePaidOrder({
+            orderId: String(existingId),
+            orderType,
+            sessionId,
+          });
           setOrderId(String(existingId));
           setOrderSaved(true);
           setOrderSaving(false);
           return;
         }
 
-        // ✅ Ensure we have a logged-in user only when we truly need to insert a new order (RLS)
+        //  Ensure we have a logged-in user only when we truly need to insert a new order (RLS)
         let userId = null;
         let userEmail = null;
         const { user, error: userErr } = await getUserWithRetry(3);
@@ -510,17 +630,30 @@ function PaymentSuccessInner() {
         buildFullAddress(addr);
 
         // ---------------------------
-        // ✅ GROCERY FLOW (unchanged)
+        //  GROCERY FLOW (unchanged)
         // ---------------------------
         if (orderType === "grocery") {
-          // ... (UNCHANGED grocery logic from your file)
-          // NOTE: Keeping everything exactly as-is in grocery flow.
+          const groceryOrderId =
+            String(orderIdFromQuery || md?.order_id || data?.client_reference_id || "").trim();
+
+          if (groceryOrderId) {
+            await finalizePaidOrder({
+              orderId: groceryOrderId,
+              orderType,
+              sessionId,
+            });
+            setOrderId(groceryOrderId);
+            setOrderSaved(true);
+            setOrderSaving(false);
+            return;
+          }
+
           setSoftRedirectOk(true);
           return;
         }
 
         // ---------------------------
-        // ✅ RESTAURANT FLOW
+        //  RESTAURANT FLOW
         // ---------------------------
         const cart =
           typeof window !== "undefined"
@@ -538,29 +671,34 @@ function PaymentSuccessInner() {
 
         if (!restaurantId) throw new Error("Restaurant id not found. Please refresh status.");
 
-        // ✅ IMPORTANT FIX:
+        //  IMPORTANT FIX:
         // If cart is empty here, we DO NOT show an error anymore.
         // We attempt DB lookup, then allow redirect to Orders silently.
         if (!rItems.length) {
           // try one last time to find order (sometimes saved slightly late)
-          let lateId = await findOrderIdByStripeSession(sessionId);
+          let lateId = await findOrderIdByStripeSession(sessionId, orderType);
           if (!lateId) {
             for (let i = 0; i < 3; i++) {
               if (cancelled) return;
               await sleep(700);
-              lateId = await findOrderIdByStripeSession(sessionId);
+              lateId = await findOrderIdByStripeSession(sessionId, orderType);
               if (lateId) break;
             }
           }
 
           if (lateId) {
+            await finalizePaidOrder({
+              orderId: String(lateId),
+              orderType,
+              sessionId,
+            });
             setOrderId(String(lateId));
             setOrderSaved(true);
             setOrderSaving(false);
             return;
           }
 
-          // ✅ No cart + no DB id yet → still redirect user to Orders (no scary warning)
+          //  No cart + no DB id yet → still redirect user to Orders (no scary warning)
           setSoftRedirectOk(true);
           setOrderSaving(false);
           return;
@@ -692,6 +830,12 @@ function PaymentSuccessInner() {
         if (cancelled) return;
         if (!newOrderId) throw new Error(lastErr?.message || "Restaurant order insert failed.");
 
+        await finalizePaidOrder({
+          orderId: String(newOrderId),
+          orderType,
+          sessionId,
+        });
+
         try {
           const payload = rItems.map((it) => mapCartItemToRestaurantOrderItem(it, newOrderId));
           const cleaned = payload.filter((x) => !!x.menu_item_id);
@@ -717,10 +861,10 @@ function PaymentSuccessInner() {
     return () => {
       cancelled = true;
     };
-  }, [data, sessionId, orderType]);
+  }, [data, sessionId, orderIdFromQuery, orderType]);
 
   /* =========================================================
-     ✅ CLEAR CORRECT CART AFTER SUCCESS (ONLY ONCE)
+      CLEAR CORRECT CART AFTER SUCCESS (ONLY ONCE)
      ========================================================= */
   useEffect(() => {
     const paidNow = !!data?.paid;
@@ -737,8 +881,27 @@ function PaymentSuccessInner() {
     } catch {}
   }, [data, orderSaved, orderSaving, orderType]);
 
+  useEffect(() => {
+    const paidNow = !!data?.paid;
+    if (!paidNow) return;
+    if (postPaymentEmailRef.current) return;
+
+    const confirmedOrderId = getConfirmedOrderId(data, orderId, orderIdFromQuery);
+    if (!confirmedOrderId) return;
+
+    postPaymentEmailRef.current = true;
+
+    sendPostPaymentOrderEmails({
+      sessionId,
+      orderId: confirmedOrderId,
+      orderType,
+    }).catch(() => {
+      postPaymentEmailRef.current = false;
+    });
+  }, [data, orderId, orderIdFromQuery, orderType, sessionId]);
+
   /* =========================================================
-     ✅ AUTO REDIRECT AFTER PAID
+      AUTO REDIRECT AFTER PAID
      FIX: redirect should still happen even if orderSaveErr exists,
      so customer is not stuck on success page.
      ALSO: redirect should happen when cart is empty (softRedirectOk).
@@ -747,7 +910,7 @@ function PaymentSuccessInner() {
     const paidNow = !!data?.paid;
     if (!paidNow || orderSaving) return;
 
-    // ✅ redirect if saved OR if there's an error OR soft redirect is allowed
+    //  redirect if saved OR if there's an error OR soft redirect is allowed
     const canRedirect = orderSaved || !!orderSaveErr || !!softRedirectOk;
     if (!canRedirect) return;
 
@@ -756,6 +919,12 @@ function PaymentSuccessInner() {
 
     const fallback = "/orders";
     const target = successRedirect || fallback;
+    const orderTargetId = String(orderId || orderIdFromQuery || "").trim();
+    const appTarget = appendQueryParams(appReturn, {
+      session_id: sessionId,
+      order_id: orderTargetId,
+      order_type: orderType,
+    });
 
     let seconds = 5;
     setRedirectIn(seconds);
@@ -765,12 +934,38 @@ function PaymentSuccessInner() {
       setRedirectIn(seconds);
       if (seconds <= 0) {
         clearInterval(t);
+        if (appTarget && typeof window !== "undefined") {
+          window.location.assign(appTarget);
+          return;
+        }
         router.push(target);
       }
     }, 1000);
 
     return () => clearInterval(t);
-  }, [data, orderSaved, orderSaveErr, softRedirectOk, orderSaving, router, successRedirect]);
+  }, [appReturn, data, orderId, orderIdFromQuery, orderSaved, orderSaveErr, softRedirectOk, orderSaving, orderType, router, sessionId, successRedirect]);
+
+  useEffect(() => {
+    const paidNow = !!data?.paid;
+    const canRedirect = orderSaved || !!orderSaveErr || !!softRedirectOk;
+    if (!appReturn || !paidNow || orderSaving || !canRedirect || redirectOnceRef.current) return;
+
+    const orderTargetId = String(orderId || orderIdFromQuery || "").trim();
+    const appTarget = appendQueryParams(appReturn, {
+      session_id: sessionId,
+      order_id: orderTargetId,
+      order_type: orderType,
+    });
+
+    if (!appTarget || typeof window === "undefined") return;
+
+    setAppRedirecting(true);
+    const timer = setTimeout(() => {
+      window.location.assign(appTarget);
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [appReturn, data, orderId, orderIdFromQuery, orderSaved, orderSaveErr, orderSaving, orderType, sessionId, softRedirectOk]);
 
   async function copySession() {
     try {
@@ -788,15 +983,15 @@ function PaymentSuccessInner() {
 
   const orderStatusText = paid
     ? orderSaving
-      ? "Saving order to database…"
+      ? "Saving order to database..."
       : orderSaved
-      ? `Order saved ✅ ${orderId ? `(ID: ${clampText(orderId, 28)})` : ""}`
+      ? `Order saved ${orderId ? `(ID: ${clampText(orderId, 28)})` : ""}`
       : softRedirectOk
       ? "Order saved status: check Orders"
       : orderSaveErr
       ? "Order saved status: check Orders"
-      : "Preparing order…"
-    : "Waiting for payment confirmation…";
+      : "Preparing order..."
+    : "Waiting for payment confirmation...";
 
   const typePill = orderType === "grocery" ? "Grocery Order" : "Restaurant Order";
   const showRedirect =
@@ -805,22 +1000,36 @@ function PaymentSuccessInner() {
     typeof redirectIn === "number" &&
     (orderSaved || !!orderSaveErr || !!softRedirectOk);
 
+  if (appRedirecting) {
+    return (
+      <main style={pageBg}>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>
+          <div style={heroGlass}>
+            <div style={pillOk}>Returning to Homyfod App</div>
+            <h1 style={{ ...headline, marginTop: 12 }}>Opening your order…</h1>
+            <div style={subText}>Your payment is confirmed. We’re taking you back into the app now.</div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main style={pageBg}>
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
         <div style={heroGlass}>
           <div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={paid ? pillOk : pillWarn}>{paid ? "Payment Verified ✅" : "Checking Payment…"}</div>
+              <div style={paid ? pillOk : pillWarn}>{paid ? "Payment Verified" : "Checking Payment..."}</div>
               <div style={pillSoft}>{typePill}</div>
             </div>
 
-            <h1 style={title}>{paid ? "Thank you! 🎉" : "Almost there…"}</h1>
+            <h1 style={title}>{paid ? "Thank you!" : "Almost there..."}</h1>
 
             <div style={sub}>
               {paid
-                ? "Your payment is confirmed. We’re preparing your order now."
-                : "We’re verifying your Stripe payment securely. Please wait a moment."}
+                ? "Your payment is confirmed. We're preparing your order now."
+                : "We're verifying your Stripe payment securely. Please wait a moment."}
             </div>
 
             <div style={{ marginTop: 10, ...tinyNote }}>
@@ -829,7 +1038,7 @@ function PaymentSuccessInner() {
 
             {showRedirect ? (
               <div style={{ marginTop: 6, ...tinyNote }}>
-                Redirecting in <b>{Math.max(0, redirectIn)}</b>s…
+                Redirecting in <b>{Math.max(0, redirectIn)}</b>s...
               </div>
             ) : null}
 
@@ -848,10 +1057,10 @@ function PaymentSuccessInner() {
               </button>
             </div>
 
-            {loading ? <div style={{ marginTop: 12, ...tinyNote }}>Verifying…</div> : null}
+            {loading ? <div style={{ marginTop: 12, ...tinyNote }}>Verifying...</div> : null}
             {errMsg ? <div style={alertErr}>{errMsg}</div> : null}
 
-            {/* ✅ KEEP: Only show warning box for REAL errors.
+            {/*  KEEP: Only show warning box for REAL errors.
                 NOTE: cart-empty case no longer sets orderSaveErr, so orange warning disappears. */}
             {paid && orderSaveErr ? (
               <div
@@ -864,7 +1073,7 @@ function PaymentSuccessInner() {
               >
                 {orderSaveErr}
                 <div style={{ marginTop: 8, fontWeight: 900 }}>
-                  Tip: If your order is already in “My Orders”, you can ignore this message.
+                  Tip: If your order is already in &quot;My Orders&quot;, you can ignore this message.
                 </div>
               </div>
             ) : null}
@@ -880,7 +1089,7 @@ function PaymentSuccessInner() {
               <div style={sessionText}>{shortId || "session_id not found"}</div>
               {sessionId ? (
                 <button onClick={copySession} style={copyBtn}>
-                  {copied ? "Copied ✅" : "Copy"}
+                  {copied ? "Copied" : "Copy"}
                 </button>
               ) : null}
             </div>
@@ -888,52 +1097,52 @@ function PaymentSuccessInner() {
             <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <div style={row}>
                 <span style={k}>Status</span>
-                <span style={v}>{data?.status ? String(data.status) : "—"}</span>
+                <span style={v}>{data?.status ? String(data.status) : "-"}</span>
               </div>
               <div style={row}>
                 <span style={k}>Payment</span>
-                <span style={v}>{data?.payment_status ? String(data.payment_status) : "—"}</span>
+                <span style={v}>{data?.payment_status ? String(data.payment_status) : "-"}</span>
               </div>
               <div style={row}>
                 <span style={k}>Amount</span>
-                <span style={v}>{data ? amountText : "—"}</span>
+                <span style={v}>{data ? amountText : "-"}</span>
               </div>
               <div style={row}>
                 <span style={k}>Email</span>
-                <span style={v}>{email || "—"}</span>
+                <span style={v}>{email || "-"}</span>
               </div>
 
               <div style={row}>
                 <span style={k}>Order Type</span>
-                <span style={v}>{orderType || "—"}</span>
+                <span style={v}>{orderType || "-"}</span>
               </div>
 
               <div style={row}>
                 <span style={k}>DB Order</span>
                 <span style={v}>
                   {orderSaving
-                    ? "saving…"
+                    ? "saving..."
                     : orderSaved
-                    ? "saved ✅"
+                    ? "saved"
                     : paid
                     ? softRedirectOk
                       ? "check Orders"
                       : orderSaveErr
                       ? "check Orders"
-                      : "pending…"
-                    : "—"}
+                      : "pending..."
+                    : "-"}
                 </span>
               </div>
             </div>
 
-            <div style={tinyNote}>Full session_id: {clampText(sessionId || "—", 120)}</div>
+            <div style={tinyNote}>Full session_id: {clampText(sessionId || "-", 120)}</div>
           </div>
         </div>
 
         <div style={infoCard}>
-          <div style={infoTitle}>What’s done ✅</div>
+          <div style={infoTitle}>What&apos;s done</div>
           <div style={infoText}>
-            ✅ Payment verified → ✅ order saved in DB (or fetched by session) → ✅ cart cleared → ✅ redirect.
+            Payment verified, order saved in DB (or fetched by session), cart cleared, and redirect ready.
           </div>
         </div>
       </div>
@@ -950,11 +1159,11 @@ export default function PaymentSuccessPage() {
             <div style={heroGlass}>
               <div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <div style={pillWarn}>Checking Payment…</div>
-                  <div style={pillSoft}>Preparing…</div>
+                  <div style={pillWarn}>Checking Payment...</div>
+                  <div style={pillSoft}>Preparing...</div>
                 </div>
 
-                <h1 style={title}>Loading…</h1>
+                <h1 style={title}>Loading...</h1>
                 <div style={sub}>Verifying your payment securely.</div>
 
                 <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -969,13 +1178,13 @@ export default function PaymentSuccessPage() {
 
               <div style={sideCard}>
                 <div style={{ fontWeight: 1000, color: "#0b1220" }}>Payment Details</div>
-                <div style={{ marginTop: 10, ...tinyNote }}>Loading session…</div>
+                <div style={{ marginTop: 10, ...tinyNote }}>Loading session...</div>
               </div>
             </div>
 
             <div style={infoCard}>
-              <div style={infoTitle}>Please wait…</div>
-              <div style={infoText}>We’re loading your confirmation page.</div>
+              <div style={infoTitle}>Please wait...</div>
+              <div style={infoText}>We&apos;re loading your confirmation page.</div>
             </div>
           </div>
         </main>
@@ -1188,3 +1397,5 @@ const v = {
   color: "#0b1220",
   fontSize: 12,
 };
+
+

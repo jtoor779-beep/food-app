@@ -1,7 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import supabase from "@/lib/supabase";
+import { DEFAULT_APP_CURRENCY, formatAppMoney, getStoredAppCurrency, syncAppCurrency } from "@/lib/appCurrency";
 
 /* =========================
    PREMIUM THEME (same as other UI)
@@ -172,6 +173,10 @@ const styles = {
   smallMuted: { color: "rgba(17,24,39,0.65)", fontSize: 12, fontWeight: 850 },
 };
 
+function money(value, currency = DEFAULT_APP_CURRENCY) {
+  return formatAppMoney(value, currency);
+}
+
 /* =========================
    HELPERS (your existing logic kept)
    ========================= */
@@ -209,7 +214,7 @@ function statusColor(status) {
   return { bg: "rgba(255,255,255,0.85)", border: "rgba(0,0,0,0.12)", text: "#0b1220" };
 }
 
-/* ✅ FIX: real address fields (matches your cart/order insert)
+/* âœ… FIX: real address fields (matches your cart/order insert)
    orders.address_line1, address_line2, landmark
    fallback: older schemas if any
 */
@@ -253,7 +258,7 @@ function mapsUrlFromOrder(o) {
 }
 
 /* =========================
-   ✅ NEW (SAFE): image URL normalizer + placeholder
+   âœ… NEW (SAFE): image URL normalizer + placeholder
    ========================= */
 
 function safeImgUrl(u) {
@@ -352,7 +357,7 @@ function StatusSteps({ status }) {
         const active = i === currentIndex;
         return (
           <div key={t} style={stepItem}>
-            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "✓" : i + 1}</div>
+            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "OK" : i + 1}</div>
             <div style={{ ...stepLabel, opacity: done || active ? 1 : 0.65 }}>{t}</div>
             {i !== steps.length - 1 ? <div style={{ ...stepLine, ...(done ? stepLineDone : stepLineTodo) }} /> : null}
           </div>
@@ -374,22 +379,41 @@ export default function RestaurantOrdersPage() {
   const [ownerEmail, setOwnerEmail] = useState("");
   const [role, setRole] = useState("");
 
-  // ✅ Multi-restaurant support
+  // âœ… Multi-restaurant support
   const [restaurants, setRestaurants] = useState([]); // [{id,name}]
   const [restaurantId, setRestaurantId] = useState("");
   const [restaurantName, setRestaurantName] = useState("");
 
   const [orders, setOrders] = useState([]);
+  const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   // Pro controls
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchText, setSearchText] = useState("");
 
-  // ✅ keep one realtime channel only
+  // âœ… keep one realtime channel only
   const channelRef = useRef(null);
 
-  // ✅ NEW: customer-like behavior (list view + one open detail)
+  // âœ… NEW: customer-like behavior (list view + one open detail)
   const [openOrderId, setOpenOrderId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrency() {
+      if (typeof window !== "undefined") {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      }
+
+      const nextCurrency = await syncAppCurrency(DEFAULT_APP_CURRENCY);
+      if (!cancelled) setCurrency(nextCurrency);
+    }
+
+    loadCurrency();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function initOwner() {
     setErr("");
@@ -421,7 +445,7 @@ export default function RestaurantOrdersPage() {
     }
     setRole(prof?.role || "restaurant_owner");
 
-    // ✅ fetch ALL restaurants (no .single/.maybeSingle)
+    // âœ… fetch ALL restaurants (no .single/.maybeSingle)
     const { data: rs, error: rErr } = await supabase
       .from("restaurants")
       .select("id,name,owner_user_id")
@@ -478,7 +502,7 @@ export default function RestaurantOrdersPage() {
 
     const orderIds = (o || []).map((x) => x.id).filter(Boolean);
     let itemsByOrder = {};
-    let metaByMenuId = {}; // ✅ name/price/image map
+    let metaByMenuId = {}; // âœ… name/price/image map
 
     if (orderIds.length > 0) {
       const { data: items, error: iErr } = await supabase.from("order_items").select("*").in("order_id", orderIds);
@@ -487,7 +511,7 @@ export default function RestaurantOrdersPage() {
         const menuIds = Array.from(new Set(items.map((it) => it.menu_item_id).filter(Boolean)));
 
         if (menuIds.length > 0) {
-          // ✅ UPDATED: also select image_url so we can show pictures
+          // âœ… UPDATED: also select image_url so we can show pictures
           const { data: menus, error: mErr } = await supabase.from("menu_items").select("id,name,price,image_url").in("id", menuIds);
 
           if (!mErr && menus) {
@@ -516,7 +540,7 @@ export default function RestaurantOrdersPage() {
             ? safeNum(metaByMenuId[mid]?.price, 0)
             : 0;
 
-          // ✅ NEW (SAFE): image url resolution (order_items may have it, else menu_items.image_url)
+          // âœ… NEW (SAFE): image url resolution (order_items may have it, else menu_items.image_url)
           const imgFromItem = safeImgUrl(pick(it, ["image_url", "img", "photo_url", "picture_url"], ""));
           const imgFromMenu = safeImgUrl(metaByMenuId[mid]?.image_url || "");
           const image_url = imgFromItem || imgFromMenu || "";
@@ -528,7 +552,7 @@ export default function RestaurantOrdersPage() {
             price_each: resolvedPrice,
             line_total: Math.round(qty * resolvedPrice),
 
-            // ✅ attach for UI
+            // âœ… attach for UI
             image_url,
           };
 
@@ -546,7 +570,7 @@ export default function RestaurantOrdersPage() {
 
     setOrders(merged);
 
-    // ✅ if open order no longer exists, close it safely
+    // âœ… if open order no longer exists, close it safely
     if (openOrderId && !merged.find((x) => x.id === openOrderId)) {
       setOpenOrderId(null);
     }
@@ -589,6 +613,105 @@ export default function RestaurantOrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurantId]);
 
+
+  async function notifyDriversOrderReady(orderId) {
+    if (!orderId) return;
+
+    try {
+      const res = await fetch("/api/send-driver-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          restaurantName: restaurantName || "Restaurant",
+        }),
+      });
+
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch {}
+
+      if (!res.ok || !payload?.success || Number(payload?.sent || 0) < 1) {
+        console.warn("[driver-push] notification not sent", { orderId, status: res.status, payload });
+      }
+    } catch (err) {
+      // best effort only - do not block existing status workflow
+      console.warn("[driver-push] request failed", { orderId, err });
+    }
+  }
+
+  async function notifyCustomerOrderStatus(orderId, nextStatus) {
+    if (!orderId) return;
+
+    try {
+      const { data: orderRow, error: orderErr } = await supabase
+        .from("orders")
+        .select("id, user_id, status")
+        .eq("id", orderId)
+        .maybeSingle();
+
+      if (orderErr) throw orderErr;
+
+      const customerUserId = orderRow?.user_id || null;
+      if (!customerUserId) return;
+
+      const shortId = String(orderRow?.id || orderId).slice(0, 8);
+      const status = String(nextStatus || orderRow?.status || "").toLowerCase();
+
+      let title = "Order update";
+      let body = `Your order ${shortId ? "#" + shortId : ""} has a new update.`;
+
+      if (status === "accepted") {
+        title = "Order accepted";
+        body = `Your order ${shortId ? "#" + shortId : ""} was accepted by the restaurant.`;
+      } else if (["pending", "confirmed", "preparing"].includes(status)) {
+        title = "Restaurant is preparing";
+        body = `Your order ${shortId ? "#" + shortId : ""} is now being prepared.`;
+      } else if (status === "ready") {
+        title = "Order is ready";
+        body = `Your order ${shortId ? "#" + shortId : ""} is ready and waiting for delivery.`;
+      } else if (["delivering", "on_the_way", "picked_up"].includes(status)) {
+        title = "Out for delivery";
+        body = `Your order ${shortId ? "#" + shortId : ""} is on the way.`;
+      } else if (status === "delivered") {
+        title = "Order delivered";
+        body = `Your order ${shortId ? "#" + shortId : ""} was delivered.`;
+      }
+
+      const link = `/order/restaurant/${encodeURIComponent(String(orderRow?.id || orderId))}`;
+
+      try {
+        await fetch("/api/send-customer-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: customerUserId,
+            title,
+            body,
+            subtitle: String(orderRow?.restaurant_name || "Live food delivery"),
+            type: "live_tracking",
+            link,
+            orderId: String(orderRow?.id || orderId),
+            orderType: "restaurant",
+            status,
+          }),
+        });
+      } catch {
+        await supabase.from("notifications").insert({
+          user_id: customerUserId,
+          title,
+          body,
+          type: "order",
+          link,
+          is_read: false,
+        });
+      }
+    } catch (err) {
+      console.warn("[customer-notify:restaurant] failed", { orderId, nextStatus, err });
+    }
+  }
+
   async function updateStatus(orderId, newStatus) {
     setErr("");
     setInfo("");
@@ -600,7 +723,13 @@ export default function RestaurantOrdersPage() {
     }
 
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
-    setInfo(`✅ Status updated to "${newStatus}"`);
+
+    await notifyCustomerOrderStatus(orderId, newStatus);
+
+    if (String(newStatus || "").toLowerCase() === "ready") {
+      await notifyDriversOrderReady(orderId);
+    }
+    setInfo(`Status updated to "${newStatus}"`);
     setTimeout(() => setInfo(""), 1800);
   }
 
@@ -661,7 +790,7 @@ export default function RestaurantOrdersPage() {
           <div style={{ minWidth: 260 }}>
             <div style={pill}>Owner</div>
             <h1 style={heroTitle}>Restaurant Orders</h1>
-            <div style={subText}>Owner dashboard (owner only) • View & update order status • Multi-restaurant supported</div>
+            <div style={subText}>Owner dashboard (owner only) - View and update order status - Multi-restaurant supported</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -697,7 +826,7 @@ export default function RestaurantOrdersPage() {
                   setRestaurantId(rid);
                   const found = (restaurants || []).find((x) => String(x.id) === String(rid));
                   setRestaurantName(found?.name || "");
-                  setOpenOrderId(null); // ✅ close details when switching restaurants
+                  setOpenOrderId(null); // âœ… close details when switching restaurants
                 }}
                 style={styles.select}
               >
@@ -745,7 +874,7 @@ export default function RestaurantOrdersPage() {
               <input
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Search name / phone / address / item / order id…"
+                placeholder="Search name / phone / address / item / order ID..."
                 style={styles.input}
               />
               <button
@@ -765,7 +894,7 @@ export default function RestaurantOrdersPage() {
         </div>
 
         {loading ? (
-          <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div>
+          <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading...</div>
         ) : !restaurantId ? (
           <div style={emptyBox}>No restaurant selected.</div>
         ) : visibleOrders.length === 0 ? (
@@ -808,14 +937,14 @@ export default function RestaurantOrdersPage() {
                       </span>
 
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>
-                        Order • <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}…</span>
+                        Order - <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}...</span>
                       </div>
 
                       <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>{formatWhen(o.created_at || o.createdAt)}</div>
                     </div>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>₹{Math.round(finalTotal || 0)}</div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(finalTotal || 0, currency)}</div>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -823,7 +952,7 @@ export default function RestaurantOrdersPage() {
                         }}
                         style={btnView}
                       >
-                        View details →
+                        View details
                       </button>
                     </div>
                   </div>
@@ -877,7 +1006,7 @@ export default function RestaurantOrdersPage() {
                 <div style={cardGlass}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button onClick={() => setOpenOrderId(null)} style={btnBack}>
-                      ← Back to all orders
+                      Back to all orders
                     </button>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -902,7 +1031,7 @@ export default function RestaurantOrdersPage() {
                       </div>
                     </div>
 
-                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: ₹{Math.round(finalTotal || 0)}</div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {money(finalTotal || 0, currency)}</div>
                   </div>
 
                   <div style={{ marginTop: 10 }}>
@@ -928,6 +1057,7 @@ export default function RestaurantOrdersPage() {
                       <span style={{ fontWeight: 950, fontSize: 13, color: "#0b1220" }}>Change Status:</span>
                       <select value={String(o.status || "pending")} onChange={(e) => updateStatus(o.id, e.target.value)} style={styles.select}>
                         <option value="pending">pending</option>
+                        <option value="accepted">accepted</option>
                         <option value="preparing">preparing</option>
                         <option value="ready">ready</option>
 
@@ -954,13 +1084,13 @@ export default function RestaurantOrdersPage() {
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Customer</div>
 
                       <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Name:</b> {customerName || "—"}
+                        <b>Name:</b> {customerName || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Phone:</b> {customerPhone || "—"}
+                        <b>Phone:</b> {customerPhone || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Address:</b> {customerAddress || "—"}
+                        <b>Address:</b> {customerAddress || "-"}
                       </div>
                       {String(customerInstructions || "").trim() && customerInstructions !== "-" ? (
                         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
@@ -980,7 +1110,7 @@ export default function RestaurantOrdersPage() {
                           style={btnGhost}
                           onClick={async () => {
                             const ok = await copyText(customerPhone);
-                            setInfo(ok ? "✅ Phone copied" : "❌ Copy failed");
+                            setInfo(ok ? "Phone copied" : "Copy failed");
                             setTimeout(() => setInfo(""), 1400);
                           }}
                         >
@@ -1002,7 +1132,7 @@ export default function RestaurantOrdersPage() {
                       <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
                         <b>Maps:</b>{" "}
                         <a href={mapsUrl} target="_blank" rel="noreferrer" style={{ color: "#111827", fontWeight: 1000 }}>
-                          Open →
+                          Open
                         </a>
                       </div>
 
@@ -1015,7 +1145,7 @@ export default function RestaurantOrdersPage() {
                           style={btnGhost}
                           onClick={async () => {
                             const ok = await copyText(customerAddress);
-                            setInfo(ok ? "✅ Address copied" : "❌ Copy failed");
+                            setInfo(ok ? "Address copied" : "Copy failed");
                             setTimeout(() => setInfo(""), 1400);
                           }}
                         >
@@ -1064,7 +1194,7 @@ export default function RestaurantOrdersPage() {
                                       alt={String(itemName || "Item")}
                                       style={itemThumbImg}
                                       onError={(e) => {
-                                        // ✅ if broken image url, show placeholder (no crash)
+                                        // âœ… if broken image url, show placeholder (no crash)
                                         e.currentTarget.style.display = "none";
                                       }}
                                     />
@@ -1076,14 +1206,14 @@ export default function RestaurantOrdersPage() {
                                 <div style={{ minWidth: 0 }}>
                                   <div style={{ fontWeight: 950, color: "#0b1220" }}>{itemName}</div>
                                   <div style={{ marginTop: 4, color: "rgba(17,24,39,0.62)", fontWeight: 850, fontSize: 12 }}>
-                                    ₹{Math.round(price || 0)} each
+                                    {money(price || 0, currency)} each
                                   </div>
                                 </div>
                               </div>
 
                               <div style={{ color: "rgba(17,24,39,0.72)", fontWeight: 900 }}>
                                 Qty {qty}
-                                <span style={{ marginLeft: 10 }}>₹{line}</span>
+                                <span style={{ marginLeft: 10 }}>{money(line, currency)}</span>
                               </div>
                             </div>
                           );
@@ -1204,3 +1334,5 @@ const stepLineDone = {
 const stepLineTodo = {
   background: "rgba(0,0,0,0.10)",
 };
+
+

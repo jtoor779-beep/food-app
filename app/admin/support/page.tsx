@@ -487,7 +487,7 @@ export default function AdminSupportPage() {
       <div style={wrap}>
         <div style={topRow}>
           <div>
-            <div style={kicker}>ADMIN • SUPPORT</div>
+            <div style={kicker}>ADMIN - SUPPORT</div>
             <h1 style={title}>Support Inbox</h1>
             <div style={subTitle}>View all customer tickets, reply, and update statuses. (Food + Groceries + Delivery)</div>
           </div>
@@ -517,7 +517,7 @@ export default function AdminSupportPage() {
         </div>
 
         {err ? <div style={alertErr}>{err}</div> : null}
-        {loading ? <div style={loadingHint}>Loading tickets…</div> : null}
+        {loading ? <div style={loadingHint}>Loading tickets...</div> : null}
 
         <div style={twoCol}>
           {/* Left: Ticket List */}

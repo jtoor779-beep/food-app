@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -26,26 +26,33 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { href: "/admin/restaurants", label: "Restaurants" },
       { href: "/admin/orders", label: "Orders" },
 
-      // ✅ NEW: Revenue management (reports / filters / analytics)
+      // âœ… NEW: Revenue management (reports / filters / analytics)
       { href: "/admin/revenue", label: "Revenue" },
+      { href: "/admin/payouts", label: "Payouts" },
+      { href: "/admin/driver-bank-accounts", label: "Driver Bank Accounts" },
 
-      // ✅ NEW: Groceries management (approve/disable/accepting orders)
+      // âœ… NEW: Groceries management (approve/disable/accepting orders)
       { href: "/admin/groceries", label: "Groceries" },
 
-      // ✅ NEW: Delivery partners management (approve/reject/edit/disable)
+      // âœ… NEW: Delivery partners management (approve/reject/edit/disable)
       { href: "/admin/delivery-partners", label: "Delivery Partners" },
 
       { href: "/admin/users", label: "Users" },
 
-      // ✅ NEW: Support / Help inbox
+      // âœ… NEW: Support / Help inbox
       { href: "/admin/support", label: "Support" },
 
-      // ✅ NEW: CMS / homepage feature pages in left navigation
+      // âœ… NEW: CMS / homepage feature pages in left navigation
       { href: "/admin/pages", label: "CMS Pages" },
       { href: "/admin/home-banner", label: "Home Banner" },
       { href: "/admin/home-banner-settings", label: "Home Banner Settings" },
       { href: "/admin/home-featured", label: "Home Featured" },
       { href: "/admin/home-filters", label: "Home Filters" },
+      { href: "/admin/mobile-home", label: "Mobile Home" },
+      { href: "/admin/mobile-popular", label: "Mobile Popular" },
+      { href: "/admin/mobile-recommended", label: "Mobile Recommended" },
+      { href: "/admin/mobile-groceries", label: "Mobile Groceries" },
+      { href: "/admin/mobile-restaurants", label: "Mobile Restaurants" },
       { href: "/admin/currency-settings", label: "Currency Settings" },
 
       { href: "/admin/settings", label: "Settings" },
@@ -72,7 +79,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           return;
         }
 
-        // ✅ IMPORTANT: your schema uses profiles.user_id (not id) so check that FIRST
+        // âœ… IMPORTANT: your schema uses profiles.user_id (not id) so check that FIRST
         let profile: any = null;
 
         // 0) Best: use a security-definer RPC (works even if RLS is tricky)
@@ -167,11 +174,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     };
   }, [router]);
 
-  // ✅ Modern app font stack (Inter-like). We don't use next/font here because this is a client component.
+  // âœ… Modern app font stack (Inter-like). We don't use next/font here because this is a client component.
   const appFont =
     'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
 
-  // ✅ LIGHT THEME
+  // âœ… LIGHT THEME
   const pageWrap: React.CSSProperties = {
     minHeight: "100vh",
     fontFamily: appFont,
@@ -279,7 +286,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               fontWeight: 700,
             }}
           >
-            Checking admin access…
+            Checking admin access...
           </div>
         </div>
       </div>
@@ -323,7 +330,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
 
             <div style={{ marginTop: 12, fontSize: 12, opacity: 0.65 }}>
-              If this still says “Profile read blocked”, create the RPC `get_my_profile()` (SQL below).
+              If this still says &quot;Profile read blocked&quot;, create the RPC `get_my_profile()` (SQL below).
             </div>
           </div>
         </div>
@@ -357,7 +364,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             return (
               <Link key={n.href} href={n.href} style={navItem(active)}>
                 <span style={{ fontWeight: 900, fontSize: 13 }}>{n.label}</span>
-                <span style={{ fontSize: 12, opacity: active ? 0.75 : 0.35 }}>→</span>
+                <span style={{ fontSize: 12, opacity: active ? 0.75 : 0.35 }}>{">"}</span>
               </Link>
             );
           })}
@@ -411,7 +418,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 color: "#0B1220",
               }}
             >
-              Secure: role lock enabled ✅
+              Secure: role lock enabled
             </div>
           </div>
 
@@ -421,5 +428,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     </div>
   );
 }
+
 
 

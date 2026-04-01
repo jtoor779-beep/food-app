@@ -1,9 +1,10 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { DEFAULT_APP_CURRENCY, formatAppMoney, getStoredAppCurrency, syncAppCurrency } from "@/lib/appCurrency";
 
 /* =========================
    Helpers
@@ -17,10 +18,8 @@ function normalizeRole(r) {
     .toLowerCase()
     .replace(/\s+/g, "_");
 }
-function money(v) {
-  const n = Number(v || 0);
-  if (!isFinite(n)) return "₹0";
-  return `₹${n.toFixed(0)}`;
+function money(v, currency = DEFAULT_APP_CURRENCY) {
+  return formatAppMoney(v, currency);
 }
 function fmtDt(d) {
   try {
@@ -35,7 +34,7 @@ function safeArr(v) {
   return Array.isArray(v) ? v : [];
 }
 
-/** ✅ NEW: safe pick helper */
+/** âœ… NEW: safe pick helper */
 function pick(obj, keys, fallback = "") {
   for (const k of keys) {
     const val = obj?.[k];
@@ -44,7 +43,7 @@ function pick(obj, keys, fallback = "") {
   return fallback;
 }
 
-/** ✅ NEW (SAFE): deep getter (supports nested paths like "customer.full_name") */
+/** âœ… NEW (SAFE): deep getter (supports nested paths like "customer.full_name") */
 function dget(obj, path) {
   try {
     if (!obj || !path) return undefined;
@@ -60,7 +59,7 @@ function dget(obj, path) {
   }
 }
 
-/** ✅ NEW (SAFE): pick helper that supports normal keys + nested paths */
+/** âœ… NEW (SAFE): pick helper that supports normal keys + nested paths */
 function pickDeep(obj, keys, fallback = "") {
   for (const k of keys) {
     if (!k) continue;
@@ -79,7 +78,7 @@ function pickDeep(obj, keys, fallback = "") {
 }
 
 /* =========================
-   ✅ NEW (SAFE): image url helper
+   âœ… NEW (SAFE): image url helper
    ========================= */
 function safeImgUrl(u) {
   const s = String(u || "").trim();
@@ -88,7 +87,7 @@ function safeImgUrl(u) {
 }
 
 /* =========================
-   ✅ Better customer + address detection
+   âœ… Better customer + address detection
    ========================= */
 function buildAddressFromRow(o) {
   // Support MANY possible schemas (including nested JSON paths)
@@ -238,7 +237,7 @@ function getSubstitutionPreferenceFromRow(o) {
    Safe table detection (NO CRASH)
    ========================= */
 
-// ✅ IMPORTANT: do NOT fallback to restaurant "orders" table here
+// âœ… IMPORTANT: do NOT fallback to restaurant "orders" table here
 const ORDER_TABLE_CANDIDATES = ["grocery_orders", "orders_grocery"];
 const STORE_ID_COL_CANDIDATES = ["store_id", "grocery_store_id"];
 
@@ -372,7 +371,7 @@ async function loadGroceryItemNamesAuto(itemIds) {
 }
 
 /**
- * ✅ NEW: Enrich customer data from profiles (bulk)
+ * âœ… NEW: Enrich customer data from profiles (bulk)
  * Supports multiple possible customer id columns in grocery_orders.
  */
 async function enrichCustomersFromProfiles(orders) {
@@ -493,7 +492,7 @@ async function updateOrderStatusAuto({ table, orderId, nextStatus }) {
 function clampText(s, max = 22) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "...";
 }
 function countItems(order) {
   const items = safeArr(order?.order_items || order?.items);
@@ -533,6 +532,7 @@ export default function GroceryOwnerOrdersPage() {
 
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   const [errMsg, setErrMsg] = useState("");
   const [infoMsg, setInfoMsg] = useState("");
@@ -557,6 +557,24 @@ export default function GroceryOwnerOrdersPage() {
   const [openOrderId, setOpenOrderId] = useState(null);
 
   const canAccess = useMemo(() => role === "grocery_owner" || role === "admin", [role]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrency() {
+      if (typeof window !== "undefined") {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      }
+
+      const nextCurrency = await syncAppCurrency(DEFAULT_APP_CURRENCY);
+      if (!cancelled) setCurrency(nextCurrency);
+    }
+
+    loadCurrency();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function loadSessionAndRole() {
     setChecking(true);
@@ -610,7 +628,7 @@ export default function GroceryOwnerOrdersPage() {
     if (!storeId && list.length > 0) setStoreId(list[0].id);
   }
 
-  // ✅ Auto-detect orders table + storeId col + attach items + enrich customer data
+  // âœ… Auto-detect orders table + storeId col + attach items + enrich customer data
   async function loadOrders(sid) {
     if (!sid) {
       setOrders([]);
@@ -675,7 +693,7 @@ export default function GroceryOwnerOrdersPage() {
         }));
       }
 
-      // ✅ 3) Enrich customer details from profiles if order row is empty
+      // âœ… 3) Enrich customer details from profiles if order row is empty
       merged = await enrichCustomersFromProfiles(merged);
 
       setOrders(merged);
@@ -687,6 +705,105 @@ export default function GroceryOwnerOrdersPage() {
       setItemsSource({ table: "", orderIdCol: "" });
     } finally {
       setLoadingOrders(false);
+    }
+  }
+
+
+  async function notifyDriversOrderReady(orderId) {
+    if (!orderId) return;
+
+    try {
+      const res = await fetch("/api/send-driver-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          restaurantName: activeStore?.name || "Grocery Store",
+        }),
+      });
+
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch {}
+
+      if (!res.ok || !payload?.success || Number(payload?.sent || 0) < 1) {
+        console.warn("[driver-push:grocery] notification not sent", { orderId, status: res.status, payload });
+      }
+    } catch (err) {
+      // best effort only - do not block existing status workflow
+      console.warn("[driver-push:grocery] request failed", { orderId, err });
+    }
+  }
+
+  async function notifyCustomerOrderStatus(orderId, nextStatus) {
+    if (!orderId || !ordersSource.table) return;
+
+    try {
+      const { data: orderRow, error: orderErr } = await supabase
+        .from(ordersSource.table)
+        .select("id, customer_user_id, status")
+        .eq("id", orderId)
+        .maybeSingle();
+
+      if (orderErr) throw orderErr;
+
+      const customerUserId = orderRow?.customer_user_id || null;
+      if (!customerUserId) return;
+
+      const shortId = String(orderRow?.id || orderId).slice(0, 8);
+      const status = String(nextStatus || orderRow?.status || "").toLowerCase();
+
+      let title = "Order update";
+      let body = `Your grocery order ${shortId ? "#" + shortId : ""} has a new update.`;
+
+      if (status === "accepted") {
+        title = "Order accepted";
+        body = `Your grocery order ${shortId ? "#" + shortId : ""} was accepted by the store.`;
+      } else if (["pending", "confirmed", "preparing"].includes(status)) {
+        title = "Store is preparing";
+        body = `Your grocery order ${shortId ? "#" + shortId : ""} is now being prepared.`;
+      } else if (status === "ready") {
+        title = "Order is ready";
+        body = `Your grocery order ${shortId ? "#" + shortId : ""} is ready and waiting for delivery.`;
+      } else if (["delivering", "on_the_way", "picked_up"].includes(status)) {
+        title = "Out for delivery";
+        body = `Your grocery order ${shortId ? "#" + shortId : ""} is on the way.`;
+      } else if (status === "delivered") {
+        title = "Order delivered";
+        body = `Your grocery order ${shortId ? "#" + shortId : ""} was delivered.`;
+      }
+
+      const link = `/order/grocery/${encodeURIComponent(String(orderRow?.id || orderId))}`;
+
+      try {
+        await fetch("/api/send-customer-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: customerUserId,
+            title,
+            body,
+            subtitle: String(orderRow?.store_name || "Live grocery delivery"),
+            type: "live_tracking",
+            link,
+            orderId: String(orderRow?.id || orderId),
+            orderType: "grocery",
+            status,
+          }),
+        });
+      } catch {
+        await supabase.from("notifications").insert({
+          user_id: customerUserId,
+          title,
+          body,
+          type: "order",
+          link,
+          is_read: false,
+        });
+      }
+    } catch (err) {
+      console.warn("[customer-notify:grocery] failed", { orderId, nextStatus, err });
     }
   }
 
@@ -705,7 +822,12 @@ export default function GroceryOwnerOrdersPage() {
         nextStatus,
       });
 
-      setInfoMsg("✅ Status updated");
+      setInfoMsg("Status updated");
+      await notifyCustomerOrderStatus(orderId, nextStatus);
+      if (normalizeRole(nextStatus) === "ready") {
+        await notifyDriversOrderReady(orderId);
+      }
+
       await loadOrders(storeId);
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -788,7 +910,7 @@ export default function GroceryOwnerOrdersPage() {
   if (checking) {
     return (
       <main style={{ padding: 24 }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", fontWeight: 900 }}>Checking…</div>
+        <div style={{ maxWidth: 1100, margin: "0 auto", fontWeight: 900 }}>Checking...</div>
       </main>
     );
   }
@@ -803,7 +925,7 @@ export default function GroceryOwnerOrdersPage() {
           <div>
             <div style={pill}>Grocery Owner</div>
             <h1 style={heroTitle}>Grocery Orders</h1>
-            <div style={subText}>Owner dashboard • View & update order status • Multi-store supported</div>
+            <div style={subText}>Owner dashboard - View & update order status - Multi-store supported</div>
 
             <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
               <Link href="/groceries/owner/dashboard" style={btnPillLight}>
@@ -911,7 +1033,7 @@ export default function GroceryOwnerOrdersPage() {
             </button>
           </div>
 
-          {loadingOrders ? <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading orders…</div> : null}
+          {loadingOrders ? <div style={{ marginTop: 12, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading orders...</div> : null}
           {!loadingOrders && filteredOrders.length === 0 ? <div style={emptyBox}>No orders found for selected store / filters.</div> : null}
 
           {!loadingOrders && filteredOrders.length > 0 ? (
@@ -933,14 +1055,14 @@ export default function GroceryOwnerOrdersPage() {
                     <div style={orderTopRow}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <span style={statusPill(o._status)}>{o._status || "pending"}</span>
-                        <div style={orderMetaStrong}>Order • {clampText(o.id, 18)}</div>
+                        <div style={orderMetaStrong}>Order - {clampText(o.id, 18)}</div>
                         <div style={orderMetaDim}>{fmtDt(o.created_at)}</div>
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <div style={orderTotal}>{money(o.total_amount ?? o.total ?? 0)}</div>
+                        <div style={orderTotal}>{money(o.total_amount ?? o.total ?? 0, currency)}</div>
                         <button onClick={() => setOpenOrderId((cur) => (cur === o.id ? null : o.id))} style={viewBtn}>
-                          {isOpen ? "Hide details ←" : "View details →"}
+                          {isOpen ? "Hide details" : "View details"}
                         </button>
                       </div>
                     </div>
@@ -959,22 +1081,22 @@ export default function GroceryOwnerOrdersPage() {
 
                     <div style={trackWrap}>
                       <div style={trackItem}>
-                        <div style={trackDot(stepIdx >= 0)}>{stepIdx >= 0 ? "✓" : ""}</div>
+                        <div style={trackDot(stepIdx >= 0)}>{stepIdx >= 0 ? "OK" : ""}</div>
                         <div style={trackLabel}>Placed</div>
                       </div>
                       <div style={trackLine(stepIdx >= 1)} />
                       <div style={trackItem}>
-                        <div style={trackDot(stepIdx >= 1)}>{stepIdx >= 1 ? "✓" : ""}</div>
+                        <div style={trackDot(stepIdx >= 1)}>{stepIdx >= 1 ? "OK" : ""}</div>
                         <div style={trackLabel}>Preparing</div>
                       </div>
                       <div style={trackLine(stepIdx >= 2)} />
                       <div style={trackItem}>
-                        <div style={trackDot(stepIdx >= 2)}>{stepIdx >= 2 ? "✓" : ""}</div>
+                        <div style={trackDot(stepIdx >= 2)}>{stepIdx >= 2 ? "OK" : ""}</div>
                         <div style={trackLabel}>On the way</div>
                       </div>
                       <div style={trackLine(stepIdx >= 3)} />
                       <div style={trackItem}>
-                        <div style={trackDot(stepIdx >= 3)}>{stepIdx >= 3 ? "✓" : ""}</div>
+                        <div style={trackDot(stepIdx >= 3)}>{stepIdx >= 3 ? "OK" : ""}</div>
                         <div style={trackLabel}>Delivered</div>
                       </div>
                     </div>
@@ -1021,7 +1143,7 @@ export default function GroceryOwnerOrdersPage() {
                                   onClick={() => {
                                     try {
                                       navigator.clipboard.writeText(addr);
-                                      setInfoMsg("✅ Address copied");
+                                      setInfoMsg("Address copied");
                                     } catch {}
                                   }}
                                   style={btnPillLight}
@@ -1114,6 +1236,7 @@ export default function GroceryOwnerOrdersPage() {
                             <div style={{ fontWeight: 950, color: "#0b1220" }}>Change Status:</div>
                             <select value={o._status} onChange={(e) => updateOrderStatus(o.id, e.target.value)} style={{ ...input, width: 220 }} disabled={busy}>
                               <option value="pending">pending</option>
+                              <option value="accepted">accepted</option>
                               <option value="preparing">preparing</option>
                               <option value="ready">ready</option>
                               <option value="on_the_way">on_the_way</option>
@@ -1133,7 +1256,7 @@ export default function GroceryOwnerOrdersPage() {
         </div>
 
         <div style={{ marginTop: 12, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.6)" }}>
-          If customer still shows blank, it means grocery_orders does not store customer id/name or owner cannot read profiles due to RLS. Then send screenshot of one row in <b>grocery_orders</b> (columns) and one row in <b>profiles</b>.
+          If customer still shows blank, it means grocery_orders does not store customer id/name or the owner cannot read profiles due to RLS. Then send a screenshot of one row in <b>grocery_orders</b> (columns) and one row in <b>profiles</b>.
         </div>
       </div>
 
@@ -1509,3 +1632,6 @@ const itemThumbPlaceholder = {
   color: "rgba(17,24,39,0.55)",
   fontSize: 12,
 };
+
+
+

@@ -142,7 +142,7 @@ export default function SettingsPage() {
   // ✅ pro: logout from all devices/sessions
   async function logoutAllDevices() {
     try {
-      // @ts-ignore
+      // @ts-expect-error Runtime client supports global sign-out scope.
       await supabase.auth.signOut({ scope: "global" });
     } catch {
       await supabase.auth.signOut();

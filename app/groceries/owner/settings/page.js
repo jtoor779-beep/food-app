@@ -299,7 +299,7 @@ export default function GroceryOwnerSettingsPage() {
 
       // Put URL in the input field so Save/Create will store it in DB
       setImageUrl(publicUrl);
-      setInfo("✅ Store image uploaded. Now click Save Changes (or Create Store) to save in database.");
+      setInfo("Store image uploaded. Now click Save Changes or Create Store to save it in the database.");
       resetImagePicker();
     } catch (e) {
       setErr(e?.message || String(e));
@@ -366,7 +366,7 @@ export default function GroceryOwnerSettingsPage() {
 
       setLat(String(la));
       setLng(String(lo));
-      setInfo("✅ GPS captured. Now click Save Location to store it.");
+      setInfo("GPS captured. Now click Save Location to store it.");
     } catch (e) {
       setErr(e?.message || "Failed to get GPS. Please allow location permission.");
     } finally {
@@ -403,7 +403,7 @@ export default function GroceryOwnerSettingsPage() {
       if (error) throw error;
 
       setStore(data);
-      setInfo("✅ Location saved for your grocery store!");
+      setInfo("Location saved for your grocery store.");
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -445,7 +445,7 @@ export default function GroceryOwnerSettingsPage() {
       setLng("");
       resetImagePicker();
 
-      setInfo("✅ Grocery store deleted successfully.");
+      setInfo("Grocery store deleted successfully.");
       router.push("/groceries/owner/dashboard");
     } catch (e) {
       setErr(e?.message || String(e));
@@ -586,7 +586,7 @@ export default function GroceryOwnerSettingsPage() {
       setLat(la2 !== "" ? String(la2) : lat);
       setLng(lo2 !== "" ? String(lo2) : lng);
 
-      setInfo("✅ Grocery store created! (Status: Pending approval)");
+      setInfo("Grocery store created. Status: Pending approval.");
 
       // ✅ IMPORTANT FIX: After create, go to dashboard (so owner sees real dashboard)
       router.push("/groceries/owner/dashboard");
@@ -638,7 +638,7 @@ export default function GroceryOwnerSettingsPage() {
       setLat(la2 !== "" ? String(la2) : lat);
       setLng(lo2 !== "" ? String(lo2) : lng);
 
-      setInfo("✅ Saved!");
+      setInfo("Saved.");
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -649,7 +649,7 @@ export default function GroceryOwnerSettingsPage() {
   if (checking) {
     return (
       <main style={pageBg}>
-        <div style={{ maxWidth: 980, margin: "0 auto" }}>Checking session…</div>
+        <div style={{ maxWidth: 980, margin: "0 auto" }}>Checking session...</div>
       </main>
     );
   }
@@ -661,7 +661,7 @@ export default function GroceryOwnerSettingsPage() {
           <div style={{ minWidth: 260 }}>
             <div style={pill}>Grocery Owner</div>
             <h1 style={heroTitle}>Grocery Store Settings</h1>
-            <div style={subText}>Create your store • Update store info • Go to Dashboard</div>
+            <div style={subText}>Create your store - Update store info - Go to dashboard</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -694,7 +694,7 @@ export default function GroceryOwnerSettingsPage() {
             <>
               <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>Create your Grocery Store</div>
               <div style={{ marginTop: 8, color: "rgba(17,24,39,0.68)", fontWeight: 850 }}>
-                Create store first — then dashboard will show Manage Menu + Orders like restaurant owner.
+                Create the store first, then the dashboard will show Manage Menu and Orders like the restaurant owner flow.
               </div>
 
               {/* ✅ NEW: Store Location (Create) */}
@@ -721,7 +721,7 @@ export default function GroceryOwnerSettingsPage() {
 
                 <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <button onClick={useMyCurrentGps} style={btnDark} disabled={gettingGps}>
-                    {gettingGps ? "Getting GPS…" : "Use my current GPS"}
+                    {gettingGps ? "Getting GPS..." : "Use my current GPS"}
                   </button>
 
                   {googleMapsLink() ? (
@@ -769,14 +769,14 @@ export default function GroceryOwnerSettingsPage() {
                     <div>
                       <input ref={fileRef} type="file" accept="image/*" onChange={onPickFile} style={{ display: "block" }} />
                       <div style={tinyNote}>
-                        Bucket: <b>{BUCKET}</b> • Upload sets Image URL automatically.
+                        Bucket: <b>{BUCKET}</b> - Upload sets the image URL automatically.
                       </div>
                     </div>
                   </div>
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <button onClick={uploadStoreImage} style={btnDark} disabled={uploadingImg || !imgFile}>
-                      {uploadingImg ? "Uploading…" : "Upload Image"}
+                      {uploadingImg ? "Uploading..." : "Upload Image"}
                     </button>
                     <button onClick={resetImagePicker} style={btnLight} disabled={uploadingImg && !!imgFile}>
                       Clear
@@ -818,7 +818,7 @@ export default function GroceryOwnerSettingsPage() {
 
               <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button onClick={createStore} style={btnDark} disabled={loading}>
-                  {loading ? "Creating…" : "Create Store"}
+                  {loading ? "Creating..." : "Create Store"}
                 </button>
               </div>
 
@@ -834,7 +834,7 @@ export default function GroceryOwnerSettingsPage() {
               <div style={locBox}>
                 <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Store Location</div>
                 <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12 }}>
-                  This location is used as <b>Pickup</b> for customer tracking (so it won’t show 0,0).
+                  This location is used as <b>Pickup</b> for customer tracking, so it won&apos;t show 0,0.
                 </div>
 
                 <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -854,11 +854,11 @@ export default function GroceryOwnerSettingsPage() {
 
                 <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <button onClick={useMyCurrentGps} style={btnDark} disabled={gettingGps}>
-                    {gettingGps ? "Getting GPS…" : "Use my current GPS"}
+                    {gettingGps ? "Getting GPS..." : "Use my current GPS"}
                   </button>
 
                   <button onClick={saveLocationToDb} style={btnDark} disabled={savingLoc}>
-                    {savingLoc ? "Saving Location…" : "Save Location"}
+                    {savingLoc ? "Saving location..." : "Save Location"}
                   </button>
 
                   {googleMapsLink() ? (
@@ -874,7 +874,7 @@ export default function GroceryOwnerSettingsPage() {
                   <span style={{ fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.65)" }}>
                     Saved:{" "}
                     <b>
-                      {num(lat) != null ? Number(lat).toFixed(6) : "—"}, {num(lng) != null ? Number(lng).toFixed(6) : "—"}
+                      {num(lat) != null ? Number(lat).toFixed(6) : "-"}, {num(lng) != null ? Number(lng).toFixed(6) : "-"}
                     </b>
                   </span>
                 </div>
@@ -919,7 +919,7 @@ export default function GroceryOwnerSettingsPage() {
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     <button onClick={uploadStoreImage} style={btnDark} disabled={uploadingImg || !imgFile}>
-                      {uploadingImg ? "Uploading…" : "Upload Image"}
+                      {uploadingImg ? "Uploading..." : "Upload Image"}
                     </button>
                     <button onClick={resetImagePicker} style={btnLight} disabled={uploadingImg && !!imgFile}>
                       Clear
@@ -961,7 +961,7 @@ export default function GroceryOwnerSettingsPage() {
 
               <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button onClick={saveStore} style={btnDark} disabled={loading || deleting}>
-                  {loading ? "Saving…" : "Save Changes"}
+                  {loading ? "Saving..." : "Save Changes"}
                 </button>
 
                 <button onClick={() => router.push("/groceries/owner/dashboard")} style={btnLight}>
@@ -973,12 +973,12 @@ export default function GroceryOwnerSettingsPage() {
                 </button>
 
                 <button onClick={deleteStore} style={btnDanger} disabled={deleting || loading}>
-                  {deleting ? "Deleting…" : "Delete Store"}
+                  {deleting ? "Deleting..." : "Delete Store"}
                 </button>
               </div>
 
               <div style={{ marginTop: 12, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.7)" }}>
-                Store status: <b>{String(store?.approval_status || "pending")}</b> • Disabled: <b>{String(!!store?.is_disabled)}</b>
+                Store status: <b>{String(store?.approval_status || "pending")}</b> - Disabled: <b>{String(!!store?.is_disabled)}</b>
               </div>
             </>
           )}
@@ -987,3 +987,4 @@ export default function GroceryOwnerSettingsPage() {
     </main>
   );
 }
+

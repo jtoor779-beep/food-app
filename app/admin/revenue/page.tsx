@@ -25,22 +25,24 @@ type RevenueRow = {
 const TOTAL_COLS = ["total_amount", "total", "grand_total", "amount", "order_total", "total_price"];
 const STATUS_COLS = ["status", "order_status", "payment_status"];
 const DATE_COLS = ["created_at", "paid_at", "delivered_at", "picked_up_at"];
-const RESTAURANT_ID_COLS = ["restaurant_id", "vendor_id", "merchant_id", "store_id"];
+const RESTAURANT_ID_COLS = ["restaurant_id", "vendor_id", "merchant_id"];
 const GROCERY_ID_COLS = ["grocery_id", "grocery_store_id", "mart_id", "shop_id", "store_id"];
 const PAYMENT_COLS = ["payment_method", "payment_type", "method", "payment_mode"];
 const CUSTOMER_NAME_COLS = ["customer_name", "full_name", "name", "user_name"];
 
 const PLATFORM_FEE_COLS = [
   "platform_fee",
+  "platform_fee_amount",
   "commission_amount",
   "service_fee",
+  "service_fee_amount",
   "commission",
   "admin_fee",
   "platform_commission",
 ];
-const TAX_COLS = ["tax_amount", "gst_amount", "tax", "gst", "tax_total", "tax_value"];
-const TIP_COLS = ["tip_amount", "tip", "driver_tip", "tip_value"];
-const DELIVERY_FEE_COLS = ["delivery_fee", "delivery_charge", "shipping_fee", "delivery_total"];
+const TAX_COLS = ["tax_amount", "gst_amount", "tax", "gst", "tax_total", "tax_value", "taxes"];
+const TIP_COLS = ["tip_amount", "tip", "driver_tip", "delivery_tip", "tip_value"];
+const DELIVERY_FEE_COLS = ["delivery_fee", "delivery_fee_amount", "delivery_charge", "delivery_charge_amount", "shipping_fee", "delivery_total"];
 const DELIVERY_PAYOUT_COLS = ["delivery_payout", "driver_payout", "courier_payout"];
 const DISCOUNT_COLS = ["discount_amount", "discount", "coupon_discount", "discount_total"];
 const SUBTOTAL_COLS = ["subtotal_amount", "subtotal", "sub_total"];
@@ -75,9 +77,16 @@ const SAFE_ORDER_SELECT_BASE = [
 ];
 
 const ORDER_SELECT_ATTEMPTS = [
+  [...SAFE_ORDER_SELECT_BASE, "store_id", "grocery_store_id", "order_type", "category", "type", "source_type", "commission_amount", "gst_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "store_id", "order_type", "category", "type", "source_type", "commission_amount", "gst_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "order_type", "category", "type", "source_type", "commission_amount", "gst_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "store_id", "commission_amount", "gst_amount"].join(","),
   [...SAFE_ORDER_SELECT_BASE, "commission_amount", "gst_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "store_id", "commission_amount"].join(","),
   [...SAFE_ORDER_SELECT_BASE, "commission_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "store_id", "gst_amount"].join(","),
   [...SAFE_ORDER_SELECT_BASE, "gst_amount"].join(","),
+  [...SAFE_ORDER_SELECT_BASE, "store_id"].join(","),
   SAFE_ORDER_SELECT_BASE.join(","),
 ];
 
@@ -221,16 +230,27 @@ function makeOutletFilterKey(channel: string, outletId: string, outletName: stri
 
 function detectChannel(row: AnyRow): ChannelType | "other" {
   const typeGuess = normalize(
-    row?.category || row?.type || row?.store_type || row?.service_type || row?.merchant_type || row?.source_type || row?.business_type
+    row?.order_type ||
+      row?.category ||
+      row?.type ||
+      row?.store_type ||
+      row?.service_type ||
+      row?.merchant_type ||
+      row?.source_type ||
+      row?.business_type
   );
 
   const hasRestaurantId = RESTAURANT_ID_COLS.some((c) => row?.[c] !== undefined && row?.[c] !== null && row?.[c] !== "");
-  const hasGroceryId = GROCERY_ID_COLS.some((c) => row?.[c] !== undefined && row?.[c] !== null && row?.[c] !== "");
+  const hasGrocerySpecificId = ["grocery_id", "grocery_store_id", "mart_id", "shop_id"].some(
+    (c) => row?.[c] !== undefined && row?.[c] !== null && row?.[c] !== ""
+  );
+  const hasStoreId = row?.store_id !== undefined && row?.store_id !== null && row?.store_id !== "";
 
-  if (typeGuess.includes("grocery") || typeGuess.includes("mart") || typeGuess.includes("store")) return "grocery";
+  if (typeGuess.includes("grocery") || typeGuess.includes("mart")) return "grocery";
   if (typeGuess.includes("restaurant") || typeGuess.includes("food") || typeGuess.includes("kitchen")) return "restaurant";
-  if (hasGroceryId && !hasRestaurantId) return "grocery";
+  if (hasGrocerySpecificId) return "grocery";
   if (hasRestaurantId) return "restaurant";
+  if (hasStoreId) return "grocery";
   return "other";
 }
 
@@ -368,6 +388,7 @@ export default function AdminRevenuePage() {
   const [groceryMap, setGroceryMap] = useState<Record<string, string>>({});
   const [sourceNote, setSourceNote] = useState("");
   const [defaultCurrency, setDefaultCurrency] = useState("USD");
+  const [platformPercents, setPlatformPercents] = useState({ commission: 10, gst: 5 });
 
   function load() {
     let alive = true;
@@ -380,6 +401,8 @@ export default function AdminRevenuePage() {
         let ordersData: AnyRow[] = [];
         let ordersErrorMessage = "";
         let ordersSelectUsed = SAFE_ORDER_SELECT_BASE.join(",");
+        let commissionPercent = 10;
+        let gstPercent = 5;
 
         for (const selectCols of ORDER_SELECT_ATTEMPTS) {
           const res = await supabase.from("orders").select(selectCols).order("created_at", { ascending: false }).limit(5000);
@@ -392,14 +415,31 @@ export default function AdminRevenuePage() {
           ordersErrorMessage = res.error?.message || "Failed to read orders table.";
         }
 
-        const [groceryOrdersRes, groceryCategoriesRes, groceryItemsRes, grocerySubcategoriesRes] = await Promise.allSettled([
+        try {
+          const platformRes = await supabase
+            .from("system_settings")
+            .select("value_json, commission_percent, gst_percent")
+            .eq("key", "platform")
+            .maybeSingle();
+          if (!platformRes.error && platformRes.data) {
+            const vj = (platformRes.data as AnyRow)?.value_json || {};
+            const c = Number(vj?.commission_percent ?? (platformRes.data as AnyRow)?.commission_percent);
+            const g = Number(vj?.gst_percent ?? (platformRes.data as AnyRow)?.gst_percent);
+            if (Number.isFinite(c) && c >= 0) commissionPercent = c;
+            if (Number.isFinite(g) && g >= 0) gstPercent = g;
+          }
+        } catch {}
+
+        const [groceryOrdersRes, groceryStoresRes, groceryCategoriesRes, groceryItemsRes, grocerySubcategoriesRes] = await Promise.allSettled([
           supabase.from("grocery_orders").select("*").limit(5000),
+          supabase.from("grocery_stores").select("id,name").limit(2000),
           supabase.from("grocery_categories").select("store_id").limit(5000),
           supabase.from("grocery_items").select("store_id").limit(5000),
           supabase.from("grocery_subcategories").select("store_id").limit(5000),
         ]);
 
         const groceryOrdersData = groceryOrdersRes.status === "fulfilled" && Array.isArray(groceryOrdersRes.value.data) ? groceryOrdersRes.value.data : [];
+        const groceryStoreRows = groceryStoresRes.status === "fulfilled" && Array.isArray(groceryStoresRes.value.data) ? groceryStoresRes.value.data : [];
         const groceryCategoryRows = groceryCategoriesRes.status === "fulfilled" && Array.isArray(groceryCategoriesRes.value.data) ? groceryCategoriesRes.value.data : [];
         const groceryItemRows = groceryItemsRes.status === "fulfilled" && Array.isArray(groceryItemsRes.value.data) ? groceryItemsRes.value.data : [];
         const grocerySubcategoryRows = grocerySubcategoriesRes.status === "fulfilled" && Array.isArray(grocerySubcategoriesRes.value.data) ? grocerySubcategoriesRes.value.data : [];
@@ -434,6 +474,14 @@ export default function AdminRevenuePage() {
           restaurantErrorMessage = restRes.error?.message || "Failed to read restaurants table.";
         }
 
+        for (const row of groceryStoreRows as AnyRow[]) {
+          const storeId = String(row?.id || row?.store_id || "").trim();
+          const storeName = String(
+            row?.name || row?.business_name || row?.store_name || row?.shop_name || row?.mart_name || "Grocery Store"
+          ).trim() || "Grocery Store";
+          if (storeId) groMap[storeId] = storeName;
+        }
+
         for (const row of groceryOrdersData as AnyRow[]) {
           const storeId = String(row?.store_id || row?.grocery_store_id || row?.shop_id || row?.mart_id || row?.id || "").trim();
           const storeName = String(
@@ -449,7 +497,7 @@ export default function AdminRevenuePage() {
 
         if (!alive) return;
 
-        const restaurantRows = buildRows(ordersData, restMap, groMap, "restaurant");
+        const restaurantRows = buildRows(ordersData, restMap, groMap);
         const groceryRows = buildRows(groceryOrdersData, restMap, groMap, "grocery");
         const built = [...restaurantRows, ...groceryRows];
 
@@ -467,6 +515,7 @@ export default function AdminRevenuePage() {
         setRestaurantMap(restMap);
         setGroceryMap(groMap);
         setRows(built);
+        setPlatformPercents({ commission: commissionPercent, gst: gstPercent });
         setSourceNote(
           `Revenue sources: orders → restaurants, grocery_orders → groceries. Outlet dropdown still loads all restaurants from DB and known grocery stores. Financial cards sum directly from raw filtered rows. Orders columns in use: platform_fee${supportsCommissionAmount ? " / commission_amount" : ""}, tax_amount${supportsGstAmount ? " / gst_amount" : ""}, tip_amount, delivery_fee, delivery_payout, discount_amount, subtotal_amount, total_amount. Grocery_orders: tip_amount, delivery_fee, delivery_payout, total_amount. Display currency defaults to ${pickedCurrency}.`
         );
@@ -474,11 +523,13 @@ export default function AdminRevenuePage() {
         const errors: string[] = [];
         if (ordersErrorMessage) errors.push(`orders: ${ordersErrorMessage}`);
         if (groceryOrdersRes.status === "fulfilled" && groceryOrdersRes.value.error) errors.push(`grocery_orders: ${groceryOrdersRes.value.error.message}`);
+        if (groceryStoresRes.status === "fulfilled" && groceryStoresRes.value.error) errors.push(`grocery_stores: ${groceryStoresRes.value.error.message}`);
         if (restaurantErrorMessage) errors.push(`restaurants: ${restaurantErrorMessage}`);
         if (groceryCategoriesRes.status === "fulfilled" && groceryCategoriesRes.value.error) errors.push(`grocery_categories: ${groceryCategoriesRes.value.error.message}`);
         if (groceryItemsRes.status === "fulfilled" && groceryItemsRes.value.error) errors.push(`grocery_items: ${groceryItemsRes.value.error.message}`);
         if (grocerySubcategoriesRes.status === "fulfilled" && grocerySubcategoriesRes.value.error) errors.push(`grocery_subcategories: ${grocerySubcategoriesRes.value.error.message}`);
         if (groceryOrdersRes.status === "rejected") errors.push(`grocery_orders: ${String(groceryOrdersRes.reason)}`);
+        if (groceryStoresRes.status === "rejected") errors.push(`grocery_stores: ${String(groceryStoresRes.reason)}`);
         if (groceryCategoriesRes.status === "rejected") errors.push(`grocery_categories: ${String(groceryCategoriesRes.reason)}`);
         if (groceryItemsRes.status === "rejected") errors.push(`grocery_items: ${String(groceryItemsRes.reason)}`);
         if (grocerySubcategoriesRes.status === "rejected") errors.push(`grocery_subcategories: ${String(grocerySubcategoriesRes.reason)}`);
@@ -550,6 +601,7 @@ export default function AdminRevenuePage() {
   const summary = useMemo(() => {
     let completedRevenue = 0;
     let cancelledRevenue = 0;
+    let revenueOrders = 0;
     let completedOrders = 0;
     let cancelledOrders = 0;
     let restaurantRevenue = 0;
@@ -570,13 +622,23 @@ export default function AdminRevenuePage() {
       const status = normalize(row.status);
       const raw = row.raw || {};
       const rowAmount = pickNumFromCols(raw, TOTAL_COLS) || toNum(row.amount);
-      const rowPlatformFee = row.channel === "restaurant" ? pickNumFromCols(raw, PLATFORM_FEE_COLS) : 0;
-      const rowTaxAmount = row.channel === "restaurant" ? pickNumFromCols(raw, TAX_COLS) : 0;
+      const storedPlatformFee = pickNumFromCols(raw, PLATFORM_FEE_COLS);
+      const storedTaxAmount = pickNumFromCols(raw, TAX_COLS);
       const rowTipAmount = pickNumFromCols(raw, TIP_COLS);
       const rowDeliveryFee = pickNumFromCols(raw, DELIVERY_FEE_COLS);
-      const rowDeliveryPayout = pickNumFromCols(raw, DELIVERY_PAYOUT_COLS);
-      const rowDiscountAmount = row.channel === "restaurant" ? pickNumFromCols(raw, DISCOUNT_COLS) : 0;
-      const rowSubtotalAmount = row.channel === "restaurant" ? pickNumFromCols(raw, SUBTOTAL_COLS) : 0;
+      const payoutFromCols = pickNumFromCols(raw, DELIVERY_PAYOUT_COLS);
+      const rowDeliveryPayout = payoutFromCols > 0 ? payoutFromCols : rowDeliveryFee + rowTipAmount;
+      const rowDiscountAmount = pickNumFromCols(raw, DISCOUNT_COLS);
+      const rowSubtotalAmount = pickNumFromCols(raw, SUBTOTAL_COLS);
+      const feeBase = rowSubtotalAmount > 0 ? rowSubtotalAmount : Math.max(0, rowAmount);
+      const rowPlatformFee =
+        storedPlatformFee > 0 || row.channel !== "grocery"
+          ? storedPlatformFee
+          : Math.round(feeBase * (Math.max(0, Number(platformPercents.commission || 0)) / 100));
+      const rowTaxAmount =
+        storedTaxAmount > 0 || row.channel !== "grocery"
+          ? storedTaxAmount
+          : Math.round(feeBase * (Math.max(0, Number(platformPercents.gst || 0)) / 100));
 
       platformFeeRevenue += rowPlatformFee;
       deliveryFeeRevenue += rowDeliveryFee;
@@ -586,9 +648,12 @@ export default function AdminRevenuePage() {
       discountValue += rowDiscountAmount;
       subtotalRevenue += rowSubtotalAmount;
 
-      if (COMPLETED_STATUSES.includes(status)) {
+      const includeInRevenue =
+        statusFilter === "all" ? !CANCELLED_STATUSES.includes(status) : COMPLETED_STATUSES.includes(status);
+
+      if (includeInRevenue) {
         completedRevenue += rowAmount;
-        completedOrders += 1;
+        revenueOrders += 1;
 
         if (row.channel === "restaurant") restaurantRevenue += rowAmount;
         else if (row.channel === "grocery") groceryRevenue += rowAmount;
@@ -604,13 +669,17 @@ export default function AdminRevenuePage() {
         outletMap[key].orders += 1;
       }
 
+      if (COMPLETED_STATUSES.includes(status)) {
+        completedOrders += 1;
+      }
+
       if (CANCELLED_STATUSES.includes(status)) {
         cancelledRevenue += rowAmount;
         cancelledOrders += 1;
       }
     }
 
-    const avgOrderValue = completedOrders ? completedRevenue / completedOrders : 0;
+    const avgOrderValue = revenueOrders ? completedRevenue / revenueOrders : 0;
     const completionRate = filteredRows.length ? Math.round((completedOrders / filteredRows.length) * 100) : 0;
     const netPlatformProfit = platformFeeRevenue + deliveryFeeRevenue - driverPayouts;
 
@@ -645,7 +714,7 @@ export default function AdminRevenuePage() {
       topOutlets,
       paymentBreakdown,
     };
-  }, [filteredRows]);
+  }, [filteredRows, statusFilter, platformPercents]);
 
   const chartData = useMemo(() => {
     const start = getRangeStart(range, customFrom);
@@ -692,14 +761,14 @@ export default function AdminRevenuePage() {
 
     if (channelFilter === "all" || channelFilter === "restaurant") {
       for (const [id, name] of Object.entries(restaurantMap)) {
-        const key = `restaurant:${id}`;
+        const key = makeOutletFilterKey("restaurant", id, name || "Restaurant");
         if (!seen[key]) seen[key] = { key, label: `Restaurant • ${name || "Restaurant"}` };
       }
     }
 
     if (channelFilter === "all" || channelFilter === "grocery") {
       for (const [id, name] of Object.entries(groceryMap)) {
-        const key = `grocery:${id}`;
+        const key = makeOutletFilterKey("grocery", id, name || "Grocery Store");
         if (!seen[key]) seen[key] = { key, label: `Grocery • ${name || "Grocery Store"}` };
       }
     }
@@ -903,7 +972,7 @@ export default function AdminRevenuePage() {
         <div style={card(3)}>
           <div style={title}>Platform Fee Earned</div>
           <div style={value}>{formatMoney(summary.platformFeeRevenue, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From platform_fee / commission_amount when available on completed restaurant rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From stored platform/service fee; grocery fallback uses platform % setting when missing</div>
         </div>
 
         <div style={card(3)}>
@@ -927,7 +996,7 @@ export default function AdminRevenuePage() {
         <div style={card(3)}>
           <div style={title}>Tax Collected</div>
           <div style={value}>{formatMoney(summary.taxRevenue, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From tax_amount / gst_amount when available on completed restaurant rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From stored tax/gst; grocery fallback uses gst % setting when missing</div>
         </div>
 
         <div style={card(3)}>
@@ -939,13 +1008,13 @@ export default function AdminRevenuePage() {
         <div style={card(3)}>
           <div style={title}>Discount Value</div>
           <div style={value}>{formatMoney(summary.discountValue, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From discount_amount on completed restaurant rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From discount fields on filtered rows</div>
         </div>
 
         <div style={card(3)}>
           <div style={title}>Subtotal Before Tax/Fees</div>
           <div style={value}>{formatMoney(summary.subtotalRevenue, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From subtotal_amount on completed restaurant rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From subtotal fields on filtered rows</div>
         </div>
 
         <div style={{ gridColumn: "span 6" }}>

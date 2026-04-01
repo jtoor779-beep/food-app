@@ -1676,7 +1676,7 @@ export default function GroceryOwnerItemsPage() {
   if (checking) {
     return (
       <main style={{ padding: 24 }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", fontWeight: 900 }}>Checking…</div>
+        <div style={{ maxWidth: 1100, margin: "0 auto", fontWeight: 900 }}>Checking...</div>
       </main>
     );
   }
@@ -1692,7 +1692,7 @@ export default function GroceryOwnerItemsPage() {
           <div>
             <div style={pill}>Grocery Owner</div>
             <h1 style={heroTitle}>Manage Menu</h1>
-            <div style={subText}>Create Categories → Create Subcategories → Add Items (clean)</div>
+            <div style={subText}>Create Categories, then Create Subcategories, then Add Items</div>
 
             <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
               <Link href="/groceries/owner/dashboard" style={btnPillLight}>
@@ -1810,9 +1810,9 @@ export default function GroceryOwnerItemsPage() {
             {!storeId ? (
               <div style={alertInfoMini}>✅ Select a store to manage menu.</div>
             ) : !storeApproved ? (
-              <div style={alertInfoMini}>⏳ Store is pending. Admin approval required before adding items.</div>
+              <div style={alertInfoMini}>Store is pending. Admin approval is required before adding items.</div>
             ) : storeDisabled ? (
-              <div style={alertErrMini}>🚫 Store disabled by admin.</div>
+              <div style={alertErrMini}>Store disabled by admin.</div>
             ) : (
               <div style={okMini}>✅ No manual typing inside Add Item</div>
             )}
@@ -2011,7 +2011,7 @@ export default function GroceryOwnerItemsPage() {
                   style={btnTiny}
                   disabled={!storeId || catsLoading || busy}
                 >
-                  {catsLoading ? "Loading…" : "Refresh"}
+                  {catsLoading ? "Loading..." : "Refresh"}
                 </button>
               </div>
 
@@ -2068,7 +2068,7 @@ export default function GroceryOwnerItemsPage() {
                   style={btnTiny}
                   disabled={!storeId || !manageCatId || subsLoading || busy}
                 >
-                  {subsLoading ? "Loading…" : "Refresh"}
+                  {subsLoading ? "Loading..." : "Refresh"}
                 </button>
               </div>
 
@@ -2096,13 +2096,13 @@ export default function GroceryOwnerItemsPage() {
               Note: Your error earlier was because <b>grocery_categories.slug</b> is required. We now auto-generate it.
             </span>
             <span style={notePill}>
-              Note: Your <b>grocery_items</b> table doesn’t have “subcategory” column. We safely save subcategory only if your DB supports it.
+              Note: Your <b>grocery_items</b> table doesn&apos;t have a &quot;subcategory&quot; column. We safely save subcategory only if your DB supports it.
             </span>
             <span style={notePill}>
               Note: Tax toggle saves to <b>grocery_items.is_taxable</b> if your DB has that column (safe fallback if not).
             </span>
             <span style={notePill}>
-              NEW: Weight options save to <b>grocery_item_variants</b> (safe; won’t break if missing).
+              NEW: Weight options save to <b>grocery_item_variants</b> (safe; won&apos;t break if missing).
             </span>
           </div>
         </div>
@@ -2141,14 +2141,14 @@ export default function GroceryOwnerItemsPage() {
           </div>
 
           <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 12 }}>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} style={input} placeholder="Search your menu…" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} style={input} placeholder="Search your menu..." />
             <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} style={input}>
               <option value="newest">Sort: Newest</option>
               <option value="oldest">Sort: Oldest</option>
-              <option value="price_asc">Sort: Price (Low → High)</option>
-              <option value="price_desc">Sort: Price (High → Low)</option>
-              <option value="name_asc">Sort: Name (A → Z)</option>
-              <option value="name_desc">Sort: Name (Z → A)</option>
+              <option value="price_asc">Sort: Price (Low to High)</option>
+              <option value="price_desc">Sort: Price (High to Low)</option>
+              <option value="name_asc">Sort: Name (A to Z)</option>
+              <option value="name_desc">Sort: Name (Z to A)</option>
             </select>
           </div>
 
@@ -2321,7 +2321,7 @@ export default function GroceryOwnerItemsPage() {
                   (bulkScope === "subcategory" && subcategoryFilter === "all")
                 }
               >
-                {busy ? "Applying…" : "Apply Bulk Price"}
+                {busy ? "Applying..." : "Apply Bulk Price"}
               </button>
             </div>
 
@@ -2334,7 +2334,7 @@ export default function GroceryOwnerItemsPage() {
           </div>
 
           {loadingItems ? (
-            <div style={{ marginTop: 10, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading items…</div>
+            <div style={{ marginTop: 10, fontWeight: 900, color: "rgba(17,24,39,0.7)" }}>Loading items...</div>
           ) : null}
 
           {!loadingItems && (!filteredItems || filteredItems.length === 0) ? (
@@ -2353,7 +2353,7 @@ export default function GroceryOwnerItemsPage() {
                       disabled={busy}
                       title={selectedIdsSet.has(it.id) ? "Unselect item" : "Select item"}
                     >
-                      {selectedIdsSet.has(it.id) ? "✓ Selected" : "Select"}
+                      {selectedIdsSet.has(it.id) ? "Selected" : "Select"}
                     </button>
                     {it.image_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -2451,12 +2451,12 @@ export default function GroceryOwnerItemsPage() {
                   {editingId ? "Edit Item" : "Add Item"}
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.62)" }}>
-                  Store: {activeStore?.name || "-"} • Upload bucket: grocery-images (fallback menu-images)
+                  Store: {activeStore?.name || "-"} - Upload bucket: grocery-images (fallback menu-images)
                 </div>
               </div>
 
               <button type="button" onClick={closeModal} style={iconBtn} disabled={busy || uploading} aria-label="Close">
-                ✕
+                X
               </button>
             </div>
 
@@ -2471,7 +2471,7 @@ export default function GroceryOwnerItemsPage() {
                 <div>
                   <div style={label}>Base Price *</div>
                   <input value={price} onChange={(e) => setPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
-                  <div style={hintSmall}>Base price is used if you don’t add weight options.</div>
+                  <div style={hintSmall}>Base price is used if you don&apos;t add weight options.</div>
                 </div>
 
                 <div style={{ gridColumn: "1 / -1" }}>
@@ -2483,7 +2483,7 @@ export default function GroceryOwnerItemsPage() {
                           Add multiple weights (lb/kg/etc). Customer will select one on product page.
                         </div>
                       </div>
-                      <span style={tag}>Optional ✅</span>
+                      <span style={tag}>Optional</span>
                     </div>
 
                     <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "140px 120px 1fr 160px 120px", gap: 10, alignItems: "end" }}>
@@ -2612,7 +2612,7 @@ export default function GroceryOwnerItemsPage() {
                           </div>
                         ))}
                         <div style={hintSmall}>
-                          Save will store these options in <b>grocery_item_variants</b>. If table doesn’t exist, item still saves but variants won’t.
+                          Save will store these options in <b>grocery_item_variants</b>. If the table doesn&apos;t exist, the item still saves but the variants won&apos;t.
                         </div>
                       </div>
                     ) : (
@@ -2676,7 +2676,7 @@ export default function GroceryOwnerItemsPage() {
                         disabled={uploading || busy || !storeId || !storeApproved || storeDisabled}
                         title={!storeId ? "Select store first" : !storeApproved ? "Store must be approved" : storeDisabled ? "Store disabled" : "Upload image"}
                       >
-                        {uploading ? "Uploading…" : "Upload Image"}
+                        {uploading ? "Uploading..." : "Upload Image"}
                       </button>
 
                       {imageUrl ? (
@@ -2740,7 +2740,7 @@ export default function GroceryOwnerItemsPage() {
 
               <div style={modalFooter}>
                 <button type="button" onClick={saveItem} style={btnPrimary} disabled={busy || uploading || !storeId || !storeApproved || storeDisabled}>
-                  {busy ? "Saving…" : editingId ? "Save Changes" : "Add Item"}
+                  {busy ? "Saving..." : editingId ? "Save Changes" : "Add Item"}
                 </button>
 
                 <button
@@ -3547,3 +3547,4 @@ const csvTd = {
   color: "rgba(17,24,39,0.82)",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
+

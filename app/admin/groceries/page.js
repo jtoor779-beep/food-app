@@ -131,14 +131,14 @@ export default function AdminGroceriesPage() {
     <div style={pageBg}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div style={pill}>Admin • Groceries</div>
+          <div style={pill}>Admin - Groceries</div>
           <div style={title}>Grocery Store Requests</div>
           <div style={sub}>Approve / Reject stores, Enable/Disable, Accepting Orders.</div>
         </div>
 
         <div style={topActions}>
           <button onClick={load} style={btn} disabled={loading}>
-            {loading ? "Loading…" : "Refresh"}
+            {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
       </div>
@@ -173,7 +173,7 @@ export default function AdminGroceriesPage() {
 
         <div style={{ marginTop: 12 }}>
           {loading ? (
-            <div style={muted}>Loading grocery stores…</div>
+            <div style={muted}>Loading grocery stores...</div>
           ) : filtered.length === 0 ? (
             <div style={empty}>No stores found for this filter.</div>
           ) : (

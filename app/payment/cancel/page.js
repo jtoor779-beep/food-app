@@ -1,8 +1,67 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 
-export default function PaymentCancelPage() {
+function PaymentCancelInner() {
+  const sp = useSearchParams();
+  const orderId = sp.get("order_id") || "";
+  const orderType = sp.get("order_type") || "";
+  const appReturn = String(sp.get("app_return") || "").trim();
+  const [cleanupNote, setCleanupNote] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function cleanupCancelledOrder() {
+      if (!orderId) return;
+
+      try {
+        const r = await fetch("/api/stripe/order-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "cancel_unpaid",
+            orderId,
+            orderType,
+          }),
+        });
+
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        if (j?.removed) setCleanupNote("Your unpaid draft order was safely removed.");
+      } catch {
+        if (!cancelled) setCleanupNote("");
+      }
+    }
+
+    cleanupCancelledOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, orderType]);
+
+  useEffect(() => {
+    if (!appReturn || typeof window === "undefined") return;
+    const nextUrl = (() => {
+      try {
+        const url = new URL(appReturn);
+        if (orderId) url.searchParams.set("order_id", orderId);
+        if (orderType) url.searchParams.set("order_type", orderType);
+        return url.toString();
+      } catch {
+        return appReturn;
+      }
+    })();
+
+    const timer = setTimeout(() => {
+      window.location.assign(nextUrl);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [appReturn, orderId, orderType]);
+
   return (
     <main style={pageBg}>
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
@@ -26,9 +85,18 @@ export default function PaymentCancelPage() {
           <div style={note}>
             If this happened by mistake, just return to cart and click checkout again.
           </div>
+          {cleanupNote ? <div style={note}>{cleanupNote}</div> : null}
         </div>
       </div>
     </main>
+  );
+}
+
+export default function PaymentCancelPage() {
+  return (
+    <Suspense fallback={<main style={pageBg}><div style={{ maxWidth: 980, margin: "0 auto" }}><div style={card}><div style={pillBad}>Payment Cancelled</div><h1 style={title}>No worries</h1><div style={sub}>Returning you safely to checkout options...</div></div></div></main>}>
+      <PaymentCancelInner />
+    </Suspense>
   );
 }
 

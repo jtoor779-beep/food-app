@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -13,7 +13,7 @@ function normalizeRole(r) {
 }
 
 /* =========================================================
-   ✅ CURRENCY SUPPORT (SAFE, NO OLD LOGIC CHANGED)
+   âœ… CURRENCY SUPPORT (SAFE, NO OLD LOGIC CHANGED)
    - Default stays INR unless Admin sets default_currency
    - If localStorage "foodapp_currency" is set to "USD",
      this page will format prices in USD.
@@ -30,11 +30,11 @@ function normalizeCurrency(c) {
 
 function money(v, currency = DEFAULT_CURRENCY) {
   const n = Number(v || 0);
-  if (!isFinite(n)) return currency === "USD" ? "$0.00" : "₹0";
+  if (!isFinite(n)) return currency === "USD" ? "$0.00" : "?0";
 
   const cur = normalizeCurrency(currency);
 
-  // Preserve OLD look: INR had no decimals (₹123)
+  // Preserve OLD look: INR had no decimals (â‚¹123)
   const fractionDigits = cur === "INR" ? 0 : 2;
 
   try {
@@ -47,12 +47,12 @@ function money(v, currency = DEFAULT_CURRENCY) {
   } catch {
     // Fallback if Intl fails for any reason
     const fixed = n.toFixed(fractionDigits);
-    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+    return cur === "USD" ? `$${fixed}` : `?${Number(fixed).toFixed(0)}`;
   }
 }
 
 /* =========================================================
-   ✅ CART STORAGE FIX (NO FREEZE)
+   âœ… CART STORAGE FIX (NO FREEZE)
    - NO "storage" event dispatch inside READ functions
    - Uses custom event: "foodapp_cart_updated"
    ========================================================= */
@@ -85,7 +85,7 @@ function sanitizeQty(qty) {
   return i;
 }
 
-/* ✅ local bool helper (kept here to avoid dependencies) */
+/* âœ… local bool helper (kept here to avoid dependencies) */
 function asBoolLocal(v, fallback = true) {
   if (typeof v === "boolean") return v;
   if (typeof v === "number") return v === 1;
@@ -109,9 +109,9 @@ function normalizeCartShape(arr) {
       note: x?.note || "",
 
       /* =========================================================
-         ✅ NEW (SAFE): taxable flag support
-         - if missing → defaults TRUE (old behavior)
-         - if saved as is_taxable false → tax won’t apply
+         âœ… NEW (SAFE): taxable flag support
+         - if missing â†’ defaults TRUE (old behavior)
+         - if saved as is_taxable false â†’ tax wonâ€™t apply
          ========================================================= */
       is_taxable: asBoolLocal(x?.is_taxable, true),
     }))
@@ -144,7 +144,7 @@ function mergePreferMax(a, b) {
         price_each: existing.price_each || it.price_each,
         note: existing.note || it.note || "",
 
-        // ✅ keep taxable flag if already present
+        // âœ… keep taxable flag if already present
         is_taxable:
           typeof existing.is_taxable === "boolean"
             ? existing.is_taxable
@@ -157,7 +157,7 @@ function mergePreferMax(a, b) {
 }
 
 /**
- * READ only (no writes, no events) — prevents freeze
+ * READ only (no writes, no events) â€” prevents freeze
  */
 function readRestaurantCartRaw() {
   const rawA = safeParse(localStorage.getItem("cart_items"));
@@ -195,7 +195,7 @@ function setCartCompat(items) {
 }
 
 /* =========================================================
-   ✅ GROCERY CART (SEPARATE KEY)
+   âœ… GROCERY CART (SEPARATE KEY)
    + ALSO SUPPORT groceries that were written into "cart_items"
    ========================================================= */
 
@@ -204,7 +204,7 @@ const GROCERY_FALLBACK_KEY = "grocery_cart";
 const CART_ITEMS_KEY = "cart_items";
 
 /* =========================================================
-   ✅ NEW (SAFE): grocery unit price helper
+   âœ… NEW (SAFE): grocery unit price helper
    - Prefer unit_price (variant-selected)
    - Fallback to price (old behavior)
    ========================================================= */
@@ -229,26 +229,26 @@ function normalizeGroceryCartShape(arr) {
       );
 
       return {
-        // ✅ supports BOTH old grocery cart shape and new homepage shape
+        // âœ… supports BOTH old grocery cart shape and new homepage shape
         id: rawId, // grocery_items.id
         grocery_item_id: rawId, // keep explicit id too for compatibility
         store_id: x?.store_id, // grocery_stores.id
         name: x?.name,
-        // ✅ keep old field for backward compatibility
+        // âœ… keep old field for backward compatibility
         price: clampMoney(x?.price ?? x?.price_each, 0, 100000, unit_price),
-        // ✅ preferred price for calculations
+        // âœ… preferred price for calculations
         unit_price,
-        // ✅ keep homepage field too so nothing breaks after sync
+        // âœ… keep homepage field too so nothing breaks after sync
         price_each: unit_price,
         qty: sanitizeQty(x?.qty),
         image_url: x?.image_url || "",
         category: x?.category || "General",
         item_type: x?.item_type || "grocery",
 
-        // ✅ show selected variant/weight label if saved
+        // âœ… show selected variant/weight label if saved
         variant_label: String(x?.variant_label || x?.variant || x?.weight_label || "").trim(),
 
-        // ✅ stable key if you saved it (safe optional)
+        // âœ… stable key if you saved it (safe optional)
         cart_key:
           String(
             x?.cart_key ||
@@ -256,7 +256,7 @@ function normalizeGroceryCartShape(arr) {
               (rawId && x?.variant_label ? `${rawId}__${String(x.variant_label).trim()}` : "")
           ).trim() || null,
 
-        /* ✅ optional future: grocery taxable */
+        /* âœ… optional future: grocery taxable */
         is_taxable: asBoolLocal(x?.is_taxable, true),
       };
     })
@@ -292,7 +292,7 @@ function readGroceryCartRaw() {
   const a = normalizeGroceryCartShape(rawA);
   const b = normalizeGroceryCartShape(rawB);
 
-  // ✅ NEW: if both grocery keys empty, try groceries inside cart_items
+  // âœ… NEW: if both grocery keys empty, try groceries inside cart_items
   const c = a.length === 0 && b.length === 0 ? readGroceryFromCartItemsKey() : [];
 
   if (a.length === 0 && b.length === 0 && c.length === 0) return [];
@@ -324,7 +324,7 @@ function setGroceryCart(items) {
 }
 
 /* =========================
-   ✅ REAL GEOCODING HELPERS
+   âœ… REAL GEOCODING HELPERS
    ========================= */
 
 function buildFullAddress({ address_line1, address_line2, landmark }) {
@@ -340,27 +340,40 @@ async function geocodeAddressClient(q) {
     const address = String(q || "").trim();
     if (!address) return null;
 
-    const r = await fetch("/api/geocode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: address }),
-    });
+    const queries = Array.from(
+      new Set([
+        address,
+        `${address}, USA`,
+      ])
+    );
 
-    const j = await r.json().catch(() => null);
-    if (!j || !j.ok) return null;
+    for (const candidate of queries) {
+      console.log("[grocery-cart] geocode request", { candidate });
+      const r = await fetch("/api/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ q: candidate }),
+      });
 
-    const lat = Number(j.lat);
-    const lng = Number(j.lng);
-    if (!isFinite(lat) || !isFinite(lng)) return null;
+      const j = await r.json().catch(() => null);
+      console.log("[grocery-cart] geocode response", { candidate, response: j });
+      if (!j || !j.ok) continue;
 
-    return { lat, lng, display_name: j.display_name || "" };
+      const lat = Number(j.lat);
+      const lng = Number(j.lng);
+      if (!isFinite(lat) || !isFinite(lng)) continue;
+
+      return { lat, lng, display_name: j.display_name || "" };
+    }
+
+    return null;
   } catch {
     return null;
   }
 }
 
 /* =========================
-   ✅ COUPON HELPERS (DB)
+   âœ… COUPON HELPERS (DB)
    ========================= */
 
 function normCode(code) {
@@ -399,7 +412,7 @@ async function countRows(table, filters = []) {
   }
 }
 
-// ✅ UPDATED: accept currency for better user-facing messages (default stays INR)
+// âœ… UPDATED: accept currency for better user-facing messages (default stays INR)
 async function validateCouponFromDb({ code, subtotal, userId, currency = DEFAULT_CURRENCY }) {
   const clean = normCode(code);
   if (!clean) return { ok: false, reason: "Enter coupon code." };
@@ -485,7 +498,7 @@ async function validateCouponFromDb({ code, subtotal, userId, currency = DEFAULT
 }
 
 /* =========================================================
-   ✅ Grocery checkout DB helpers (AUTO column-safe)
+   âœ… Grocery checkout DB helpers (AUTO column-safe)
    Tables:
    - grocery_orders
    - grocery_order_items  (plural)
@@ -493,7 +506,12 @@ async function validateCouponFromDb({ code, subtotal, userId, currency = DEFAULT
 
 function isMissingColumnError(msg) {
   const m = String(msg || "").toLowerCase();
-  return m.includes("column") && m.includes("does not exist");
+  return (
+    (m.includes("column") && m.includes("does not exist")) ||
+    (m.includes("column") && m.includes("schema cache")) ||
+    m.includes("could not find the") ||
+    m.includes("pgrst")
+  );
 }
 
 function grocerySubstitutionLabel(v) {
@@ -511,18 +529,115 @@ async function insertGroceryOrderAuto(payload) {
       delete x.store_id;
       return x;
     })(),
+    (() => {
+      const x = { ...payload, store_id: payload.store_id };
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload, store_id: payload.store_id };
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.store_lat;
+      delete x.store_lng;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload, store_id: payload.store_id };
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      delete x.store_lat;
+      delete x.store_lng;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload, store_id: payload.store_id };
+      delete x.store_id;
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      delete x.store_lat;
+      delete x.store_lng;
+      delete x.customer_lat;
+      delete x.customer_lng;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload };
+      delete x.store_id;
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload };
+      delete x.store_id;
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.store_lat;
+      delete x.store_lng;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload };
+      delete x.store_id;
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      delete x.store_lat;
+      delete x.store_lng;
+      return x;
+    })(),
+    (() => {
+      const x = { ...payload };
+      delete x.store_id;
+      delete x.platform_fee;
+      delete x.delivery_payout;
+      delete x.delivery_distance_miles;
+      delete x.store_lat;
+      delete x.store_lng;
+      delete x.customer_lat;
+      delete x.customer_lng;
+      return x;
+    })(),
   ];
 
   let lastErr = null;
 
   for (const body of attempts) {
-    const { data, error } = await supabase.from("grocery_orders").insert(body).select("id").single();
-    if (!error) return data;
-    lastErr = error;
+    const nextBody = { ...body };
+    const removed = new Set();
 
-    const msg = error?.message || String(error);
-    if (isMissingColumnError(msg)) continue;
-    throw error;
+    for (let i = 0; i < 12; i += 1) {
+      const { data, error } = await supabase
+        .from("grocery_orders")
+        .insert(nextBody)
+        .select("id")
+        .single();
+      if (!error) return data;
+
+      lastErr = error;
+      const msg = error?.message || String(error);
+      if (!isMissingColumnError(msg)) throw error;
+
+      const quoted = String(msg).match(/'([^']+)'/);
+      const missingRaw = quoted?.[1] || "";
+      const missingColumn = String(missingRaw).includes(".")
+        ? String(missingRaw).split(".").pop()
+        : String(missingRaw || "").trim();
+
+      if (missingColumn && missingColumn in nextBody && !removed.has(missingColumn)) {
+        removed.add(missingColumn);
+        delete nextBody[missingColumn];
+        continue;
+      }
+
+      break;
+    }
   }
 
   throw lastErr || new Error("Failed to create grocery order.");
@@ -575,7 +690,7 @@ async function insertGroceryOrderItemsAuto(rows) {
 }
 
 /* =========================================================
-   ✅ PLATFORM SETTINGS (FROM ADMIN /system_settings key=platform)
+   âœ… PLATFORM SETTINGS (FROM ADMIN /system_settings key=platform)
    ========================================================= */
 
 const PLATFORM_DEFAULTS = {
@@ -634,7 +749,7 @@ async function loadPlatformSettingsSafe() {
 }
 
 /* =========================================================
-   ✅ ORDERS INSERT (AUTO column-safe)
+   âœ… ORDERS INSERT (AUTO column-safe)
    ========================================================= */
 
 async function insertRestaurantOrderAuto(payload) {
@@ -701,7 +816,7 @@ async function insertRestaurantOrderAuto(payload) {
 }
 
 /* =========================
-   ✅ PREMIUM THEME (UNCHANGED)
+   âœ… PREMIUM THEME (UNCHANGED)
    ========================= */
 
 const pageBg = {
@@ -923,7 +1038,7 @@ const variantPill = {
 };
 
 /* =========================================================
-   ✅ NEW (SAFE): Cart item image UI helpers
+   âœ… NEW (SAFE): Cart item image UI helpers
    ========================================================= */
 
 const thumbWrap = {
@@ -991,7 +1106,7 @@ function ItemThumb({ src, name }) {
   );
 }
 
-// ✅ Mobile responsive hook (pure JS)
+// âœ… Mobile responsive hook (pure JS)
 function useIsMobile(breakpoint = 860) {
   const [isMobile, setIsMobile] = useState(false);
 
@@ -1028,10 +1143,10 @@ export default function CartPage() {
   const [infoMsg, setInfoMsg] = useState("");
   const [placing, setPlacing] = useState(false);
 
-  // ✅ Currency state
+  // âœ… Currency state
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
-  // ✅ Platform settings state (from Admin panel)
+  // âœ… Platform settings state (from Admin panel)
   const [platform, setPlatform] = useState({ ...PLATFORM_DEFAULTS });
 
   // Delivery fields
@@ -1054,7 +1169,7 @@ export default function CartPage() {
 
   const [tip, setTip] = useState(0);
 
-  // ✅ default to card
+  // âœ… default to card
   const [paymentMethod, setPaymentMethod] = useState("card");
 
   const [saveAddress, setSaveAddress] = useState(true);
@@ -1101,7 +1216,15 @@ export default function CartPage() {
     const base = Math.max(0, baseFromAdmin);
 
     const freeOver = Math.max(0, toNum(platform?.delivery_free_over, 499));
-    return freeOver > 0 && subtotal >= freeOver ? 0 : base;
+    const computed = freeOver > 0 && subtotal >= freeOver ? 0 : base;
+    console.log("[grocery-cart] delivery fee computed", {
+      cartMode,
+      subtotal: Number(subtotal || 0),
+      baseFromAdmin,
+      freeOver,
+      computed,
+    });
+    return computed;
   }, [activeItems, subtotal, platform]);
 
   const gstPercent = useMemo(() => {
@@ -1109,16 +1232,15 @@ export default function CartPage() {
     return Math.max(0, Math.min(100, p));
   }, [platform]);
 
-  // ✅ tax calculated on taxableSubtotal
+  // âœ… tax calculated on taxableSubtotal
   const gst = useMemo(() => Math.round(Number(taxableSubtotal || 0) * (gstPercent / 100)), [taxableSubtotal, gstPercent]);
 
   const discount = useMemo(() => {
-    if (cartMode !== "restaurant") return 0;
     if (!couponApplied) return 0;
     return Math.max(0, Number(couponDiscountValue || 0));
-  }, [cartMode, couponApplied, couponDiscountValue]);
+  }, [couponApplied, couponDiscountValue]);
 
-  // ✅ commission calculations (used for display + platform fee)
+  // âœ… commission calculations (used for display + platform fee)
   const commissionPercent = useMemo(() => {
     const p = toNum(platform?.commission_percent, 10);
     return Math.max(0, Math.min(100, p));
@@ -1164,6 +1286,7 @@ export default function CartPage() {
       if (cancelled) return;
 
       setPlatform(s);
+      console.log("[grocery-cart] platform settings", s);
 
       try {
         const forced = localStorage.getItem("foodapp_currency");
@@ -1272,7 +1395,6 @@ export default function CartPage() {
     let cancelled = false;
 
     async function recheck() {
-      if (cartMode !== "restaurant") return;
       if (!couponApplied?.code) return;
       try {
         const { data: userData } = await supabase.auth.getUser();
@@ -1369,8 +1491,11 @@ export default function CartPage() {
   function clearCart() {
     if (cartMode === "grocery") {
       setGroceryItems([]);
+      setCoupon("");
+      setCouponApplied(null);
+      setCouponDiscountValue(0);
       setTip(0);
-      setInfoMsg("✅ Grocery cart cleared.");
+      setInfoMsg("Grocery cart cleared.");
       setErrMsg("");
       return;
     }
@@ -1380,18 +1505,13 @@ export default function CartPage() {
     setCouponApplied(null);
     setCouponDiscountValue(0);
     setTip(0);
-    setInfoMsg("✅ Cart cleared.");
+    setInfoMsg("Cart cleared.");
     setErrMsg("");
   }
 
   async function applyCoupon() {
     setErrMsg("");
     setInfoMsg("");
-
-    if (cartMode !== "restaurant") {
-      setErrMsg("Coupons are currently available only for restaurant orders.");
-      return;
-    }
 
     const code = normCode(coupon);
     if (!code) return;
@@ -1417,7 +1537,7 @@ export default function CartPage() {
 
       setCouponApplied(res.coupon);
       setCouponDiscountValue(res.discount || 0);
-      setInfoMsg(`✅ Coupon ${res.coupon.code} applied. Discount: ${money(res.discount || 0, currency)}`);
+      setInfoMsg(`Coupon ${res.coupon.code} applied. Discount: ${money(res.discount || 0, currency)}`);
     } finally {
       setCouponLoading(false);
     }
@@ -1441,7 +1561,7 @@ export default function CartPage() {
   }
 
   /* =========================================================
-     ✅ STRIPE CHECKOUT
+     âœ… STRIPE CHECKOUT
      ========================================================= */
   function buildStripeItems() {
     if (cartMode === "grocery") {
@@ -1483,10 +1603,13 @@ export default function CartPage() {
     const store_id = cartMode === "grocery" ? (gItems[0]?.store_id || "") : "";
 
     const order_type = cartMode === "grocery" ? "grocery" : "restaurant";
-    const success_redirect = cartMode === "grocery" ? "/groceries/orders" : "/orders";
+    const success_redirect =
+  cartMode === "grocery"
+    ? "homyfodcustomer://payment/success?order_type=grocery"
+    : "homyfodcustomer://payment/success?order_type=restaurant";
 
     const payload = {
-      order_id: orderId, // ✅ send orderId
+      order_id: orderId, // âœ… send orderId
       items: buildStripeItems(),
       order_type,
       restaurant_id: restaurant_id || undefined,
@@ -1558,7 +1681,7 @@ export default function CartPage() {
     if (!phone.trim()) return setErrMsg("Please enter phone.");
     if (!address_line1.trim()) return setErrMsg("Please enter address line 1.");
 
-    // ✅ Grocery checkout (kept as-is)
+    // âœ… Grocery checkout (kept as-is)
     if (cartMode === "grocery") {
       if (!gItems || gItems.length === 0) return setErrMsg("Grocery cart is empty.");
 
@@ -1583,15 +1706,160 @@ export default function CartPage() {
           landmark: landmark.trim() || "",
         });
 
-        const geo = await geocodeAddressClient(fullAddr);
+        const geocodeAddr = [
+          address_line1.trim(),
+          address_line2.trim() || "",
+          landmark.trim() || "",
+          city.trim() || "",
+          state_region.trim() || "",
+          zip.trim() || "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+
+        console.log("[grocery-cart] geocode input", {
+          fullAddr,
+          geocodeAddr,
+        });
+
+        const geocodeCandidates = Array.from(
+          new Set(
+            [
+              geocodeAddr || fullAddr,
+              [
+                address_line1.trim(),
+                city.trim() || "",
+                state_region.trim() || "",
+                zip.trim() || "",
+              ]
+                .filter(Boolean)
+                .join(", "),
+              [
+                city.trim() || "",
+                state_region.trim() || "",
+                zip.trim() || "",
+              ]
+                .filter(Boolean)
+                .join(", "),
+              [
+                zip.trim() || "",
+                "USA",
+              ]
+                .filter(Boolean)
+                .join(", "),
+            ].filter(Boolean)
+          )
+        );
+
+        let geo = null;
+        for (const candidate of geocodeCandidates) {
+          geo = await geocodeAddressClient(candidate);
+          if (geo?.lat != null && geo?.lng != null) break;
+        }
 
         const platformFee = Number(groceryPlatformFeeAmount || 0);
         const subPrefLabel = grocerySubstitutionLabel(grocerySubstitutionPref);
         const groceryInstructions = [(instructions || "").trim(), `[Substitution: ${subPrefLabel}]`].filter(Boolean).join(" ");
+        let storeLat = null;
+        let storeLng = null;
+        try {
+          const tries = [
+            "lat, lng",
+            "latitude, longitude",
+            "location_lat, location_lng",
+            "store_lat, store_lng",
+          ];
+          for (const sel of tries) {
+            const { data: store, error: storeErr } = await supabase
+              .from("grocery_stores")
+              .select(sel)
+              .eq("id", store_id)
+              .maybeSingle();
+
+            if (storeErr) continue;
+
+            const la = Number(
+              store?.lat ?? store?.latitude ?? store?.location_lat ?? store?.store_lat
+            );
+            const ln = Number(
+              store?.lng ?? store?.longitude ?? store?.location_lng ?? store?.store_lng
+            );
+
+            storeLat = Number.isFinite(la) ? la : null;
+            storeLng = Number.isFinite(ln) ? ln : null;
+            break;
+          }
+        } catch {
+          storeLat = null;
+          storeLng = null;
+        }
+
+        let deliveryDistanceMiles = null;
+        try {
+          const cLat = Number(geo?.lat);
+          const cLng = Number(geo?.lng);
+          if (
+            Number.isFinite(storeLat) &&
+            Number.isFinite(storeLng) &&
+            Number.isFinite(cLat) &&
+            Number.isFinite(cLng)
+          ) {
+            const toRad = (x) => (Number(x) * Math.PI) / 180;
+            const R = 3958.8;
+            const dLat = toRad(cLat - storeLat);
+            const dLng = toRad(cLng - storeLng);
+            const a =
+              Math.sin(dLat / 2) ** 2 +
+              Math.cos(toRad(storeLat)) *
+                Math.cos(toRad(cLat)) *
+                Math.sin(dLng / 2) ** 2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const miles = R * c;
+            deliveryDistanceMiles =
+              Number.isFinite(miles) && miles > 0 ? miles : null;
+          }
+        } catch {
+          deliveryDistanceMiles = null;
+        }
+
+        let finalCoupon = null;
+        let finalDiscount = 0;
+
+        if (couponApplied?.code) {
+          const res = await validateCouponFromDb({
+            code: couponApplied.code,
+            subtotal: Number(subtotal || 0),
+            userId: user.id,
+            currency,
+          });
+
+          if (!res.ok) {
+            setCouponApplied(null);
+            setCouponDiscountValue(0);
+            setCoupon("");
+            throw new Error(res.reason || "Coupon invalid. Please apply again.");
+          }
+
+          finalCoupon = res.coupon;
+          finalDiscount = Number(res.discount || 0);
+          setCouponApplied(res.coupon);
+          setCouponDiscountValue(res.discount || 0);
+        }
+
+        const groceryMeta = [
+          finalCoupon?.code ? `coupon:${finalCoupon.code}` : "",
+          finalDiscount ? `discount:${money(finalDiscount, currency)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | ");
 
         const total_amount = Math.max(
           0,
-          Number(subtotal || 0) + Number(deliveryFee || 0) + Number(gst || 0) + Number(tip || 0) + platformFee
+          Number(subtotal || 0) + Number(deliveryFee || 0) + Number(gst || 0) + Number(tip || 0) + platformFee - Number(finalDiscount || 0)
+        );
+        const deliveryPayout = Math.max(
+          0,
+          Number(deliveryFee || 0) + Number(tip || 0)
         );
 
         const orderPayload = {
@@ -1600,12 +1868,30 @@ export default function CartPage() {
           customer_name: customer_name.trim(),
           customer_phone: phone.trim(),
           delivery_address: fullAddr,
-          instructions: groceryInstructions || null,
-          status: "pending",
+          instructions: [groceryInstructions, groceryMeta ? `[${groceryMeta}]` : ""].filter(Boolean).join(" ") || null,
+          status: "payment_pending",
           total_amount,
           customer_lat: geo?.lat ?? null,
           customer_lng: geo?.lng ?? null,
+          store_lat: storeLat,
+          store_lng: storeLng,
+          delivery_distance_miles: deliveryDistanceMiles,
+          delivery_fee: Number(deliveryFee || 0),
+          tip_amount: Number(tip || 0),
+          platform_fee: platformFee,
+          delivery_payout: deliveryPayout,
         };
+        console.log("[grocery-cart] order payload", {
+          store_id,
+          delivery_fee: orderPayload.delivery_fee,
+          tip_amount: orderPayload.tip_amount,
+          delivery_payout: orderPayload.delivery_payout,
+          delivery_distance_miles: orderPayload.delivery_distance_miles,
+          store_lat: orderPayload.store_lat,
+          store_lng: orderPayload.store_lng,
+          customer_lat: orderPayload.customer_lat,
+          customer_lng: orderPayload.customer_lng,
+        });
 
         let orderRow = null;
         try {
@@ -1632,13 +1918,10 @@ export default function CartPage() {
 
         await insertGroceryOrderItemsAuto(rows);
 
-        // ✅ Grocery = ONLY Stripe (card)
-        // Keep DB insert logic same, then redirect to Stripe checkout.
-        // Note: we clear local cart like restaurant flow; state update is async so payWithStripe still has items.
-        setGroceryItems([]);
-        setTip(0);
 
-        setInfoMsg("Redirecting to secure Stripe checkout…");
+        // âœ… Grocery = ONLY Stripe (card)
+        // Keep DB insert logic same, then redirect to Stripe checkout.
+        setInfoMsg("Redirecting to secure Stripe checkout...");
         await payWithStripe(orderRow.id);
         return;
       } catch (e) {
@@ -1649,7 +1932,7 @@ export default function CartPage() {
       return;
     }
 
-    // ✅ Restaurant checkout
+    // âœ… Restaurant checkout
     if (!items || items.length === 0) return setErrMsg("Cart is empty.");
 
     const restaurant_id = items[0]?.restaurant_id;
@@ -1713,18 +1996,74 @@ export default function CartPage() {
         landmark: landmark.trim() || "",
       });
 
-      const geo = await geocodeAddressClient(fullAddr);
+      const geocodeCandidates = Array.from(
+        new Set(
+          [
+            [
+              address_line1.trim(),
+              address_line2.trim() || "",
+              landmark.trim() || "",
+              city.trim() || "",
+              state_region.trim() || "",
+              zip.trim() || "",
+            ]
+              .filter(Boolean)
+              .join(", "),
+            [
+              address_line1.trim(),
+              city.trim() || "",
+              state_region.trim() || "",
+              zip.trim() || "",
+            ]
+              .filter(Boolean)
+              .join(", "),
+            [
+              city.trim() || "",
+              state_region.trim() || "",
+              zip.trim() || "",
+            ]
+              .filter(Boolean)
+              .join(", "),
+            [zip.trim() || "", "USA"].filter(Boolean).join(", "),
+            fullAddr,
+          ].filter(Boolean)
+        )
+      );
+
+      let geo = null;
+      for (const candidate of geocodeCandidates) {
+        geo = await geocodeAddressClient(candidate);
+        if (geo?.lat != null && geo?.lng != null) break;
+      }
 
       let restLat = null;
       let restLng = null;
       try {
-        const { data: rest, error: restErr } = await supabase.from("restaurants").select("lat, lng").eq("id", restaurant_id).maybeSingle();
-        if (restErr) throw restErr;
+        const tries = [
+          "lat, lng",
+          "latitude, longitude",
+          "location_lat, location_lng",
+          "store_lat, store_lng",
+        ];
+        for (const sel of tries) {
+          const { data: rest, error: restErr } = await supabase
+            .from("restaurants")
+            .select(sel)
+            .eq("id", restaurant_id)
+            .maybeSingle();
 
-        const la = Number(rest?.lat);
-        const ln = Number(rest?.lng);
-        restLat = isFinite(la) ? la : null;
-        restLng = isFinite(ln) ? ln : null;
+          if (restErr) continue;
+
+          const la = Number(
+            rest?.lat ?? rest?.latitude ?? rest?.location_lat ?? rest?.store_lat
+          );
+          const ln = Number(
+            rest?.lng ?? rest?.longitude ?? rest?.location_lng ?? rest?.store_lng
+          );
+          restLat = isFinite(la) ? la : null;
+          restLng = isFinite(ln) ? ln : null;
+          if (restLat != null && restLng != null) break;
+        }
       } catch {
         restLat = null;
         restLng = null;
@@ -1733,7 +2072,7 @@ export default function CartPage() {
       const subtotal_amount = Math.max(0, Number(subtotal || 0));
       const discount_amount = Math.max(0, Number(finalDiscount || 0));
 
-      // ✅ YOUR DB uses platform_fee + tax_amount
+      // âœ… YOUR DB uses platform_fee + tax_amount
       const platformFee = Number(commissionAmount || 0);
 
       const total_amount = Math.max(
@@ -1746,11 +2085,11 @@ export default function CartPage() {
           discount_amount
       );
 
-      // ✅ FIXED: match your orders table columns (NO commission_amount)
+      // âœ… FIXED: match your orders table columns (NO commission_amount)
       const orderPayload = {
         user_id: user.id,
         restaurant_id,
-        status: "pending",
+        status: paymentMethod === "card" ? "payment_pending" : "pending",
         total: total_amount,
         subtotal_amount,
         discount_amount,
@@ -1774,6 +2113,7 @@ export default function CartPage() {
         platform_fee: platformFee,
 
         payment_method: paymentMethod === "card" ? "stripe" : (paymentMethod || "card"),
+        payment_status: paymentMethod === "card" ? "pending" : "paid",
         currency: normalizeCurrency(currency),
       };
 
@@ -1789,22 +2129,14 @@ export default function CartPage() {
       const { error: oiErr } = await supabase.from("order_items").insert(order_items_rows);
       if (oiErr) throw oiErr;
 
-      // ✅ NEW (SAFE): push test notification to delivery dashboard after a real restaurant order is created
-      // Best-effort only: if push fails, checkout flow continues without breaking old logic.
-      try {
-        await fetch("/api/push", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_id: "322ca00b-a6f6-481e-9416-451b4be77f75",
-            title: "New Order Assigned",
-            body: `Order #${String(orderRow?.id || "").slice(0, 8)} placed from cart`,
-            url: "/delivery",
-          }),
-        });
-      } catch {}
+      // âœ… Card payments -> Stripe after DB order exists
+      if (paymentMethod === "card") {
+        setInfoMsg("Redirecting to secure Stripe checkout...");
+        await payWithStripe(orderRow.id);
+        return;
+      }
 
-      // ✅ AUTO NOTIFICATION (Option A): notify restaurant owner when a new order is placed
+      // âœ… AUTO NOTIFICATION (Option A): notify restaurant owner when a new order is placed
       // Safe: if owner/user columns differ or insert fails, we silently skip (no impact to checkout flow)
       try {
         const { data: restRow, error: restErr } = await supabase.from("restaurants").select("*").eq("id", restaurant_id).maybeSingle();
@@ -1813,10 +2145,10 @@ export default function CartPage() {
         const ownerUserId =
           restRow?.owner_user_id || restRow?.owner_id || restRow?.user_id || restRow?.created_by || restRow?.owner || null;
 
-        if (ownerUserId) {
-          const shortId = String(orderRow?.id || "").slice(0, 8);
-          const restName = restRow?.name || restRow?.restaurant_name || "Restaurant";
+        const shortId = String(orderRow?.id || "").slice(0, 8);
+        const restName = restRow?.name || restRow?.restaurant_name || "Restaurant";
 
+        if (ownerUserId) {
           await supabase.from("notifications").insert({
             user_id: ownerUserId,
             title: "New order received",
@@ -1826,18 +2158,17 @@ export default function CartPage() {
             is_read: false,
           });
         }
-      } catch {}
 
-      if (finalCoupon?.id) {
-        try {
-          await supabase.from("coupon_redemptions").insert({
-            coupon_id: finalCoupon.id,
-            user_id: user.id,
-            order_id: orderRow.id,
-            coupon_code: finalCoupon.code,
-          });
-        } catch {}
-      }
+        await supabase.from("notifications").insert({
+          user_id: user.id,
+          title: "Order placed",
+          body: `Your order ${shortId ? "#" + shortId : ""} for ${restName} was placed successfully.`,
+          type: "order",
+          link: "/orders",
+          is_read: false,
+        });
+
+      } catch {}
 
       setItems([]);
       setCoupon("");
@@ -1849,15 +2180,8 @@ export default function CartPage() {
       if (!geo) notes.push("Address geocode failed (drop location missing)");
       if (!restLat || !restLng) notes.push("Restaurant location missing (pickup location missing)");
 
-      if (notes.length) setInfoMsg(`✅ Order placed successfully! (Note: ${notes.join(" • ")})`);
-      else setInfoMsg("✅ Order placed successfully! (Pickup + drop locations saved)");
-
-      // ✅ Card payments -> Stripe after DB order exists
-      if (paymentMethod === "card") {
-        setInfoMsg("Redirecting to secure Stripe checkout…");
-        await payWithStripe(orderRow.id);
-        return;
-      }
+      if (notes.length) setInfoMsg(`Order placed successfully! (Note: ${notes.join(" - ")})`);
+      else setInfoMsg("Order placed successfully! (Pickup + drop locations saved)");
 
       router.push("/orders");
       router.refresh();
@@ -1983,7 +2307,7 @@ export default function CartPage() {
   }
 
   const backHref = cartMode === "grocery" ? "/groceries" : "/menu";
-  const backLabel = cartMode === "grocery" ? "← Back to Groceries" : "← Back to Menu";
+  const backLabel = cartMode === "grocery" ? "<- Back to Groceries" : "<- Back to Menu";
 
   const platformFeeToShow =
     cartMode === "restaurant"
@@ -2034,13 +2358,13 @@ export default function CartPage() {
         {infoMsg ? <div style={alertInfo}>{infoMsg}</div> : null}
 
         {loading ? (
-          <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div>
+          <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading...</div>
         ) : activeItems.length === 0 ? (
           <div style={{ marginTop: 12, ...emptyBox }}>
             Cart is empty.
             <div style={{ marginTop: 8 }}>
               <Link href={backHref} style={pill}>
-                Browse {cartMode === "grocery" ? "Groceries" : "Menu"} →
+                Browse {cartMode === "grocery" ? "Groceries" : "Menu"} {"->"}
               </Link>
             </div>
           </div>
@@ -2074,7 +2398,7 @@ export default function CartPage() {
                                 {it?.variant_label ? <div style={variantPill}>Option: {it.variant_label}</div> : null}
 
                                 <div style={itemMetaText}>
-                                  {money(unit, currency)} each • Line: <b>{money(line, currency)}</b>
+                                  {money(unit, currency)} each - Line: <b>{money(line, currency)}</b>
                                 </div>
                               </div>
                             </div>
@@ -2084,7 +2408,7 @@ export default function CartPage() {
                             <div style={qtyGroup}>
                               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                                  −
+                                  -
                                 </button>
                                 <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
                                 <button onClick={() => incQty(ix)} style={btnSmallGhost}>
@@ -2109,7 +2433,7 @@ export default function CartPage() {
                               <div style={itemTitleText}>{it.name || "Item"}</div>
 
                               <div style={itemMetaText}>
-                                {money(it.price_each, currency)} each • Line:{" "}
+                                {money(it.price_each, currency)} each - Line:{" "}
                                 <b>{money(Number(it.qty || 0) * Number(it.price_each || 0), currency)}</b>
                               </div>
 
@@ -2122,7 +2446,7 @@ export default function CartPage() {
                           <div style={qtyGroup}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <button onClick={() => decQty(ix)} style={btnSmallGhost}>
-                                −
+                                -
                               </button>
                               <div style={{ minWidth: 34, textAlign: "center", fontWeight: 1000 }}>{it.qty}</div>
                               <button onClick={() => incQty(ix)} style={btnSmallGhost}>
@@ -2139,53 +2463,47 @@ export default function CartPage() {
                     ))}
               </div>
 
-              {cartMode === "restaurant" ? (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
-                  <div>
-                    <div style={sectionTitle}>Offers</div>
-                    <div style={helperText}>Enter your coupon code</div>
-                  </div>
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
+                <div>
+                  <div style={sectionTitle}>Offers</div>
+                  <div style={helperText}>Enter your coupon code</div>
+                </div>
 
-                  <div style={offerRow}>
-                    <input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" style={input} />
-                    <button onClick={applyCoupon} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }} disabled={couponLoading}>
-                      {couponLoading ? "Checking…" : "Apply"}
-                    </button>
-                  </div>
+                <div style={offerRow}>
+                  <input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="Enter coupon code" style={input} />
+                  <button onClick={applyCoupon} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }} disabled={couponLoading}>
+                    {couponLoading ? "Checking..." : "Apply"}
+                  </button>
+                </div>
 
-                  {couponApplied ? (
-                    <div style={{ marginTop: 10, ...alertInfo }}>
-                      ✅ Coupon <b>{couponApplied.code}</b> applied. Discount: <b>{money(discount, currency)}</b>
-                      <div style={{ marginTop: 8 }}>
-                        <button
-                          onClick={() => {
-                            setCouponApplied(null);
-                            setCouponDiscountValue(0);
-                            setCoupon("");
-                            setInfoMsg("Coupon removed.");
-                          }}
-                          style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}
-                        >
-                          Remove coupon
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Tip delivery partner:</div>
-                    {[0, 10, 20, 30, 50].map((t) => (
-                      <button key={t} onClick={() => setTip(t)} style={tip === t ? chipActive : chip}>
-                        {t === 0 ? "No tip" : money(t, currency)}
+                {couponApplied ? (
+                  <div style={{ marginTop: 10, ...alertInfo }}>
+                    Coupon <b>{couponApplied.code}</b> applied. Discount: <b>{money(discount, currency)}</b>
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        onClick={() => {
+                          setCouponApplied(null);
+                          setCouponDiscountValue(0);
+                          setCoupon("");
+                          setInfoMsg("Coupon removed.");
+                        }}
+                        style={{ ...btnSmallGhost, width: isMobile ? "100%" : "auto" }}
+                      >
+                        Remove coupon
                       </button>
-                    ))}
+                    </div>
                   </div>
+                ) : null}
+
+                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Tip delivery partner:</div>
+                  {[0, 10, 20, 30, 50].map((t) => (
+                    <button key={t} onClick={() => setTip(t)} style={tip === t ? chipActive : chip}>
+                      {t === 0 ? "No tip" : money(t, currency)}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(0,0,0,0.08)" }}>
-                  <div style={helperText}>Grocery checkout is now wired ✅</div>
-                </div>
-              )}
+              </div>
             </div>
 
             <div ref={deliveryRef} style={cardGlass}>
@@ -2437,7 +2755,7 @@ export default function CartPage() {
                     <span>{money(payable, currency)}</span>
                   </div>
 
-                  {/* ✅ FIX: Always placeOrder (Stripe redirect happens inside after DB order) */}
+                  {/* âœ… FIX: Always placeOrder (Stripe redirect happens inside after DB order) */}
                   <button
                     onClick={placeOrder}
                     disabled={placing || !isAuthed}
@@ -2452,7 +2770,7 @@ export default function CartPage() {
                       fontSize: 14,
                     }}
                   >
-                    {placing ? "Processing…" : !isAuthed ? "Login to Place Order" : paymentMethod === "card" ? "Pay with Stripe" : "Place Order"}
+                    {placing ? "Processing..." : !isAuthed ? "Login to Place Order" : paymentMethod === "card" ? "Pay with Stripe" : "Place Order"}
                   </button>
                 </div>
               </div>
@@ -2463,11 +2781,11 @@ export default function CartPage() {
         {activeItems.length > 0 ? (
           <div style={sticky}>
             <div style={{ fontWeight: 1000, textAlign: isMobile ? "center" : "left" }}>
-              {itemCount} item{itemCount === 1 ? "" : "s"} • Payable <b>{money(payable, currency)}</b>
+              {itemCount} item{itemCount === 1 ? "" : "s"} - Payable <b>{money(payable, currency)}</b>
             </div>
 
             <button onClick={scrollToDelivery} style={{ ...btnSmallPrimary, width: isMobile ? "100%" : "auto" }}>
-              Checkout →
+              Checkout {"->"}
             </button>
           </div>
         ) : null}
@@ -2475,3 +2793,5 @@ export default function CartPage() {
     </main>
   );
 }
+
+

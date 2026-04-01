@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next";
 import NavBar from "../components/NavBar";
 import RouteContainer from "../components/RouteContainer";
 import { Inter } from "next/font/google";
+import { ToastProvider } from "../components/ToastProvider";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -54,9 +55,11 @@ export default function RootLayout({
           overflowX: "hidden",
         }}
       >
-        <NavBar />
-        {/* This will keep normal pages in maxWidth, but /admin will go full width */}
-        <RouteContainer>{children}</RouteContainer>
+        <ToastProvider>
+          <NavBar />
+          {/* This will keep normal pages in maxWidth, but /admin will go full width */}
+          <RouteContainer>{children}</RouteContainer>
+        </ToastProvider>
       </body>
     </html>
   );

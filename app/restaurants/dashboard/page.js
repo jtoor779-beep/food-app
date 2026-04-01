@@ -1,8 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import supabase from "@/lib/supabase";
+import { DEFAULT_APP_CURRENCY, formatAppMoney, getStoredAppCurrency, syncAppCurrency } from "@/lib/appCurrency";
 
 /* =========================
    PREMIUM THEME (match your orders page)
@@ -252,10 +253,8 @@ function pick(obj, keys, fallback = null) {
   return fallback;
 }
 
-function moneyINR(v) {
-  const n = Number(v || 0);
-  if (!isFinite(n)) return "₹0";
-  return `₹${n.toFixed(0)}`;
+function money(v, currency = DEFAULT_APP_CURRENCY) {
+  return formatAppMoney(v, currency);
 }
 
 function formatWhen(d) {
@@ -368,7 +367,7 @@ function buildKitchenTicketHTML(order, prepEtaMins) {
     })
     .join("");
 
-  const orderNo = esc(pick(order, ["order_number", "orderNo", "order_no", "id"], "—"));
+  const orderNo = esc(pick(order, ["order_number", "orderNo", "order_no", "id"], "-"));
   const when = esc(pick(order, ["created_at", "createdAt", "created"], ""));
   const customerName = esc(pick(order, ["customer_name", "name", "full_name"], "-"));
   const customerPhone = esc(pick(order, ["customer_phone", "phone", "mobile", "customer_mobile"], "-"));
@@ -392,7 +391,7 @@ function buildKitchenTicketHTML(order, prepEtaMins) {
     <body>
       <div class="h">KITCHEN TICKET</div>
       <div class="sub">Order #${orderNo}</div>
-      <div class="muted">${when ? `Placed: ${when}` : ""} ${prepEtaMins ? `• Prep ETA: ${prepEtaMins} mins` : ""}</div>
+      <div class="muted">${when ? `Placed: ${when}` : ""} ${prepEtaMins ? `- Prep ETA: ${prepEtaMins} mins` : ""}</div>
 
       <div class="box">
         <div><b>Customer:</b> ${customerName}</div>
@@ -421,11 +420,12 @@ export default function RestaurantOwnerDashboard() {
   const [restaurantName, setRestaurantName] = useState("");
   const [restaurantId, setRestaurantId] = useState("");
 
-  // ✅ NEW: multi-restaurant switch
+  // âœ… NEW: multi-restaurant switch
   const [ownerRestaurants, setOwnerRestaurants] = useState([]); // full rows
   const [activeRestaurantId, setActiveRestaurantId] = useState(""); // selected
 
   const [orders, setOrders] = useState([]); // merged orders with items
+  const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   // dashboard controls
   const [filterStatus, setFilterStatus] = useState("all");
@@ -447,7 +447,25 @@ export default function RestaurantOwnerDashboard() {
   const [prepTimeMins, setPrepTimeMins] = useState(20);
   const [restaurantSettingsNote, setRestaurantSettingsNote] = useState("");
 
-  // ✅ keep one realtime channel only (prevents duplicates)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrency() {
+      if (typeof window !== "undefined") {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      }
+
+      const nextCurrency = await syncAppCurrency(DEFAULT_APP_CURRENCY);
+      if (!cancelled) setCurrency(nextCurrency);
+    }
+
+    loadCurrency();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // âœ… keep one realtime channel only (prevents duplicates)
   const channelRef = useRef(null);
   const currentRealtimeRidRef = useRef("");
 
@@ -468,7 +486,7 @@ export default function RestaurantOwnerDashboard() {
     return false;
   }
 
-  // ✅ NEW: fetch all restaurants for owner (so we can switch)
+  // âœ… NEW: fetch all restaurants for owner (so we can switch)
   async function fetchOwnerRestaurantsList(userId) {
     const res = await supabase
       .from("restaurants")
@@ -480,7 +498,7 @@ export default function RestaurantOwnerDashboard() {
     return res.data || [];
   }
 
-  // ✅ NEW: safely fetch profile role even if duplicate rows exist
+  // âœ… NEW: safely fetch profile role even if duplicate rows exist
   async function fetchProfileRoleSafe(userId) {
     const firstTry = await supabase.from("profiles").select("role").eq("user_id", userId).maybeSingle();
     if (!firstTry?.error) return firstTry.data || null;
@@ -525,7 +543,7 @@ export default function RestaurantOwnerDashboard() {
   function setupRealtime(rid) {
     if (!rid) return;
 
-    // ✅ if restaurant changed, remove old channel and create new one
+    // âœ… if restaurant changed, remove old channel and create new one
     if (currentRealtimeRidRef.current && currentRealtimeRidRef.current !== rid && channelRef.current) {
       try {
         supabase.removeChannel(channelRef.current);
@@ -624,11 +642,11 @@ export default function RestaurantOwnerDashboard() {
 
     setOwnerEmail(session.user.email || "");
 
-    // ✅ role
+    // âœ… role
     const prof = await fetchProfileRoleSafe(session.user.id);
     setRole(prof?.role || "restaurant_owner");
 
-    // ✅ fetch all restaurants for switch dropdown
+    // âœ… fetch all restaurants for switch dropdown
     let list = [];
     try {
       list = await fetchOwnerRestaurantsList(session.user.id);
@@ -646,7 +664,7 @@ export default function RestaurantOwnerDashboard() {
       return;
     }
 
-    // ✅ decide active restaurant:
+    // âœ… decide active restaurant:
     // 1) if activeRestaurantId exists and still in list, keep it
     // 2) else pick latest (list[0])
     const stillExists = activeRestaurantId && list.some((r) => r.id === activeRestaurantId);
@@ -655,14 +673,14 @@ export default function RestaurantOwnerDashboard() {
     applyRestaurantRow(activeRow);
 
     if (list.length > 1) {
-      setInfo("Select restaurant from dropdown ✅");
+      setInfo("Select restaurant from dropdown");
     }
 
     try {
       await loadOrdersForRestaurant(activeRow.id);
       setLoading(false);
       const nowTxt = new Date().toLocaleTimeString();
-      setInfo((prev) => prev || `Updated ✅ (${nowTxt})`);
+      setInfo((prev) => prev || `Updated (${nowTxt})`);
     } catch (e) {
       setErr(e?.message || String(e));
       setLoading(false);
@@ -670,7 +688,7 @@ export default function RestaurantOwnerDashboard() {
     }
   }
 
-  // ✅ when user changes restaurant from dropdown
+  // âœ… when user changes restaurant from dropdown
   async function switchRestaurant(nextId) {
     setErr("");
     setInfo("");
@@ -694,7 +712,7 @@ export default function RestaurantOwnerDashboard() {
       await loadOrdersForRestaurant(row.id);
       setLoading(false);
       const nowTxt = new Date().toLocaleTimeString();
-      setInfo(`Switched ✅ (${nowTxt})`);
+      setInfo(`Switched (${nowTxt})`);
     } catch (e) {
       setErr(e?.message || String(e));
       setLoading(false);
@@ -738,6 +756,85 @@ export default function RestaurantOwnerDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRefresh, soundOnNew, activeRestaurantId]);
 
+
+  async function notifyDriversOrderReady(orderId) {
+    if (!orderId) return;
+
+    try {
+      const res = await fetch("/api/send-driver-notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          restaurantName: restaurantName || "Restaurant",
+        }),
+      });
+
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch {}
+
+      if (!res.ok || !payload?.success || Number(payload?.sent || 0) < 1) {
+        console.warn("[driver-push] notification not sent", { orderId, status: res.status, payload });
+      }
+    } catch (err) {
+      // best effort only - do not block existing status workflow
+      console.warn("[driver-push] request failed", { orderId, err });
+    }
+  }
+
+  async function notifyCustomerOrderStatus(orderId, nextStatus) {
+    if (!orderId) return;
+
+    try {
+      const { data: orderRow, error: orderErr } = await supabase
+        .from("orders")
+        .select("id, user_id, status")
+        .eq("id", orderId)
+        .maybeSingle();
+
+      if (orderErr) throw orderErr;
+
+      const customerUserId = orderRow?.user_id || null;
+      if (!customerUserId) return;
+
+      const shortId = String(orderRow?.id || orderId).slice(0, 8);
+      const status = String(nextStatus || orderRow?.status || "").toLowerCase();
+
+      let title = "Order update";
+      let body = `Your order ${shortId ? "#" + shortId : ""} has a new update.`;
+
+      if (status === "accepted") {
+        title = "Order accepted";
+        body = `Your order ${shortId ? "#" + shortId : ""} was accepted by the restaurant.`;
+      } else if (["pending", "confirmed", "preparing"].includes(status)) {
+        title = "Restaurant is preparing";
+        body = `Your order ${shortId ? "#" + shortId : ""} is now being prepared.`;
+      } else if (status === "ready") {
+        title = "Order is ready";
+        body = `Your order ${shortId ? "#" + shortId : ""} is ready and waiting for delivery.`;
+      } else if (["delivering", "on_the_way", "picked_up"].includes(status)) {
+        title = "Out for delivery";
+        body = `Your order ${shortId ? "#" + shortId : ""} is on the way.`;
+      } else if (status === "delivered") {
+        title = "Order delivered";
+        body = `Your order ${shortId ? "#" + shortId : ""} was delivered.`;
+      }
+
+      await supabase.from("notifications").insert({
+        user_id: customerUserId,
+        title,
+        body,
+        type: "order",
+        link: "/orders",
+        is_read: false,
+      });
+    } catch (err) {
+      console.warn("[customer-notify:restaurant] failed", { orderId, nextStatus, err });
+    }
+  }
+
   async function updateStatus(orderId, newStatus) {
     setErr("");
     const { error } = await supabase.from("orders").update({ status: newStatus }).eq("id", orderId);
@@ -746,6 +843,12 @@ export default function RestaurantOwnerDashboard() {
       return;
     }
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
+
+    notifyCustomerOrderStatus(orderId, newStatus);
+
+    if (String(newStatus || "").toLowerCase() === "ready") {
+      notifyDriversOrderReady(orderId);
+    }
   }
 
   async function bulkUpdateStatus(ids, newStatus) {
@@ -755,7 +858,13 @@ export default function RestaurantOwnerDashboard() {
       const { error } = await supabase.from("orders").update({ status: newStatus }).in("id", ids);
       if (error) throw error;
       setOrders((prev) => prev.map((o) => (ids.includes(o.id) ? { ...o, status: newStatus } : o)));
-      setInfo(`Bulk updated ${ids.length} orders → ${newStatus} ✅`);
+
+      ids.forEach((id) => notifyCustomerOrderStatus(id, newStatus));
+
+      if (String(newStatus || "").toLowerCase() === "ready") {
+        ids.forEach((id) => notifyDriversOrderReady(id));
+      }
+      setInfo(`Bulk updated ${ids.length} orders -> ${newStatus}`);
     } catch (e) {
       setErr(e?.message || String(e));
     }
@@ -775,7 +884,7 @@ export default function RestaurantOwnerDashboard() {
 
     if (!ok) {
       setRestaurantSettingsNote(
-        "Note: Your restaurants table does not have a column for Open/Close yet. Dashboard will still show the toggle, but it won’t save until you add a column."
+        "Note: Your restaurants table does not have a column for Open/Close yet. Dashboard will still show the toggle, but it won't save until you add a column."
       );
     }
   }
@@ -789,7 +898,7 @@ export default function RestaurantOwnerDashboard() {
     const ok = await tryUpdateRestaurantField(restaurantId, ["busy_mode", "is_busy", "busy"], next);
     if (!ok) {
       setRestaurantSettingsNote(
-        "Note: Your restaurants table does not have a column for Busy Mode yet. Dashboard will still show the toggle, but it won’t save until you add a column."
+        "Note: Your restaurants table does not have a column for Busy Mode yet. Dashboard will still show the toggle, but it won't save until you add a column."
       );
     }
   }
@@ -810,7 +919,7 @@ export default function RestaurantOwnerDashboard() {
         "Note: Your restaurants table does not have prep time columns yet. Add columns to save prep times permanently."
       );
     } else {
-      setRestaurantSettingsNote("Saved ✅");
+      setRestaurantSettingsNote("Saved");
       setTimeout(() => setRestaurantSettingsNote(""), 1500);
     }
   }
@@ -1126,7 +1235,7 @@ export default function RestaurantOwnerDashboard() {
           <div style={{ minWidth: 260 }}>
             <div style={pill}>Owner</div>
             <h1 style={heroTitle}>Dashboard</h1>
-            <div style={subText}>Overview • Live orders • Earnings • Controls</div>
+            <div style={subText}>Overview - Live orders - Earnings - Controls</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -1148,7 +1257,7 @@ export default function RestaurantOwnerDashboard() {
             <span style={pill}>Owner: {ownerEmail || "-"}</span>
             <span style={pill}>Role: {role || "-"}</span>
 
-            {/* ✅ NEW: Restaurant switch dropdown (shows only if multiple) */}
+            {/* âœ… NEW: Restaurant switch dropdown (shows only if multiple) */}
             {ownerRestaurants.length > 1 ? (
               <span style={{ ...pill, gap: 10 }}>
                 Restaurant:
@@ -1159,7 +1268,7 @@ export default function RestaurantOwnerDashboard() {
                 >
                   {ownerRestaurants.map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.name || "Unnamed Restaurant"} ({String(r.id).slice(0, 6)}…)
+                      {r.name || "Unnamed Restaurant"} ({String(r.id).slice(0, 6)}...)
                     </option>
                   ))}
                 </select>
@@ -1187,12 +1296,12 @@ export default function RestaurantOwnerDashboard() {
           </div>
 
           <div style={statCard}>
-            <div style={statNum}>{moneyINR(derived.totals.todayRevenue)}</div>
+            <div style={statNum}>{money(derived.totals.todayRevenue, currency)}</div>
             <div style={statLabel}>Today Revenue</div>
           </div>
 
           <div style={statCard}>
-            <div style={statNum}>{moneyINR(derived.totals.avgOrderValueToday)}</div>
+            <div style={statNum}>{money(derived.totals.avgOrderValueToday, currency)}</div>
             <div style={statLabel}>Avg Order Value (Today)</div>
           </div>
 
@@ -1297,7 +1406,7 @@ export default function RestaurantOwnerDashboard() {
 
             {/* Table */}
             {loading ? (
-              <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div>
+              <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading...</div>
             ) : filteredOrders.length === 0 ? (
               <div style={emptyBox}>No orders match your filters/search.</div>
             ) : (
@@ -1317,7 +1426,7 @@ export default function RestaurantOwnerDashboard() {
                     <tbody>
                       {filteredOrders.slice(0, 50).map((o) => {
                         const sc = statusColor(o.status);
-                        const orderNo = pick(o, ["order_number", "orderNo", "order_no", "id"], "—");
+                        const orderNo = pick(o, ["order_number", "orderNo", "order_no", "id"], "-");
                         const when = pick(o, ["created_at", "createdAt", "created"], null);
 
                         const items = o.items || [];
@@ -1383,7 +1492,7 @@ export default function RestaurantOwnerDashboard() {
                               </div>
                               {isLate ? (
                                 <div style={{ marginTop: 6, fontWeight: 950, color: "#92400e" }}>
-                                  ⚠️ Late ({Math.round(ageMins)}m)
+                                  Late ({Math.round(ageMins)}m)
                                 </div>
                               ) : null}
                             </td>
@@ -1413,7 +1522,7 @@ export default function RestaurantOwnerDashboard() {
                             </td>
 
                             <td style={td}>
-                              <div style={{ fontWeight: 1000, color: "#0b1220" }}>{moneyINR(total)}</div>
+                              <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(total, currency)}</div>
                               <div style={{ marginTop: 6, color: "rgba(17,24,39,0.62)", fontWeight: 850 }}>
                                 Prep ETA: {prepTimeMins + (busyMode ? extraPrepMins : 0)} mins
                               </div>
@@ -1421,6 +1530,9 @@ export default function RestaurantOwnerDashboard() {
 
                             <td style={td}>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <button onClick={() => updateStatus(o.id, "accepted")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
+                                  Accepted
+                                </button>
                                 <button onClick={() => updateStatus(o.id, "preparing")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
                                   Preparing
                                 </button>
@@ -1428,7 +1540,7 @@ export default function RestaurantOwnerDashboard() {
                                   Ready
                                 </button>
 
-                                {/* ✅ Removed Delivered action button as you asked */}
+                                {/* âœ… Removed Delivered action button as you asked */}
                                 <button onClick={() => updateStatus(o.id, "rejected")} style={{ ...btnLight, padding: "8px 10px", fontWeight: 950 }}>
                                   Reject
                                 </button>
@@ -1457,11 +1569,11 @@ export default function RestaurantOwnerDashboard() {
               <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>Restaurant Controls</div>
               <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button onClick={() => toggleAccepting(!acceptingOrders)} style={{ ...btnLight, padding: "8px 12px" }}>
-                  Accepting Orders: {acceptingOrders ? "OPEN ✅" : "CLOSED ⛔"}
+                  Accepting Orders: {acceptingOrders ? "OPEN" : "CLOSED"}
                 </button>
 
                 <button onClick={() => toggleBusy(!busyMode)} style={{ ...btnLight, padding: "8px 12px" }}>
-                  Busy Mode: {busyMode ? "ON 🔥" : "OFF"}
+                  Busy Mode: {busyMode ? "ON" : "OFF"}
                 </button>
               </div>
 
@@ -1511,7 +1623,7 @@ export default function RestaurantOwnerDashboard() {
                     Weekly {chartMode === "revenue" ? "Earnings" : "Orders"}
                   </div>
                   <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 12 }}>
-                    {chartMode === "revenue" ? <>Total: {moneyINR(derived.totals.weekRevenue)}</> : <>Total: {derived.totals.weekOrders}</>}
+                    {chartMode === "revenue" ? <>Total: {money(derived.totals.weekRevenue, currency)}</> : <>Total: {derived.totals.weekOrders}</>}
                   </div>
                 </div>
 
@@ -1552,7 +1664,7 @@ export default function RestaurantOwnerDashboard() {
                         />
                       </div>
                       <div style={{ textAlign: "right", fontWeight: 950, color: "#0b1220", fontSize: 12 }}>
-                        {chartMode === "revenue" ? moneyINR(value) : value}
+                        {chartMode === "revenue" ? money(value, currency) : value}
                       </div>
                     </div>
                   );
@@ -1589,7 +1701,7 @@ export default function RestaurantOwnerDashboard() {
                         <div style={{ fontWeight: 1000, color: "#0b1220" }}>{it.name}</div>
                         <div style={{ textAlign: "right" }}>
                           <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Qty: {it.qty}</div>
-                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{moneyINR(it.revenue)}</div>
+                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(it.revenue, currency)}</div>
                         </div>
                       </div>
                     ))}
@@ -1619,7 +1731,7 @@ export default function RestaurantOwnerDashboard() {
                         <div style={{ fontWeight: 1000, color: "#0b1220" }}>{it.name}</div>
                         <div style={{ textAlign: "right" }}>
                           <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.75)" }}>Qty: {it.qty}</div>
-                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{moneyINR(it.revenue)}</div>
+                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(it.revenue, currency)}</div>
                         </div>
                       </div>
                     ))}
@@ -1651,3 +1763,6 @@ export default function RestaurantOwnerDashboard() {
     </main>
   );
 }
+
+
+

@@ -653,6 +653,7 @@ const unreadCount = useMemo(() => notifs.filter((n) => !n.read).length, [notifs]
     })();
   }, [mounted]);
 
+const isAdminPath = pathname?.startsWith("/admin");
 const isLoggedIn = !loading && !!userEmail;
   const profileDisplayName = String(profileName || "").trim() || String(userEmail || "").split("@")[0] || "Profile";
   const profileDisplayEmail = userEmail || "";
@@ -662,7 +663,7 @@ const isLoggedIn = !loading && !!userEmail;
   const isCustomer = r === "customer" || r === "user";
   const isOwner = r === "owner" || r === "restaurant_owner";
   const isGroceryOwner = r === "grocery_owner";
-  const isDelivery = r === "delivery" || r === "delivery_driver";
+  const isDelivery = r === "delivery" || r === "delivery_driver" || r === "delivery_partner";
   const isAdmin = r === "admin" || r === "super_admin";
 
   const roleUnknown = isLoggedIn && !isCustomer && !isOwner && !isGroceryOwner && !isDelivery && !isAdmin;
@@ -673,6 +674,20 @@ const isLoggedIn = !loading && !!userEmail;
   const rightLoginHref = "/login";
 
   const isActive = (href: string) => {
+    if (href.includes("?")) {
+      const [base, query] = href.split("?");
+      if (pathname !== base) return false;
+      try {
+        const params = new URLSearchParams(query || "");
+        const current = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+        for (const [k, v] of params.entries()) {
+          if (current.get(k) !== v) return false;
+        }
+        return true;
+      } catch {
+        return pathname === base;
+      }
+    }
     if (pathname === href) return true;
     if (href !== "/" && pathname?.startsWith(href + "/")) return true;
     return false;
@@ -683,7 +698,7 @@ const isLoggedIn = !loading && !!userEmail;
 
   //  Desktop sidebar (DoorDash-style)  keep old logic intact
   const sidebarWidth = 240;
-  const showSidebar = !isMobile;
+  const showSidebar = !isMobile && !isAdminPath;
   const showMyOrdersSide = isLoggedIn && (isCustomer || roleUnknown);
 
   //  Apply left padding to the page so fixed sidebar doesn't cover content
@@ -1102,8 +1117,15 @@ const isLoggedIn = !loading && !!userEmail;
       ]);
     }
 
-    if (r === "delivery" || r === "delivery_driver") {
-      return dedupeByHref([{ href: homeHref, label: "Home" }]);
+    if (r === "delivery" || r === "delivery_driver" || r === "delivery_partner") {
+      return dedupeByHref([
+        { href: "/delivery", label: "Home" },
+        { href: "/delivery?view=earnings", label: "Earnings" },
+        { href: "/delivery?view=active", label: "Active" },
+        { href: "/delivery?view=completed", label: "Completed" },
+        { href: "/delivery?view=canceled", label: "Canceled" },
+        { href: "/delivery?view=payouts", label: "Payouts" },
+      ]);
     }
 
     if (r === "owner" || r === "restaurant_owner") {
@@ -1269,6 +1291,8 @@ const isLoggedIn = !loading && !!userEmail;
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, supportHref]);
+
+  if (isAdminPath) return null;
 
   return (
     <>

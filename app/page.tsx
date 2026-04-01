@@ -2045,7 +2045,7 @@ export default function CustomerHomeDashboard() {
         {/* ✅ Sticky Search + Filters Bar */}
         <div style={{ ...stickyWrap, ...(stickyOn ? stickyWrapOn : null) }}>
           <div style={{ ...stickyInner, ...(stickyOn ? stickyInnerOn : null) }}>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search restaurants or dishes…" style={search} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search restaurants, grocery items, or stores..." style={search} />
 
             <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               {recent.length > 0 ? (
@@ -2153,11 +2153,11 @@ export default function CustomerHomeDashboard() {
                 {activeCat === "recommended" ? "Recommended for you" : `Top ${homeCategories.find((x) => x.key === activeCat)?.label || ""}`}
               </h2>
               <span style={subtle}>
-                {featuredMenuIds.length > 0 || featuredGroceryIds.length > 0
-                  ? "Admin-selected picks"
-                  : vegOnly || bestsellerOnly || under199 || inStockOnly
+                {vegOnly || bestsellerOnly || under199 || inStockOnly
                     ? "Filters applied"
-                    : "Top picks"}
+                    : q.trim()
+                      ? "Search results"
+                      : "Top picks"}
               </span>
             </div>
 
@@ -2257,7 +2257,7 @@ export default function CustomerHomeDashboard() {
             <div style={rowTitle}>
               <h2 style={sectionTitle}>Groceries for you</h2>
               <span style={subtle}>
-                {featuredGroceryIds.length > 0 ? "Admin-selected grocery picks" : featuredGroceryItems.length > 0 ? "Fresh picks" : "No grocery items yet"}
+                {featuredGroceryItems.length > 0 ? (q.trim() ? "Matching grocery picks" : "Fresh picks") : "No grocery items yet"}
               </span>
             </div>
 

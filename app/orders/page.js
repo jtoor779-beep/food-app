@@ -1,12 +1,13 @@
-"use client";
+﻿"use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 import { fetchReviewsByOrderIds, isReviewableStatus } from "@/lib/reviews";
+import { useToast } from "@/components/ToastProvider";
 
-// ✅ SSR-safe dynamic import (leaflet must run client-side only)
+// âœ… SSR-safe dynamic import (leaflet must run client-side only)
 const CustomerTrackingMap = dynamic(() => import("@/components/CustomerTrackingMap.jsx"), {
   ssr: false,
   loading: () => (
@@ -23,7 +24,7 @@ const CustomerTrackingMap = dynamic(() => import("@/components/CustomerTrackingM
         color: "rgba(17,24,39,0.7)",
       }}
     >
-      Loading map…
+      Loading map...
     </div>
   ),
 });
@@ -36,7 +37,7 @@ function normalizeRole(r) {
 }
 
 /* =========================================================
-   ✅ CURRENCY SUPPORT (DB + localStorage, SAFE)
+   âœ… CURRENCY SUPPORT (DB + localStorage, SAFE)
    - Source of truth: public.system_settings.default_currency
    - We keep localStorage "foodapp_currency" for speed,
      but ALWAYS sync it from DB on page load.
@@ -56,7 +57,7 @@ function money(v, currency = DEFAULT_CURRENCY) {
   const cur = normalizeCurrency(currency);
 
   if (!isFinite(n)) {
-    return cur === "USD" ? "$0.00" : "₹0";
+    return cur === "USD" ? "$0.00" : "INR 0";
   }
 
   const fractionDigits = cur === "INR" ? 0 : 2;
@@ -70,7 +71,7 @@ function money(v, currency = DEFAULT_CURRENCY) {
     }).format(n);
   } catch {
     const fixed = n.toFixed(fractionDigits);
-    return cur === "USD" ? `$${fixed}` : `₹${Number(fixed).toFixed(0)}`;
+    return cur === "USD" ? `$${fixed}` : `INR ${Number(fixed).toFixed(0)}`;
   }
 }
 
@@ -183,7 +184,7 @@ async function loadMenuItemImagesSafe(menuItemIds) {
 }
 
 /**
- * ✅ Read currency from DB (system_settings)
+ * âœ… Read currency from DB (system_settings)
  * We support multiple schemas:
  * - column: default_currency
  * - JSON: value_json.default_currency
@@ -236,9 +237,9 @@ function initials(name) {
 }
 
 /* =========================================================
-   ✅ NEW: Clean "Instructions" display (UI only)
+   âœ… NEW: Clean "Instructions" display (UI only)
    Removes: deliveryFee/tax/pay/platform/currency/etc junk
-   Keeps customer’s real note like: "give in hand..."
+   Keeps customerâ€™s real note like: "give in hand..."
    ========================================================= */
 function cleanCustomerInstructions(raw) {
   const s = String(raw || "").trim();
@@ -268,7 +269,7 @@ function cleanCustomerInstructions(raw) {
     return full;
   });
 
-  // 2) If it’s pipe-separated without parentheses, cut before the junk
+  // 2) If itâ€™s pipe-separated without parentheses, cut before the junk
   const lowAll = out.toLowerCase();
   const hitIndex = lowAll.search(/\b(deliveryfee|platform%|platformfee|taxnote|tax:|currency|pay:)\b/);
   if (hitIndex > 0) {
@@ -398,7 +399,7 @@ const row = {
   alignItems: "center",
 };
 
-// ✅ bill box for coupon summary
+// âœ… bill box for coupon summary
 const billBox = {
   marginTop: 12,
   borderRadius: 16,
@@ -495,7 +496,7 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "rejected" || s === "cancelled") {
     return {
-      title: "Order cancelled ❌",
+      title: "Order canceled",
       text: "This order was cancelled/rejected. If you already paid, please contact support.",
       tone: "danger",
     };
@@ -503,7 +504,7 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "delivered") {
     return {
-      title: "Delivered successfully ✅",
+      title: "Delivered successfully",
       text: "Enjoy your meal! Thank you for ordering.",
       tone: "success",
     };
@@ -511,7 +512,7 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "on_the_way") {
     return {
-      title: "Your order is on the way 🚚",
+      title: "Your order is on the way",
       text: dp
         ? `${dp} is bringing your food. Please keep your phone nearby.`
         : "Your delivery partner is bringing your food. Please keep your phone nearby.",
@@ -521,7 +522,7 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "picked_up") {
     return {
-      title: "Picked up 🛵",
+      title: "Picked up",
       text: dp ? `${dp} picked up your order from the restaurant.` : "Your delivery partner picked up your order from the restaurant.",
       tone: "info",
     };
@@ -529,7 +530,7 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "delivering") {
     return {
-      title: "Out for delivery 🚀",
+      title: "Out for delivery",
       text: dp ? `${dp} accepted your order and is heading to you.` : "A delivery partner accepted your order and is heading to you.",
       tone: "info",
     };
@@ -537,23 +538,23 @@ function statusMessage(status, deliveryPartnerName) {
 
   if (s === "ready") {
     return {
-      title: "Order is ready ✅",
-      text: "Restaurant marked your order as ready. Finding delivery partner now…",
+      title: "Order is ready",
+      text: "Restaurant marked your order as ready. Finding a delivery partner now...",
       tone: "successSoft",
     };
   }
 
   if (s === "preparing" || s === "accepted" || s === "confirmed") {
     return {
-      title: "Restaurant is preparing 🍳",
-      text: "Your food is being prepared. We will notify you when it’s ready.",
+      title: "Restaurant is preparing",
+      text: "Your food is being prepared. We will notify you when it's ready.",
       tone: "infoSoft",
     };
   }
 
   // pending / default
   return {
-    title: "Order placed 🧾",
+    title: "Order placed",
     text: "We received your order. Restaurant will start preparing soon.",
     tone: "warnSoft",
   };
@@ -624,7 +625,13 @@ function DeliveryPerson({ dp }) {
   if (!dp) return null;
 
   const avatar = dp.avatar_url || dp.photo_url || dp.profile_photo || dp.image_url || "";
-  const name = dp.full_name || dp.name || "Delivery Partner";
+  const name =
+    dp.full_name ||
+    dp.display_name ||
+    dp.name ||
+    [dp.first_name, dp.last_name].filter(Boolean).join(" ") ||
+    dp.username ||
+    "Delivery Partner";
   const phone = dp.phone || dp.mobile || "";
 
   return (
@@ -668,7 +675,7 @@ function DeliveryPerson({ dp }) {
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 1000, color: "#0b1220" }}>{name}</div>
         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.68)", fontWeight: 850, fontSize: 13 }}>
-          Assigned delivery partner{phone ? ` • ${phone}` : ""}
+          Assigned delivery partner{phone ? ` - ${phone}` : ""}
         </div>
       </div>
     </div>
@@ -755,7 +762,7 @@ function StatusSteps({ status }) {
         const active = i === currentIndex;
         return (
           <div key={t} style={stepItem}>
-            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "✓" : i + 1}</div>
+            <div style={{ ...stepDot, ...(done ? stepDotDone : active ? stepDotActive : stepDotTodo) }}>{done ? "OK" : i + 1}</div>
             <div style={{ ...stepLabel, opacity: done || active ? 1 : 0.65 }}>{t}</div>
             {i !== steps.length - 1 ? <div style={{ ...stepLine, ...(done ? stepLineDone : stepLineTodo) }} /> : null}
           </div>
@@ -764,6 +771,9 @@ function StatusSteps({ status }) {
     </div>
   );
 }
+
+const MAX_CHAT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const CHAT_ATTACH_BUCKET = "order_chat_attachments";
 
 /* =========================
    PAGE
@@ -779,16 +789,16 @@ export default function OrdersPage() {
   const [role, setRole] = useState("");
   const [orders, setOrders] = useState([]);
 
-  // ✅ currency state (synced from DB like Home page)
+  // âœ… currency state (synced from DB like Home page)
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
 
-  // ✅ delivery profile map: { [delivery_user_id]: { full_name, avatar_url, phone } }
+  // âœ… delivery profile map: { [delivery_user_id]: { full_name, avatar_url, phone } }
   const [deliveryProfiles, setDeliveryProfiles] = useState({});
 
-  // ✅ restaurant coords map: { [restaurant_id]: { lat, lng } }
+  // âœ… restaurant coords map: { [restaurant_id]: { lat, lng } }
   const [restaurantCoords, setRestaurantCoords] = useState({});
 
-  // ✅ live driver GPS per order: { [orderId]: { lat, lng, ts, source } }
+  // âœ… live driver GPS per order: { [orderId]: { lat, lng, ts, source } }
   const [liveGpsByOrderId, setLiveGpsByOrderId] = useState({});
 
   const [lastRealtimeHit, setLastRealtimeHit] = useState("");
@@ -796,7 +806,7 @@ export default function OrdersPage() {
 
   const gpsPollRef = useRef(null);
 
-  // ✅ NEW: open one order detail (clean list by default)
+  // âœ… NEW: open one order detail (clean list by default)
   const [openOrderId, setOpenOrderId] = useState(null);
 
   const [reviewByOrderId, setReviewByOrderId] = useState({});
@@ -804,6 +814,23 @@ export default function OrdersPage() {
   const [reviewForm, setReviewForm] = useState({ rating: 5, title: "", comment: "" });
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [driverReviewByOrderId, setDriverReviewByOrderId] = useState({});
+  const [driverReviewModalOrder, setDriverReviewModalOrder] = useState(null);
+  const [driverReviewForm, setDriverReviewForm] = useState({ rating: 5, title: "", comment: "" });
+  const [driverReviewSaving, setDriverReviewSaving] = useState(false);
+  const [driverReviewError, setDriverReviewError] = useState("");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatAvailable, setChatAvailable] = useState(true);
+  const [chatError, setChatError] = useState("");
+  const [chatFile, setChatFile] = useState(null);
+  const [chatUnreadCounts, setChatUnreadCounts] = useState({});
+  const chatChannelRef = useRef(null);
+  const hiddenFileInput = useRef(null);
+
+  const toast = useToast();
 
   const orderItemsByOrderId = useMemo(() => {
     const map = {};
@@ -815,7 +842,7 @@ export default function OrdersPage() {
 
   const totalOrders = useMemo(() => orders.length, [orders]);
 
-  // ✅ prefer new total_amount column first
+  // âœ… prefer new total_amount column first
   const totalSpend = useMemo(() => {
     return (orders || []).reduce((sum, o) => {
       const fromNew = Number(o.total_amount || 0);
@@ -871,16 +898,16 @@ export default function OrdersPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("user_id, full_name, phone, avatar_url, photo_url, profile_photo, image_url")
-        .in("user_id", ids);
-
-      if (error) throw error;
-
-      const map = {};
-      for (const p of data || []) map[p.user_id] = p;
-      setDeliveryProfiles(map);
+      const res = await fetch("/api/public-delivery-profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.success === false) {
+        throw new Error(payload?.message || "Could not load delivery partner profiles.");
+      }
+      setDeliveryProfiles(payload?.profiles || {});
     } catch {
       setDeliveryProfiles({});
     }
@@ -894,18 +921,25 @@ export default function OrdersPage() {
 
     if (!userId || !reviewableOrderIds.length) {
       setReviewByOrderId({});
+      setDriverReviewByOrderId({});
       return;
     }
 
     try {
       const rows = await fetchReviewsByOrderIds(supabase, { userId, orderIds: reviewableOrderIds });
       const map = {};
+      const driverMap = {};
       for (const row of rows || []) {
-        if (row?.order_id) map[row.order_id] = row;
+        if (!row?.order_id) continue;
+        const targetType = String(row?.target_type || "").trim().toLowerCase();
+        if (targetType === "driver") driverMap[row.order_id] = row;
+        else if (targetType === "restaurant") map[row.order_id] = row;
       }
       setReviewByOrderId(map);
+      setDriverReviewByOrderId(driverMap);
     } catch {
       setReviewByOrderId({});
+      setDriverReviewByOrderId({});
     }
   }
 
@@ -924,6 +958,23 @@ export default function OrdersPage() {
     if (reviewSaving) return;
     setReviewModalOrder(null);
     setReviewError("");
+  }
+
+  function openDriverReviewModal(order) {
+    const existing = driverReviewByOrderId?.[order?.id] || null;
+    setDriverReviewError("");
+    setDriverReviewModalOrder(order);
+    setDriverReviewForm({
+      rating: Number(existing?.rating || 5) || 5,
+      title: String(existing?.title || ""),
+      comment: String(existing?.comment || ""),
+    });
+  }
+
+  function closeDriverReviewModal() {
+    if (driverReviewSaving) return;
+    setDriverReviewModalOrder(null);
+    setDriverReviewError("");
   }
 
   async function saveReview() {
@@ -966,6 +1017,46 @@ export default function OrdersPage() {
     }
   }
 
+  async function saveDriverReview() {
+    if (!user?.id || !driverReviewModalOrder?.id || !driverReviewModalOrder?.delivery_user_id) return;
+    const rating = Math.max(1, Math.min(5, Number(driverReviewForm.rating || 0) || 0));
+    if (!rating) {
+      setDriverReviewError("Please choose a rating.");
+      return;
+    }
+
+    setDriverReviewSaving(true);
+    setDriverReviewError("");
+
+    const payload = {
+      user_id: user.id,
+      order_id: driverReviewModalOrder.id,
+      target_type: "driver",
+      target_id: driverReviewModalOrder.delivery_user_id,
+      rating,
+      title: String(driverReviewForm.title || "").trim() || null,
+      comment: String(driverReviewForm.comment || "").trim() || null,
+      is_visible: true,
+    };
+
+    try {
+      const existing = driverReviewByOrderId?.[driverReviewModalOrder.id];
+      if (existing?.id) {
+        const { error } = await supabase.from("reviews").update(payload).eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("reviews").insert(payload);
+        if (error) throw error;
+      }
+      await loadOwnReviews(user.id, orders);
+      setDriverReviewModalOrder(null);
+    } catch (e) {
+      setDriverReviewError(e?.message || String(e));
+    } finally {
+      setDriverReviewSaving(false);
+    }
+  }
+
   async function loadRestaurantCoordsFromOrders(ordersList) {
     try {
       const ids = Array.from(new Set((ordersList || []).map((o) => o.restaurant_id).filter(Boolean)));
@@ -996,7 +1087,7 @@ export default function OrdersPage() {
     }
   }
 
-  // ✅ column-safe order loader: tries fee columns first, falls back if DB doesn't have them
+  // âœ… column-safe order loader: tries fee columns first, falls back if DB doesn't have them
   async function loadOrders(currentUserId) {
     const selects = [
       `
@@ -1017,6 +1108,10 @@ export default function OrdersPage() {
         landmark,
         instructions,
         delivery_user_id,
+        customer_lat,
+        customer_lng,
+        restaurant_lat,
+        restaurant_lng,
         stripe_session_id,
         payment_method,
         currency,
@@ -1050,6 +1145,10 @@ export default function OrdersPage() {
         landmark,
         instructions,
         delivery_user_id,
+        customer_lat,
+        customer_lng,
+        restaurant_lat,
+        restaurant_lng,
         order_items (
           id,
           qty,
@@ -1098,13 +1197,13 @@ export default function OrdersPage() {
           })),
         }));
 
-        setOrders(list);
-        return list;
-
         await loadDeliveryProfilesFromOrders(list);
         await loadRestaurantCoordsFromOrders(list);
 
-        // ✅ If currently open order is gone (rare), close it safely
+        setOrders(list);
+        return list;
+
+        // âœ… If currently open order is gone (rare), close it safely
         if (openOrderId && !list.find((x) => x.id === openOrderId)) {
           setOpenOrderId(null);
         }
@@ -1137,6 +1236,29 @@ export default function OrdersPage() {
         const list = await loadOrders(userId);
         await loadOwnReviews(userId, list);
       })
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "order_chat_messages",
+          filter: `customer_user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const next = payload.new;
+          if (!next || next.sender_role === "customer") return;
+
+          setChatUnreadCounts((prev) => {
+            const currentCount = prev[next.order_id] || 0;
+            return { ...prev, [next.order_id]: currentCount + 1 };
+          });
+
+          // Show in-app toast if order details not open or chat not scrolled into view
+          if (openOrderId !== next.order_id) {
+            toast.show(`New message from driver for order #${next.order_id.slice(0, 8)}`, "info");
+          }
+        }
+      )
       .subscribe();
   }
 
@@ -1307,13 +1429,223 @@ export default function OrdersPage() {
     return (orders || []).find((x) => x.id === openOrderId) || null;
   }, [orders, openOrderId]);
 
+
+  function cleanupChatRealtime() {
+    if (chatChannelRef.current) {
+      supabase.removeChannel(chatChannelRef.current);
+      chatChannelRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    return () => cleanupChatRealtime();
+  }, []);
+
+  useEffect(() => {
+    cleanupChatRealtime();
+
+    if (!user?.id || !openOrder?.id || !openOrder?.delivery_user_id) {
+      setChatMessages([]);
+      setChatDraft("");
+      setChatError("");
+      setChatAvailable(true);
+      setChatLoading(false);
+      return;
+    }
+
+    if (isReviewableStatus(openOrder?.status)) {
+      setChatMessages([]);
+      setChatDraft("");
+      setChatError("");
+      setChatAvailable(true);
+      setChatLoading(false);
+      return;
+    }
+
+    let alive = true;
+
+    async function loadChat() {
+      try {
+        setChatLoading(true);
+        setChatError("");
+
+        const { data, error } = await supabase
+          .from("order_chat_messages")
+          .select("*")
+          .eq("order_id", openOrder.id)
+          .eq("order_type", "restaurant")
+          .order("created_at", { ascending: true });
+
+        if (error) {
+          const msg = String(error.message || "");
+          if (/order_chat_messages/i.test(msg) || /relation .* does not exist/i.test(msg) || /row-level security/i.test(msg)) {
+            if (alive) {
+              setChatAvailable(false);
+              setChatMessages([]);
+              setChatError("Chat will show here once order chat is enabled.");
+            }
+            return;
+          }
+          throw error;
+        }
+
+        if (!alive) return;
+        setChatAvailable(true);
+        setChatMessages(Array.isArray(data) ? data : []);
+      } catch (e) {
+        if (!alive) return;
+        setChatAvailable(false);
+        setChatMessages([]);
+        setChatError(e?.message || String(e) || "Unable to load chat right now.");
+      } finally {
+        if (alive) setChatLoading(false);
+      }
+    }
+
+    loadChat();
+
+    const channel = supabase
+      .channel("order-chat-restaurant-" + openOrder.id)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "order_chat_messages", filter: "order_id=eq." + openOrder.id },
+        (payload) => {
+          const next = payload?.new;
+          if (!next || next.order_id !== openOrder.id || next.order_type !== "restaurant") return;
+          if (!alive) return;
+          setChatMessages((current) => {
+            if ((current || []).some((item) => item.id === next.id)) return current;
+            return [...(current || []), next];
+          });
+
+          // Show toast if message is from driver
+          if (next.sender_role !== "customer") {
+            toast.show(`New message from driver for order #${next.order_id.slice(0, 8)}`, "info");
+          }
+        }
+      )
+      .subscribe();
+
+    chatChannelRef.current = channel;
+
+    return () => {
+      alive = false;
+      cleanupChatRealtime();
+    };
+  }, [user?.id, openOrder?.id, openOrder?.delivery_user_id, openOrder?.status]);
+
+  function onAttachClick() {
+    hiddenFileInput.current?.click();
+  }
+
+  async function handleFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      alert("File is too large (max 5MB)");
+      return;
+    }
+
+    setChatFile(file);
+  }
+
+  async function sendChatMessage() {
+    const message = String(chatDraft || "").trim();
+    if (!user?.id || !openOrder?.id || !openOrder?.delivery_user_id || (!message && !chatFile)) return;
+
+    try {
+      setChatSending(true);
+      setChatError("");
+
+      let attachment_url = null;
+      let attachment_name = null;
+      let attachment_type = null;
+
+      if (chatFile) {
+        const fileExt = chatFile.name.split(".").pop();
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `restaurant/${openOrder.id}/${user.id}/${Date.now()}-${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from(CHAT_ATTACH_BUCKET)
+          .upload(filePath, chatFile);
+
+        if (uploadError) throw uploadError;
+
+        const { data: publicUrlData } = supabase.storage
+          .from(CHAT_ATTACH_BUCKET)
+          .getPublicUrl(filePath);
+
+        attachment_url = publicUrlData.publicUrl;
+        attachment_name = chatFile.name;
+        attachment_type = chatFile.type;
+      }
+
+      const { data, error } = await supabase
+        .from("order_chat_messages")
+        .insert({
+          order_id: openOrder.id,
+          order_type: "restaurant",
+          customer_user_id: user.id,
+          driver_user_id: openOrder.delivery_user_id,
+          sender_user_id: user.id,
+          sender_role: "customer",
+          message: message || "Photo attached",
+          attachment_url,
+          attachment_name,
+          attachment_type,
+        })
+        .select("*")
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data) {
+        setChatMessages((current) => {
+          if ((current || []).some((item) => item.id === data.id)) return current;
+          return [...(current || []), data];
+        });
+      }
+
+      setChatDraft("");
+      setChatFile(null);
+      setChatAvailable(true);
+
+      // Notify driver
+      if (openOrder.delivery_user_id) {
+        try {
+          await fetch("/api/send-chat-notification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              orderId: openOrder.id,
+              orderType: "restaurant",
+              recipientRole: "driver",
+              recipientUserId: openOrder.delivery_user_id,
+              senderRole: "customer",
+              senderName: user.email?.split("@")[0] || "Customer",
+              preview: message || "Photo attached",
+            }),
+          });
+        } catch (err) {
+          console.log("Chat notification error:", err);
+        }
+      }
+    } catch (e) {
+      setChatError(e?.message || String(e) || "Unable to send message right now.");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   return (
     <main style={pageBg}>
       <div style={{ width: "100%", margin: 0 }}>
         {/* HERO */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
-            <div style={pill}>Customer • Restaurant</div>
+            <div style={pill}>Customer - Restaurant</div>
             <h1 style={heroTitle}>Restaurant Orders</h1>
             <div style={subText}>Track your restaurant orders & status updates (Realtime)</div>
           </div>
@@ -1332,11 +1664,11 @@ export default function OrdersPage() {
             <span style={pill}>Currency: {currency}</span>
 
             <Link href="/restaurants" style={pill}>
-              ← Restaurants
+              Restaurants
             </Link>
 
             <Link href="/groceries/orders" style={pill}>
-              Grocery Orders →
+              Grocery Orders {'->'}
             </Link>
           </div>
         </div>
@@ -1369,17 +1701,17 @@ export default function OrdersPage() {
           </div>
         ) : null}
 
-        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div> : null}
+        {loading ? <div style={{ marginTop: 14, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading...</div> : null}
 
         {!loading && orders.length === 0 ? (
           <div style={emptyBox}>
             No restaurant orders yet.{" "}
             <Link href="/restaurants" style={{ color: "#111827", fontWeight: 1000 }}>
-              Browse restaurants →
+              Browse restaurants
             </Link>{" "}
             <span style={{ opacity: 0.7 }}>or</span>{" "}
             <Link href="/groceries" style={{ color: "#111827", fontWeight: 1000 }}>
-              browse groceries →
+              browse groceries
             </Link>
           </div>
         ) : null}
@@ -1414,7 +1746,7 @@ export default function OrdersPage() {
                       </span>
 
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>
-                        Order • <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}…</span>
+                        Order - <span style={{ opacity: 0.7 }}>{String(o.id).slice(0, 8)}...</span>
                       </div>
 
                       <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 900, fontSize: 12 }}>{formatTime(o.created_at)}</div>
@@ -1448,10 +1780,34 @@ export default function OrdersPage() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setOpenOrderId(o.id);
+                          setChatUnreadCounts((prev) => ({ ...prev, [o.id]: 0 }));
                         }}
-                        style={btnView}
+                        style={{ ...btnView, position: "relative" }}
                       >
-                        View details →
+                        View details
+                        {chatUnreadCounts[o.id] > 0 ? (
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: -8,
+                              right: -8,
+                              background: "#ef4444",
+                              color: "#fff",
+                              borderRadius: "50%",
+                              width: 20,
+                              height: 20,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 10,
+                              fontWeight: 1000,
+                              border: "2px solid #fff",
+                              boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+                            }}
+                          >
+                            {chatUnreadCounts[o.id]}
+                          </span>
+                        ) : null}
                       </button>
                     </div>
                   </div>
@@ -1491,7 +1847,7 @@ export default function OrdersPage() {
               const code = String(o.coupon_code || "").trim();
               const badge = statusBadge(o.status);
 
-              // ✅ keep these for old logic / safety (even if UI not showing breakdown)
+              // âœ… keep these for old logic / safety (even if UI not showing breakdown)
               const platformFee = calcPlatformFee(o);
               const deliveryFee = calcDeliveryFee(o);
               const gst = calcGst(o);
@@ -1509,19 +1865,19 @@ export default function OrdersPage() {
               const liveLabel = !isActiveDeliveryStatus(o.status)
                 ? "Live GPS available during delivery"
                 : liveOk
-                ? `Live GPS connected ✅ (updated: ${formatTime(live.ts)})`
-                : "Waiting for driver GPS…";
+                ? `Live GPS connected (updated: ${formatTime(live.ts)})`
+                : "Waiting for driver GPS...";
 
               const hasAnyMapPoint = !!pickup || !!drop || (liveOk && live);
 
-              // ✅ clean the displayed instructions (UI only)
+              // âœ… clean the displayed instructions (UI only)
               const instructionsClean = cleanCustomerInstructions(o.instructions);
 
               return (
                 <div style={cardGlass}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button onClick={() => setOpenOrderId(null)} style={btnBack}>
-                      ← Back to all orders
+                      Back to all orders
                     </button>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1562,6 +1918,11 @@ export default function OrdersPage() {
                           {reviewByOrderId?.[o.id] ? `Edit Review (${renderStars(reviewByOrderId[o.id].rating)})` : "Write Review"}
                         </button>
                       ) : null}
+                      {isReviewableStatus(o.status) && o.delivery_user_id ? (
+                        <button onClick={() => openDriverReviewModal(o)} style={btnReview}>
+                          {driverReviewByOrderId?.[o.id] ? `Edit Driver Review (${renderStars(driverReviewByOrderId[o.id].rating)})` : "Rate Driver"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1577,6 +1938,15 @@ export default function OrdersPage() {
                       <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.78)" }}>{renderStars(reviewByOrderId[o.id].rating)}</div>
                       {reviewByOrderId[o.id].title ? <div style={{ marginTop: 6, fontWeight: 900, color: "#0b1220" }}>{reviewByOrderId[o.id].title}</div> : null}
                       {reviewByOrderId[o.id].comment ? <div style={{ marginTop: 6, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>{reviewByOrderId[o.id].comment}</div> : null}
+                    </div>
+                  ) : null}
+
+                  {driverReviewByOrderId?.[o.id] ? (
+                    <div style={reviewInfoBox}>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Your Driver Review</div>
+                      <div style={{ marginTop: 6, fontWeight: 900, color: "rgba(17,24,39,0.78)" }}>{renderStars(driverReviewByOrderId[o.id].rating)}</div>
+                      {driverReviewByOrderId[o.id].title ? <div style={{ marginTop: 6, fontWeight: 900, color: "#0b1220" }}>{driverReviewByOrderId[o.id].title}</div> : null}
+                      {driverReviewByOrderId[o.id].comment ? <div style={{ marginTop: 6, color: "rgba(17,24,39,0.72)", lineHeight: 1.45 }}>{driverReviewByOrderId[o.id].comment}</div> : null}
                     </div>
                   ) : null}
 
@@ -1638,26 +2008,179 @@ export default function OrdersPage() {
                           Pickup: {pickup?.lat?.toFixed?.(4)}, {pickup?.lng?.toFixed?.(4)}
                         </>
                       ) : (
-                        <>Pickup: —</>
+                        <>Pickup: -</>
                       )}{" "}
-                      •{" "}
+                      -{" "}
                       {drop ? (
                         <>
                           Drop: {drop?.lat?.toFixed?.(4)}, {drop?.lng?.toFixed?.(4)}
                         </>
                       ) : (
-                        <>Drop: —</>
+                        <>Drop: -</>
                       )}
                       {liveOk ? (
                         <>
                           {" "}
-                          • Driver: {Number(live.lat).toFixed(5)}, {Number(live.lng).toFixed(5)}
+                          - Driver: {Number(live.lat).toFixed(5)}, {Number(live.lng).toFixed(5)}
                         </>
                       ) : null}
                     </div>
                   </div>
 
                   {o.delivery_user_id ? <DeliveryPerson dp={dp || { full_name: "Delivery Partner" }} /> : null}
+
+                  {o.delivery_user_id && !isReviewableStatus(o.status) ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        borderRadius: 16,
+                        border: "1px solid rgba(34,197,94,0.15)",
+                        background: "rgba(255,255,255,0.82)",
+                        padding: 14,
+                      }}
+                    >
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Driver Chat</div>
+                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.72)", fontSize: 13, lineHeight: 1.5 }}>
+                        Chat with your assigned driver while the order is still active.
+                      </div>
+
+                      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                        {chatLoading ? (
+                          <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 800 }}>Loading chat...</div>
+                        ) : chatMessages.length ? (
+                          chatMessages.map((msg) => {
+                            const own = msg.sender_role === "customer";
+                            return (
+                              <div
+                                key={msg.id}
+                                style={{
+                                  justifySelf: own ? "end" : "start",
+                                  maxWidth: "88%",
+                                  borderRadius: 14,
+                                  padding: "10px 12px",
+                                  border: own ? "1px solid #22C55E" : "1px solid rgba(15,23,42,0.12)",
+                                  background: own ? "rgba(34,197,94,0.12)" : "rgba(248,250,252,0.95)",
+                                }}
+                              >
+                                <div style={{ fontSize: 11, fontWeight: 900, color: own ? "#15803D" : "#475569", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                                  {own ? "You" : "Driver"}
+                                </div>
+                                <div style={{ marginTop: 4, color: "#0f172a", fontSize: 14, lineHeight: 1.5 }}>{msg.message}</div>
+                                {msg.attachment_url ? (
+                                  <div style={{ marginTop: 8 }}>
+                                    <a href={msg.attachment_url} target="_blank" rel="noreferrer">
+                                      <img
+                                        src={msg.attachment_url}
+                                        alt="attachment"
+                                        style={{ maxWidth: "100%", borderRadius: 8, maxHeight: 200, objectFit: "cover" }}
+                                      />
+                                    </a>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div style={{ color: "rgba(17,24,39,0.65)", fontSize: 13, lineHeight: 1.5 }}>
+                            No messages yet. Use chat for directions, gate codes, or quick delivery notes.
+                          </div>
+                        )}
+                      </div>
+
+                      {chatError ? (
+                        <div style={{ marginTop: 10, color: "#B91C1C", fontWeight: 800, fontSize: 13 }}>{chatError}</div>
+                      ) : null}
+
+                      <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <button
+                            type="button"
+                            onClick={onAttachClick}
+                            style={{
+                              padding: "6px 12px",
+                              borderRadius: 10,
+                              border: "1px solid rgba(0,0,0,0.12)",
+                              background: "#f1f5f9",
+                              fontSize: 12,
+                              fontWeight: 1000,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Attach Photo
+                          </button>
+                          {chatFile ? (
+                            <div style={{ fontSize: 12, fontWeight: 900, color: "#15803D", display: "flex", alignItems: "center", gap: 6 }}>
+                              <span>📎 {chatFile.name}</span>
+                              <button
+                                type="button"
+                                onClick={() => setChatFile(null)}
+                                style={{ border: "none", background: "none", color: "#B91C1C", cursor: "pointer", fontWeight: 1000 }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ) : null}
+                          <input
+                            type="file"
+                            ref={hiddenFileInput}
+                            onChange={handleFileChange}
+                            style={{ display: "none" }}
+                            accept="image/*"
+                          />
+                        </div>
+
+                        <textarea
+                          value={chatDraft}
+                          onChange={(e) => setChatDraft(e.target.value)}
+                          placeholder="Message your driver"
+                          rows={3}
+                          style={{
+                            width: "100%",
+                            resize: "vertical",
+                            borderRadius: 14,
+                            border: "1px solid rgba(15,23,42,0.12)",
+                            background: "#fff",
+                            padding: "12px 14px",
+                            fontSize: 14,
+                            color: "#0f172a",
+                            outline: "none",
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <button
+                            type="button"
+                            onClick={sendChatMessage}
+                            disabled={!chatAvailable || chatSending || (!String(chatDraft || "").trim() && !chatFile)}
+                            style={{
+                              borderRadius: 999,
+                              border: "none",
+                              background: !chatAvailable || chatSending || (!String(chatDraft || "").trim() && !chatFile) ? "rgba(34,197,94,0.35)" : "#22C55E",
+                              color: "#04130A",
+                              fontWeight: 1000,
+                              padding: "11px 18px",
+                              cursor: !chatAvailable || chatSending || (!String(chatDraft || "").trim() && !chatFile) ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {chatSending ? "Sending..." : "Send"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : o.delivery_user_id ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        borderRadius: 16,
+                        border: "1px solid rgba(15,23,42,0.08)",
+                        background: "rgba(255,255,255,0.7)",
+                        padding: 14,
+                        color: "rgba(17,24,39,0.7)",
+                        fontWeight: 800,
+                      }}
+                    >
+                      Chat closed after delivery.
+                    </div>
+                  ) : null}
 
                   <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div
@@ -1671,13 +2194,13 @@ export default function OrdersPage() {
                       <div style={{ fontWeight: 1000, color: "#0b1220" }}>Delivery</div>
 
                       <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Name:</b> {o.customer_name || "—"}
+                        <b>Name:</b> {o.customer_name || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Phone:</b> {o.phone || "—"}
+                        <b>Phone:</b> {o.phone || "-"}
                       </div>
                       <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                        <b>Address:</b> {[o.address_line1, o.address_line2].filter(Boolean).join(", ") || "—"}
+                        <b>Address:</b> {[o.address_line1, o.address_line2].filter(Boolean).join(", ") || "-"}
                       </div>
                       {o.landmark ? (
                         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
@@ -1686,7 +2209,7 @@ export default function OrdersPage() {
                       ) : null}
                       {o.instructions ? (
                         <div style={{ marginTop: 4, color: "rgba(17,24,39,0.72)", fontWeight: 850 }}>
-                          <b>Instructions:</b> {instructionsClean || "—"}
+                          <b>Instructions:</b> {instructionsClean || "-"}
                         </div>
                       ) : null}
                     </div>
@@ -1752,7 +2275,7 @@ export default function OrdersPage() {
                       Order again
                     </Link>
                     <Link href="/groceries/orders" style={pill}>
-                      View grocery orders →
+                      View grocery orders
                     </Link>
                   </div>
                 </div>
@@ -1798,6 +2321,50 @@ export default function OrdersPage() {
             <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
               <button onClick={closeReviewModal} style={btnBack} disabled={reviewSaving}>Cancel</button>
               <button onClick={saveReview} style={btnReview} disabled={reviewSaving}>{reviewSaving ? "Saving..." : "Save Review"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {driverReviewModalOrder ? (
+        <div style={reviewModalBackdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) closeDriverReviewModal(); }}>
+          <div style={reviewModalCard}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div style={{ fontSize: 22, fontWeight: 1000, color: "#0b1220" }}>
+                {driverReviewByOrderId?.[driverReviewModalOrder.id] ? "Edit Driver Review" : "Rate Your Driver"}
+              </div>
+              <button onClick={closeDriverReviewModal} style={btnBack}>Close</button>
+            </div>
+            <div style={{ marginTop: 8, color: "rgba(17,24,39,0.7)", fontWeight: 800 }}>
+              Driver for order {String(driverReviewModalOrder.id).slice(0, 8)}
+            </div>
+            <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setDriverReviewForm((prev) => ({ ...prev, rating: value }))}
+                  style={Number(driverReviewForm.rating) === value ? reviewStarBtnActive : reviewStarBtn}
+                >
+                  {renderStars(value)}
+                </button>
+              ))}
+            </div>
+            <input
+              value={driverReviewForm.title}
+              onChange={(e) => setDriverReviewForm((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder="Review title (optional)"
+              style={reviewInput}
+            />
+            <textarea
+              value={driverReviewForm.comment}
+              onChange={(e) => setDriverReviewForm((prev) => ({ ...prev, comment: e.target.value }))}
+              placeholder="Tell us about the delivery experience"
+              style={{ ...reviewInput, marginTop: 12, minHeight: 120, resize: "vertical" }}
+            />
+            {driverReviewError ? <div style={{ marginTop: 10, color: "#b42318", fontWeight: 900 }}>{driverReviewError}</div> : null}
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={closeDriverReviewModal} style={btnBack} disabled={driverReviewSaving}>Cancel</button>
+              <button onClick={saveDriverReview} style={btnReview} disabled={driverReviewSaving}>{driverReviewSaving ? "Saving..." : "Save Driver Review"}</button>
             </div>
           </div>
         </div>
@@ -1990,3 +2557,7 @@ const inputBase = {
   fontWeight: 800,
   background: "rgba(255,255,255,0.94)",
 };
+
+
+
+

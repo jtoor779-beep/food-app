@@ -473,6 +473,10 @@ function GroceryInvoiceInner() {
         customer_user_id,
         store_id,
         status,
+        payment_status,
+        payment_method,
+        paid_at,
+        stripe_session_id,
         total_amount,
         delivery_fee,
         tip_amount,
@@ -510,6 +514,10 @@ function GroceryInvoiceInner() {
         customer_user_id,
         store_id,
         status,
+        payment_status,
+        payment_method,
+        paid_at,
+        stripe_session_id,
         total_amount,
         delivery_fee,
         tip_amount,
@@ -538,6 +546,10 @@ function GroceryInvoiceInner() {
         customer_user_id,
         store_id,
         status,
+        payment_status,
+        payment_method,
+        paid_at,
+        stripe_session_id,
         total_amount,
         delivery_fee,
         tip_amount,
@@ -647,6 +659,16 @@ function GroceryInvoiceInner() {
   const custAddr = safeStr(order?.delivery_address);
 
   const status = safeStr(order?.status) || "pending";
+  const paymentStatus = safeStr(order?.payment_status).toLowerCase();
+  const paidAt = order?.paid_at ? new Date(order.paid_at) : null;
+  const isPaid =
+    paymentStatus === "paid" ||
+    paymentStatus === "succeeded" ||
+    paymentStatus === "complete" ||
+    !!paidAt ||
+    !!order?.stripe_session_id;
+  const methodRaw = safeStr(order?.payment_method) || (order?.stripe_session_id ? "stripe" : "online");
+  const payLabel = isPaid ? "Paid" : "Pending";
 
   const itemCount = useMemo(() => {
     return (items || []).reduce((s, it) => s + safeNum(it?.quantity ?? it?.qty, 0), 0) || (items || []).length || 0;
@@ -756,8 +778,18 @@ function GroceryInvoiceInner() {
                   <b>Status:</b> {status}
                 </div>
                 <div style={boxText}>
-                  <b>Payment:</b> ONLINE <span style={{ marginLeft: 8, ...miniPill }}>{status.toUpperCase()}</span>
+                  <b>Payment:</b> {String(methodRaw || "online").toUpperCase()} <span style={{ marginLeft: 8, ...miniPill }}>{payLabel.toUpperCase()}</span>
                 </div>
+                {paidAt ? (
+                  <div style={boxText}>
+                    <b>Paid at:</b> {formatTime(paidAt)}
+                  </div>
+                ) : null}
+                {paymentStatus ? (
+                  <div style={boxText}>
+                    <b>Payment status:</b> {paymentStatus}
+                  </div>
+                ) : null}
               </div>
             </div>
 

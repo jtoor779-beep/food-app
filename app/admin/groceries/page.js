@@ -53,6 +53,52 @@ export default function AdminGroceriesPage() {
   const [tab, setTab] = useState("pending"); // all | pending | approved | rejected
   const [q, setQ] = useState("");
 
+  async function deleteStore(id, name) {
+    const storeId = clean(id);
+    if (!storeId) return;
+
+    const ok = window.confirm(
+      `Delete grocery store "${clean(name) || storeId}" from the admin panel? This will also remove related grocery data and orders where possible.`
+    );
+    if (!ok) return;
+
+    setErr("");
+    setInfo("");
+    setBusyId(storeId);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const token = clean(session?.access_token);
+      if (!token) throw new Error("Admin session missing. Please log in again.");
+
+      const res = await fetch("/api/admin/entity-delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          entityType: "grocery",
+          entityId: storeId,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Unable to delete grocery store.");
+      }
+
+      setInfo("✅ Grocery store deleted");
+      await load();
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusyId("");
+    }
+  }
+
   async function load() {
     setErr("");
     setInfo("");
@@ -264,6 +310,14 @@ export default function AdminGroceriesPage() {
                           }
                         >
                           {accepting ? "Stop Orders" : "Accept Orders"}
+                        </button>
+
+                        <button
+                          style={btnDanger}
+                          disabled={busyId === id || loading}
+                          onClick={() => deleteStore(id, r?.name)}
+                        >
+                          Delete
                         </button>
                       </div>
 

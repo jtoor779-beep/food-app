@@ -473,12 +473,10 @@ export default function AdminRestaurantsPage() {
         supabase.removeChannel(channel);
       } catch {}
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     loadRestaurants();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = useMemo(() => {
@@ -642,6 +640,53 @@ export default function AdminRestaurantsPage() {
   async function forceClose(row: AnyRow) {
     const payload = buildForceCloseUpdate(row);
     await doUpdate(row, payload);
+  }
+
+  async function deleteRestaurant(row: AnyRow) {
+    const restaurantId = String(row?.id || "").trim();
+    if (!restaurantId) return;
+
+    const ok = window.confirm(
+      `Delete restaurant "${String(row?.name || restaurantId)}" from the admin panel? This will also remove related menu and order data where possible.`
+    );
+    if (!ok) return;
+
+    setBusyId(restaurantId);
+    setError(null);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const token = String(session?.access_token || "").trim();
+      if (!token) throw new Error("Admin session missing. Please log in again.");
+
+      const res = await fetch("/api/admin/entity-delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          entityType: "restaurant",
+          entityId: restaurantId,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Unable to delete restaurant.");
+      }
+
+      setRestaurants((prev) => prev.filter((item) => String(item?.id) !== restaurantId));
+      setEditing((prev) => (prev && String(prev?.id) === restaurantId ? null : prev));
+      setViewing((prev) => (prev && String(prev?.id) === restaurantId ? null : prev));
+    } catch (e: any) {
+      setError(e?.message || "Delete crashed. Open console and share error.");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   function openEdit(row: AnyRow) {
@@ -1226,6 +1271,10 @@ export default function AdminRestaurantsPage() {
                         Disable
                       </button>
                     )}
+
+                    <button style={styles.btnDanger} disabled={busyId === id} onClick={() => deleteRestaurant(r)}>
+                      Delete
+                    </button>
                   </div>
                 </div>
               );
@@ -1239,7 +1288,6 @@ export default function AdminRestaurantsPage() {
         <div style={styles.modalOverlay} onClick={() => setViewing(null)}>
           <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
             {(() => {
-              const id = viewing?.id ?? "-";
               const code = getPublicCode(viewing);
               const name = viewing?.name ?? "(no name)";
               const approval = normalize(inferApprovalState(viewing));
@@ -1317,6 +1365,9 @@ export default function AdminRestaurantsPage() {
                       </button>
                       <button style={styles.btn} onClick={() => openEdit(viewing)}>
                         Edit restaurant
+                      </button>
+                      <button style={styles.btnDanger} onClick={() => deleteRestaurant(viewing)}>
+                        Delete restaurant
                       </button>
                       <button style={styles.btnPrimary} onClick={() => setViewing(null)}>
                         Close

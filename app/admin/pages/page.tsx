@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -15,13 +14,23 @@ type CmsPageRow = {
   updated_at?: string | null;
 };
 
+type CmsPageMeta = {
+  attachmentName: string;
+  attachmentBucket: string;
+  attachmentPath: string;
+  contractRequired: boolean;
+  contractCheckboxLabel: string;
+};
+
 const CMS_TABLE = "cms_pages";
+const CMS_META_KEY = "cms_page_meta";
 
 const DEFAULT_PAGE_OPTIONS = [
   { slug: "about_us", title: "About Us" },
   { slug: "terms_conditions", title: "Terms & Conditions" },
   { slug: "refund_policy", title: "Refund Policy" },
   { slug: "privacy_policy", title: "Privacy Policy" },
+  { slug: "driver_contract", title: "Driver Contract" },
 ];
 
 function normalizeSlug(v: string) {
@@ -34,62 +43,130 @@ function normalizeSlug(v: string) {
     .replace(/^_+|_+$/g, "");
 }
 
+function defaultMeta(): CmsPageMeta {
+  return {
+    attachmentName: "",
+    attachmentBucket: "",
+    attachmentPath: "",
+    contractRequired: false,
+    contractCheckboxLabel: "I agree to the driver contract.",
+  };
+}
+
+function normalizeMeta(input: any): CmsPageMeta {
+  return {
+    attachmentName: String(input?.attachmentName || ""),
+    attachmentBucket: String(input?.attachmentBucket || ""),
+    attachmentPath: String(input?.attachmentPath || ""),
+    contractRequired: Boolean(input?.contractRequired),
+    contractCheckboxLabel: String(input?.contractCheckboxLabel || "I agree to the driver contract."),
+  };
+}
+
+async function loadSetting(key: string) {
+  const { data, error } = await supabase
+    .from("system_settings")
+    .select("key, value_json")
+    .eq("key", key)
+    .limit(20);
+  if (error) throw error;
+  return Array.isArray(data) ? data[data.length - 1] || data[0] : null;
+}
+
+async function saveSetting(key: string, value_json: any) {
+  const updated = await supabase.from("system_settings").update({ value_json }).eq("key", key);
+  if (!updated.error) return;
+  const inserted = await supabase.from("system_settings").insert({ key, value_json });
+  if (inserted.error) throw inserted.error;
+}
+
 export default function AdminPagesManagerPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
   const [rows, setRows] = useState<CmsPageRow[]>([]);
+  const [metaBySlug, setMetaBySlug] = useState<Record<string, CmsPageMeta>>({});
   const [selectedSlug, setSelectedSlug] = useState<string>("about_us");
 
-  const [pageId, setPageId] = useState<string>("");
+  const [, setPageId] = useState<string>("");
   const [pageTitle, setPageTitle] = useState<string>("About Us");
   const [pageSlug, setPageSlug] = useState<string>("about_us");
   const [pageContent, setPageContent] = useState<string>("");
   const [pageEnabled, setPageEnabled] = useState<boolean>(true);
+  const [attachmentName, setAttachmentName] = useState("");
+  const [attachmentBucket, setAttachmentBucket] = useState("");
+  const [attachmentPath, setAttachmentPath] = useState("");
+  const [contractRequired, setContractRequired] = useState(false);
+  const [contractCheckboxLabel, setContractCheckboxLabel] = useState("I agree to the driver contract.");
 
-  function resetFormFromPreset(slug: string) {
-    const preset = DEFAULT_PAGE_OPTIONS.find((x) => x.slug === slug);
+  function applyMeta(meta: CmsPageMeta) {
+    setAttachmentName(meta.attachmentName);
+    setAttachmentBucket(meta.attachmentBucket);
+    setAttachmentPath(meta.attachmentPath);
+    setContractRequired(meta.contractRequired);
+    setContractCheckboxLabel(meta.contractCheckboxLabel);
+  }
+
+  function resetForm(slug = "", title = "") {
     setPageId("");
     setPageSlug(slug);
-    setPageTitle(preset?.title || "");
+    setPageTitle(title);
     setPageContent("");
     setPageEnabled(true);
     setSelectedSlug(slug);
+    applyMeta(defaultMeta());
   }
 
-  function loadRowIntoForm(row: CmsPageRow) {
-    const slug = String(row?.slug || "");
+  function resetFormFromPreset(slug: string) {
+    const preset = DEFAULT_PAGE_OPTIONS.find((x) => x.slug === slug);
+    resetForm(slug, preset?.title || "");
+  }
+
+  function loadRowIntoForm(row: CmsPageRow, nextMetaMap?: Record<string, CmsPageMeta>) {
+    const slug = normalizeSlug(String(row?.slug || ""));
     setPageId(String(row?.id || ""));
     setPageSlug(slug);
     setPageTitle(String(row?.title || ""));
     setPageContent(String(row?.content || ""));
     setPageEnabled(row?.is_enabled !== false);
     setSelectedSlug(slug);
+    applyMeta((nextMetaMap || metaBySlug)?.[slug] || defaultMeta());
   }
 
   async function loadPages(preferredSlug?: string) {
     setLoading(true);
     setError("");
     try {
-      const { data, error } = await supabase
-        .from(CMS_TABLE)
-        .select("id, slug, title, content, is_enabled, created_at, updated_at")
-        .order("updated_at", { ascending: false })
-        .order("created_at", { ascending: false })
-        .limit(200);
+      const [pagesRes, metaRes] = await Promise.all([
+        supabase
+          .from(CMS_TABLE)
+          .select("id, slug, title, content, is_enabled, created_at, updated_at")
+          .order("updated_at", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(200),
+        loadSetting(CMS_META_KEY).catch(() => null),
+      ]);
 
-      if (error) {
-        setError(`CMS pages load failed: ${error.message}`);
+      if (pagesRes.error) {
+        setError(`CMS pages load failed: ${pagesRes.error.message}`);
         const desired = normalizeSlug(preferredSlug || selectedSlug || "about_us") || "about_us";
         resetFormFromPreset(desired);
         setRows([]);
+        setMetaBySlug({});
         return;
       }
 
-      const dbRows: CmsPageRow[] = Array.isArray(data) ? (data as CmsPageRow[]) : [];
+      const rawMetaMap = metaRes?.value_json && typeof metaRes.value_json === "object" ? metaRes.value_json : {};
+      const normalizedMetaMap = Object.fromEntries(
+        Object.entries(rawMetaMap || {}).map(([slug, meta]) => [normalizeSlug(slug), normalizeMeta(meta)])
+      ) as Record<string, CmsPageMeta>;
+      setMetaBySlug(normalizedMetaMap);
 
+      const dbRows: CmsPageRow[] = Array.isArray(pagesRes.data) ? (pagesRes.data as CmsPageRow[]) : [];
       const mergedMap = new Map<string, CmsPageRow>();
+
       for (const preset of DEFAULT_PAGE_OPTIONS) {
         mergedMap.set(preset.slug, {
           slug: preset.slug,
@@ -98,6 +175,7 @@ export default function AdminPagesManagerPage() {
           is_enabled: true,
         });
       }
+
       for (const row of dbRows) {
         const slug = normalizeSlug(String(row?.slug || ""));
         if (!slug) continue;
@@ -120,8 +198,7 @@ export default function AdminPagesManagerPage() {
 
       const desiredSlug = normalizeSlug(preferredSlug || selectedSlug || "about_us") || "about_us";
       const picked = mergedRows.find((x) => x.slug === desiredSlug) || mergedRows[0];
-
-      if (picked) loadRowIntoForm(picked);
+      if (picked) loadRowIntoForm(picked, normalizedMetaMap);
       else resetFormFromPreset("about_us");
     } finally {
       setLoading(false);
@@ -142,7 +219,7 @@ export default function AdminPagesManagerPage() {
       return;
     }
 
-    setSaving(true)
+    setSaving(true);
     setError("");
     try {
       const payload: any = {
@@ -164,10 +241,26 @@ export default function AdminPagesManagerPage() {
         return;
       }
 
+      const nextMetaMap = {
+        ...metaBySlug,
+        [slug]: normalizeMeta({
+          attachmentName,
+          attachmentBucket,
+          attachmentPath,
+          contractRequired,
+          contractCheckboxLabel,
+        }),
+      };
+
+      await saveSetting(CMS_META_KEY, nextMetaMap);
+      setMetaBySlug(nextMetaMap);
+
       const nextSlug =
         Array.isArray(data) && data[0]?.slug ? normalizeSlug(String(data[0].slug)) : slug;
 
       await loadPages(nextSlug);
+    } catch (e: any) {
+      setError(`Save failed: ${e?.message || "Unknown error"}`);
     } finally {
       setSaving(false);
     }
@@ -184,22 +277,73 @@ export default function AdminPagesManagerPage() {
     setError("");
     try {
       const { error } = await supabase.from(CMS_TABLE).delete().eq("slug", slug);
-
       if (error) {
         setError(`Delete failed: ${error.message}`);
         return;
       }
 
+      const nextMetaMap = { ...metaBySlug };
+      delete nextMetaMap[slug];
+      await saveSetting(CMS_META_KEY, nextMetaMap);
+      setMetaBySlug(nextMetaMap);
       await loadPages("about_us");
     } finally {
       setSaving(false);
     }
   }
 
+  async function uploadAttachment(file?: File | null) {
+    if (!file) return;
+
+    const slug = normalizeSlug(pageSlug || "");
+    if (!slug) {
+      setError("Save or enter a page slug before uploading an attachment.");
+      return;
+    }
+
+    setUploading(true);
+    setError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const token = String(session?.access_token || "").trim();
+      if (!token) throw new Error("Admin session missing. Please log in again.");
+
+      const formData = new FormData();
+      formData.append("slug", slug);
+      formData.append("file", file);
+
+      const res = await fetch("/api/admin/cms-attachment", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Unable to upload attachment.");
+      }
+
+      const attachment = json?.attachment || {};
+      setAttachmentName(String(attachment?.name || file.name || ""));
+      setAttachmentBucket(String(attachment?.bucket || ""));
+      setAttachmentPath(String(attachment?.path || ""));
+    } catch (e: any) {
+      setError(e?.message || "Unable to upload attachment.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     loadPages("about_us");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const selectedRow = useMemo(
     () => rows.find((x) => normalizeSlug(x.slug) === normalizeSlug(selectedSlug || pageSlug || "")),
@@ -207,12 +351,7 @@ export default function AdminPagesManagerPage() {
   );
 
   const pageCount = rows.length;
-
-  const pageWrap: React.CSSProperties = {
-    display: "grid",
-    gap: 14,
-  };
-
+  const pageWrap: React.CSSProperties = { display: "grid", gap: 14 };
   const topBar: React.CSSProperties = {
     display: "flex",
     justifyContent: "space-between",
@@ -220,7 +359,6 @@ export default function AdminPagesManagerPage() {
     marginBottom: 14,
     flexWrap: "wrap",
   };
-
   const card: React.CSSProperties = {
     padding: 16,
     borderRadius: 18,
@@ -228,7 +366,6 @@ export default function AdminPagesManagerPage() {
     border: "1px solid rgba(15, 23, 42, 0.10)",
     boxShadow: "0 14px 36px rgba(15, 23, 42, 0.08)",
   };
-
   const btnPrimary: React.CSSProperties = {
     padding: "10px 14px",
     borderRadius: 14,
@@ -239,7 +376,6 @@ export default function AdminPagesManagerPage() {
     cursor: "pointer",
     boxShadow: "0 14px 36px rgba(255,140,0,0.14)",
   };
-
   const btnGhost: React.CSSProperties = {
     padding: "10px 12px",
     borderRadius: 14,
@@ -254,7 +390,6 @@ export default function AdminPagesManagerPage() {
     alignItems: "center",
     gap: 8,
   };
-
   const pill: React.CSSProperties = {
     padding: "10px 12px",
     borderRadius: 16,
@@ -266,7 +401,6 @@ export default function AdminPagesManagerPage() {
     height: "fit-content",
     boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
   };
-
   const input: React.CSSProperties = {
     width: "100%",
     padding: "10px 12px",
@@ -276,15 +410,13 @@ export default function AdminPagesManagerPage() {
     background: "rgba(255,255,255,0.95)",
     fontWeight: 700,
   };
-
   const textarea: React.CSSProperties = {
     ...input,
-    minHeight: 360,
+    minHeight: 260,
     resize: "vertical",
     fontFamily: "inherit",
     lineHeight: 1.55,
   };
-
   const smallLabel: React.CSSProperties = {
     fontSize: 12,
     fontWeight: 900,
@@ -298,7 +430,7 @@ export default function AdminPagesManagerPage() {
         <div>
           <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: -0.3 }}>CMS Pages</div>
           <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
-            Manage About Us and policy pages for the customer app. Table: <b>public.{CMS_TABLE}</b>
+            Manage About Us, policies, and document-style pages for the apps. Table: <b>public.{CMS_TABLE}</b>
           </div>
         </div>
 
@@ -307,11 +439,15 @@ export default function AdminPagesManagerPage() {
             ← Back to Dashboard
           </Link>
 
-          <button onClick={() => loadPages(pageSlug || selectedSlug)} style={btnGhost} disabled={loading || saving}>
+          <button onClick={() => resetForm("", "")} style={btnGhost} disabled={saving || uploading}>
+            + New Page
+          </button>
+
+          <button onClick={() => loadPages(pageSlug || selectedSlug)} style={btnGhost} disabled={loading || saving || uploading}>
             {loading ? "Loading..." : "Reload"}
           </button>
 
-          <button onClick={savePage} style={btnPrimary} disabled={saving || loading}>
+          <button onClick={savePage} style={btnPrimary} disabled={saving || loading || uploading}>
             {saving ? "Saving..." : "Save Page"}
           </button>
 
@@ -342,21 +478,20 @@ export default function AdminPagesManagerPage() {
           <div style={{ padding: 12, borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
             <div style={{ fontSize: 12, fontWeight: 950, opacity: 0.9 }}>Available Pages</div>
             <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4, lineHeight: 1.4 }}>
-              Click a page to edit its title, content, and enabled status.
+              Click a page to edit it, or create a brand-new page from the top bar.
             </div>
           </div>
 
           <div style={{ maxHeight: 520, overflow: "auto" }}>
             {rows.length === 0 ? (
-              <div style={{ padding: 12, fontSize: 12, opacity: 0.75, fontWeight: 850 }}>
-                No pages loaded yet.
-              </div>
+              <div style={{ padding: 12, fontSize: 12, opacity: 0.75, fontWeight: 850 }}>No pages loaded yet.</div>
             ) : (
               rows.map((row) => {
                 const slug = normalizeSlug(String(row.slug || ""));
                 const isSelected = slug === normalizeSlug(selectedSlug || pageSlug || "");
                 const title = String(row.title || slug || "Page");
                 const enabled = row.is_enabled !== false;
+                const meta = metaBySlug[slug] || defaultMeta();
 
                 return (
                   <button
@@ -373,24 +508,14 @@ export default function AdminPagesManagerPage() {
                     }}
                     title={slug}
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 10,
-                        alignItems: "center",
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 950, color: "#0F172A" }}>
-                        📄 {title}
-                      </div>
-                      <div style={{ fontSize: 11, opacity: 0.72, fontWeight: 900 }}>
-                        {enabled ? "Enabled" : "Disabled"}
-                      </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                      <div style={{ fontSize: 12, fontWeight: 950, color: "#0F172A" }}>📄 {title}</div>
+                      <div style={{ fontSize: 11, opacity: 0.72, fontWeight: 900 }}>{enabled ? "Enabled" : "Disabled"}</div>
                     </div>
-                    <div style={{ fontSize: 11, opacity: 0.72, marginTop: 5, fontWeight: 800 }}>
-                      Slug: {slug}
-                    </div>
+                    <div style={{ fontSize: 11, opacity: 0.72, marginTop: 5, fontWeight: 800 }}>Slug: {slug}</div>
+                    {meta.attachmentName ? (
+                      <div style={{ fontSize: 11, opacity: 0.72, marginTop: 4, fontWeight: 800 }}>Attachment: {meta.attachmentName}</div>
+                    ) : null}
                   </button>
                 );
               })
@@ -408,28 +533,19 @@ export default function AdminPagesManagerPage() {
               padding: 14,
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 10,
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <div style={{ fontSize: 12, fontWeight: 950, opacity: 0.85 }}>
-                Editing:{" "}
-                <span style={{ opacity: 0.9 }}>
-                  {pageSlug ? pageSlug : "new page"}
-                </span>
+                Editing: <span style={{ opacity: 0.9 }}>{pageSlug ? pageSlug : "new page"}</span>
               </div>
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button
-                  onClick={() => resetFormFromPreset("about_us")}
+                  onClick={() => {
+                    if (selectedRow) loadRowIntoForm(selectedRow);
+                    else resetForm("", "");
+                  }}
                   style={{ ...btnGhost, padding: "8px 10px" }}
-                  disabled={saving}
-                  title="Reset form to About Us preset"
+                  disabled={saving || uploading}
                 >
                   Reset Form
                 </button>
@@ -443,7 +559,7 @@ export default function AdminPagesManagerPage() {
                       border: "1px solid rgba(239,68,68,0.22)",
                       background: "rgba(239,68,68,0.08)",
                     }}
-                    disabled={saving}
+                    disabled={saving || uploading}
                   >
                     🗑️ Delete
                   </button>
@@ -454,12 +570,7 @@ export default function AdminPagesManagerPage() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
               <div>
                 <div style={smallLabel}>Page Title</div>
-                <input
-                  value={pageTitle}
-                  onChange={(e) => setPageTitle(e.target.value)}
-                  placeholder="About Us"
-                  style={input}
-                />
+                <input value={pageTitle} onChange={(e) => setPageTitle(e.target.value)} placeholder="About Us" style={input} />
               </div>
 
               <div>
@@ -482,31 +593,96 @@ export default function AdminPagesManagerPage() {
               <textarea
                 value={pageContent}
                 onChange={(e) => setPageContent(e.target.value)}
-                placeholder="Write your About Us or policy content here..."
+                placeholder="Write your page content here..."
                 style={textarea}
               />
-              <div style={{ fontSize: 12, opacity: 0.72, marginTop: 8, lineHeight: 1.5 }}>
-                Keep it simple for now. In the next step, customer pages can read this content and show it on
-                <b> /about </b> and <b>/policies</b>.
-              </div>
             </div>
 
-            <div style={{ marginTop: 12 }}>
-              <div style={smallLabel}>Enabled</div>
-              <button
-                onClick={() => setPageEnabled((v) => !v)}
-                style={{
-                  width: "100%",
-                  padding: "10px 12px",
-                  borderRadius: 14,
-                  border: "1px solid rgba(15,23,42,0.12)",
-                  background: pageEnabled ? "rgba(34,197,94,0.10)" : "rgba(239,68,68,0.10)",
-                  fontWeight: 950,
-                  cursor: "pointer",
-                }}
-              >
-                {pageEnabled ? "Enabled ✅" : "Disabled ❌"}
-              </button>
+            <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+              <div>
+                <div style={smallLabel}>Page Attachment</div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ ...btnGhost, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.65 : 1 }}>
+                    {uploading ? "Uploading..." : "Upload Attachment"}
+                    <input
+                      type="file"
+                      style={{ display: "none" }}
+                      disabled={uploading || saving}
+                      onChange={(e) => void uploadAttachment(e.target.files?.[0] || null)}
+                    />
+                  </label>
+
+                  {attachmentName ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachmentName("");
+                        setAttachmentBucket("");
+                        setAttachmentPath("");
+                      }}
+                      style={{
+                        ...btnGhost,
+                        border: "1px solid rgba(239,68,68,0.22)",
+                        background: "rgba(239,68,68,0.08)",
+                      }}
+                      disabled={uploading || saving}
+                    >
+                      Remove Attachment
+                    </button>
+                  ) : null}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.72, marginTop: 8, lineHeight: 1.5 }}>
+                  {attachmentName
+                    ? `Attached file: ${attachmentName}`
+                    : "Upload PDF or document-style attachments such as a driver contract."}
+                </div>
+              </div>
+
+              <div>
+                <div style={smallLabel}>Contract Checkbox Required</div>
+                <button
+                  onClick={() => setContractRequired((value) => !value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 14,
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    background: contractRequired ? "rgba(34,197,94,0.10)" : "rgba(255,255,255,0.95)",
+                    fontWeight: 950,
+                    cursor: "pointer",
+                  }}
+                >
+                  {contractRequired ? "Required ✅" : "Optional"}
+                </button>
+              </div>
+
+              <div>
+                <div style={smallLabel}>Contract Checkbox Label</div>
+                <input
+                  value={contractCheckboxLabel}
+                  onChange={(e) => setContractCheckboxLabel(e.target.value)}
+                  placeholder="I agree to the driver contract."
+                  style={input}
+                />
+              </div>
+
+              <div>
+                <div style={smallLabel}>Enabled</div>
+                <button
+                  onClick={() => setPageEnabled((v) => !v)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 14,
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    background: pageEnabled ? "rgba(34,197,94,0.10)" : "rgba(239,68,68,0.10)",
+                    fontWeight: 950,
+                    cursor: "pointer",
+                  }}
+                >
+                  {pageEnabled ? "Enabled ✅" : "Disabled ❌"}
+                </button>
+              </div>
             </div>
 
             {error ? (
@@ -524,9 +700,6 @@ export default function AdminPagesManagerPage() {
                 }}
               >
                 {error}
-                <div style={{ marginTop: 6, fontWeight: 750, opacity: 0.9 }}>
-                  If this says table does not exist, next step is to run SQL for <b>{CMS_TABLE}</b>.
-                </div>
               </div>
             ) : null}
           </div>
@@ -543,13 +716,23 @@ export default function AdminPagesManagerPage() {
             <div style={{ fontSize: 12, fontWeight: 950, opacity: 0.9 }}>Preview</div>
 
             <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-              <div style={{ fontSize: 22, fontWeight: 950, color: "#0F172A" }}>
-                {pageTitle || "Page Title"}
-              </div>
+              <div style={{ fontSize: 22, fontWeight: 950, color: "#0F172A" }}>{pageTitle || "Page Title"}</div>
 
               <div style={{ fontSize: 12, opacity: 0.72, fontWeight: 850 }}>
                 Slug: <b>{pageSlug || "(empty)"}</b> • Status: <b>{pageEnabled ? "Enabled" : "Disabled"}</b>
               </div>
+
+              {attachmentName ? (
+                <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 850 }}>
+                  Attachment: <b>{attachmentName}</b>
+                </div>
+              ) : null}
+
+              {contractRequired ? (
+                <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 850 }}>
+                  Driver checkbox: <b>{contractCheckboxLabel || "I agree to the driver contract."}</b>
+                </div>
+              ) : null}
 
               <div
                 style={{

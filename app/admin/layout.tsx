@@ -5,6 +5,24 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
+const ALWAYS_ALLOWED_ADMIN_KEYS = ["dashboard", "admin_account"];
+
+function normalizePermissionList(input: any) {
+  if (!Array.isArray(input)) return [];
+  return Array.from(
+    new Set(
+      input
+        .map((item) =>
+          String(item || "")
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, "_")
+        )
+        .filter(Boolean)
+    )
+  );
+}
+
 function normalizeRole(r: any) {
   return String(r || "")
     .trim()
@@ -18,44 +36,47 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const [checking, setChecking] = useState(true);
   const [adminName, setAdminName] = useState("Admin");
+  const [adminAvatarUrl, setAdminAvatarUrl] = useState("");
   const [blockedReason, setBlockedReason] = useState<string | null>(null);
+  const [allowedNavKeys, setAllowedNavKeys] = useState<string[] | null>(null);
 
   const nav = useMemo(
     () => [
-      { href: "/admin", label: "Dashboard" },
-      { href: "/admin/restaurants", label: "Restaurants" },
-      { href: "/admin/orders", label: "Orders" },
+      { key: "dashboard", href: "/admin", label: "Dashboard" },
+      { key: "restaurants", href: "/admin/restaurants", label: "Restaurants" },
+      { key: "orders", href: "/admin/orders", label: "Orders" },
 
       // âœ… NEW: Revenue management (reports / filters / analytics)
-      { href: "/admin/revenue", label: "Revenue" },
-      { href: "/admin/payouts", label: "Payouts" },
-      { href: "/admin/driver-bank-accounts", label: "Driver Bank Accounts" },
+      { key: "revenue", href: "/admin/revenue", label: "Revenue" },
+      { key: "payouts", href: "/admin/payouts", label: "Payouts" },
+      { key: "driver_bank_accounts", href: "/admin/driver-bank-accounts", label: "Driver Bank Accounts" },
 
       // âœ… NEW: Groceries management (approve/disable/accepting orders)
-      { href: "/admin/groceries", label: "Groceries" },
+      { key: "groceries", href: "/admin/groceries", label: "Groceries" },
 
       // âœ… NEW: Delivery partners management (approve/reject/edit/disable)
-      { href: "/admin/delivery-partners", label: "Delivery Partners" },
+      { key: "delivery_partners", href: "/admin/delivery-partners", label: "Delivery Partners" },
 
-      { href: "/admin/users", label: "Users" },
+      { key: "users", href: "/admin/users", label: "Users" },
 
       // âœ… NEW: Support / Help inbox
-      { href: "/admin/support", label: "Support" },
+      { key: "support", href: "/admin/support", label: "Support" },
 
       // âœ… NEW: CMS / homepage feature pages in left navigation
-      { href: "/admin/pages", label: "CMS Pages" },
-      { href: "/admin/home-banner", label: "Home Banner" },
-      { href: "/admin/home-banner-settings", label: "Home Banner Settings" },
-      { href: "/admin/home-featured", label: "Home Featured" },
-      { href: "/admin/home-filters", label: "Home Filters" },
-      { href: "/admin/mobile-home", label: "Mobile Home" },
-      { href: "/admin/mobile-popular", label: "Mobile Popular" },
-      { href: "/admin/mobile-recommended", label: "Mobile Recommended" },
-      { href: "/admin/mobile-groceries", label: "Mobile Groceries" },
-      { href: "/admin/mobile-restaurants", label: "Mobile Restaurants" },
-      { href: "/admin/currency-settings", label: "Currency Settings" },
+      { key: "cms_pages", href: "/admin/pages", label: "CMS Pages" },
+      { key: "home_banner", href: "/admin/home-banner", label: "Home Banner" },
+      { key: "home_banner_settings", href: "/admin/home-banner-settings", label: "Home Banner Settings" },
+      { key: "home_featured", href: "/admin/home-featured", label: "Home Featured" },
+      { key: "home_filters", href: "/admin/home-filters", label: "Home Filters" },
+      { key: "mobile_home", href: "/admin/mobile-home", label: "Mobile Home" },
+      { key: "mobile_popular", href: "/admin/mobile-popular", label: "Mobile Popular" },
+      { key: "mobile_recommended", href: "/admin/mobile-recommended", label: "Mobile Recommended" },
+      { key: "mobile_groceries", href: "/admin/mobile-groceries", label: "Mobile Groceries" },
+      { key: "mobile_restaurants", href: "/admin/mobile-restaurants", label: "Mobile Restaurants" },
+      { key: "currency_settings", href: "/admin/currency-settings", label: "Currency Settings" },
 
-      { href: "/admin/settings", label: "Settings" },
+      { key: "settings", href: "/admin/settings", label: "Settings" },
+      { key: "admin_account", href: "/admin/account", label: "Admin Account" },
     ],
     []
   );
@@ -67,6 +88,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       try {
         setChecking(true);
         setBlockedReason(null);
+        setAllowedNavKeys(null);
+        setAdminAvatarUrl("");
 
         const {
           data: { user },
@@ -98,7 +121,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         if (!profile) {
           const byUserId = await supabase
             .from("profiles")
-            .select("id, user_id, role, full_name, name, email")
+            .select("id, user_id, role, full_name, name, avatar_url")
             .eq("user_id", user.id)
             .maybeSingle();
 
@@ -118,7 +141,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         if (!profile) {
           const byId = await supabase
             .from("profiles")
-            .select("id, user_id, role, full_name, name, email")
+            .select("id, user_id, role, full_name, name, avatar_url")
             .eq("id", user.id)
             .maybeSingle();
 
@@ -143,12 +166,49 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         }
 
         const role = normalizeRole(profile?.role);
-        if (role !== "admin") {
+        if (role !== "admin" && role !== "sub_admin") {
           if (!alive) return;
           setBlockedReason(
-            `Not authorized. Your role is "${profile?.role}". Change it to "admin" in profiles table.`
+            `Not authorized. Your role is "${profile?.role}". Change it to "admin" or "sub_admin" in profiles table.`
           );
           return;
+        }
+
+        if (role === "sub_admin") {
+          const { data: accessRow, error: accessError } = await supabase
+            .from("system_settings")
+            .select("value_json")
+            .eq("key", "admin_access")
+            .maybeSingle();
+
+          if (accessError) {
+            if (!alive) return;
+            setBlockedReason(`Sub-admin access load failed: ${accessError.message || "Unknown error"}`);
+            return;
+          }
+
+          const valueJson = accessRow?.value_json && typeof accessRow.value_json === "object"
+            ? accessRow.value_json
+            : {};
+          const members = Array.isArray((valueJson as any)?.members) ? (valueJson as any).members : [];
+          const member = members.find((item: any) => {
+            const itemUserId = String(item?.user_id || "").trim();
+            const itemEmail = String(item?.email || "").trim().toLowerCase();
+            return itemUserId === String(user.id) || (!!user.email && itemEmail === String(user.email).toLowerCase());
+          });
+
+          if (!member || member?.is_active === false) {
+            if (!alive) return;
+            setBlockedReason("This sub-admin account does not have an active admin access assignment yet.");
+            return;
+          }
+
+          const nextPermissions = Array.from(
+            new Set([...ALWAYS_ALLOWED_ADMIN_KEYS, ...normalizePermissionList(member?.permissions)])
+          );
+          if (alive) setAllowedNavKeys(nextPermissions);
+        } else if (alive) {
+          setAllowedNavKeys(null);
         }
 
         const nm =
@@ -159,6 +219,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           "Admin";
 
         if (alive) setAdminName(String(nm));
+        if (alive) setAdminAvatarUrl(String(profile?.avatar_url || "").trim());
       } catch (e) {
         console.log("Admin guard crash:", e);
         if (!alive) return;
@@ -173,6 +234,25 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       alive = false;
     };
   }, [router]);
+
+  useEffect(() => {
+    if (checking || blockedReason) return;
+    if (!allowedNavKeys || allowedNavKeys.length === 0) return;
+
+    const current = nav.find(
+      (item) => pathname === item.href || (item.href !== "/admin" && pathname?.startsWith(item.href))
+    );
+    if (!current) return;
+
+    if (!allowedNavKeys.includes(current.key)) {
+      setBlockedReason("This sub-admin account does not have permission to open this admin section.");
+    }
+  }, [allowedNavKeys, blockedReason, checking, nav, pathname]);
+
+  const visibleNav = useMemo(() => {
+    if (!allowedNavKeys || allowedNavKeys.length === 0) return nav;
+    return nav.filter((item) => allowedNavKeys.includes(item.key));
+  }, [allowedNavKeys, nav]);
 
   // âœ… Modern app font stack (Inter-like). We don't use next/font here because this is a client component.
   const appFont =
@@ -216,6 +296,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     borderRadius: 14,
     background: "linear-gradient(135deg, rgba(255,140,0,1), rgba(255,220,160,0.95))",
     boxShadow: "0 14px 36px rgba(255,140,0,0.18)",
+    overflow: "hidden",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   };
 
   const navItem = (active: boolean): React.CSSProperties => ({
@@ -343,7 +427,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <div style={shell}>
         <aside style={sidebar}>
           <div style={brand}>
-            <div style={brandDot} />
+            <div style={brandDot}>
+              {adminAvatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={adminAvatarUrl}
+                  alt="Admin avatar"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <span style={{ fontWeight: 950, fontSize: 18, color: "#0F172A" }}>
+                  {String(adminName || "A").slice(0, 1).toUpperCase()}
+                </span>
+              )}
+            </div>
             <div>
               <div style={{ fontSize: 12, opacity: 0.75, fontWeight: 800, letterSpacing: 0.2 }}>
                 Admin Panel
@@ -358,7 +455,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             NAVIGATION
           </div>
 
-          {nav.map((n) => {
+          {visibleNav.map((n) => {
             const active =
               pathname === n.href || (n.href !== "/admin" && pathname?.startsWith(n.href));
             return (
@@ -381,6 +478,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           >
             <div style={{ fontSize: 12, opacity: 0.75, fontWeight: 800 }}>Logged in as</div>
             <div style={{ fontWeight: 950, marginTop: 4, fontSize: 14 }}>{adminName}</div>
+            {adminAvatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={adminAvatarUrl}
+                alt="Admin profile"
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 18,
+                  objectFit: "cover",
+                  marginTop: 10,
+                  border: "1px solid rgba(15, 23, 42, 0.10)",
+                }}
+              />
+            ) : null}
 
             <button
               onClick={async () => {
@@ -428,6 +540,3 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     </div>
   );
 }
-
-
-

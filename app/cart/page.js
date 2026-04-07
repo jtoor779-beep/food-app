@@ -397,6 +397,56 @@ function asBool(v) {
   return s === "true" || s === "1" || s === "yes";
 }
 
+function roundMoney(v) {
+  return Math.round(Number(v || 0) * 100) / 100;
+}
+
+function haversineMiles(startLat, startLng, endLat, endLng) {
+  const toRad = (x) => (Number(x) * Math.PI) / 180;
+  const R = 3958.8;
+  const dLat = toRad(Number(endLat) - Number(startLat));
+  const dLng = toRad(Number(endLng) - Number(startLng));
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(startLat)) *
+      Math.cos(toRad(endLat)) *
+      Math.sin(dLng / 2) ** 2;
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+function calculateConfiguredDeliveryFee({ platform, subtotal, distanceMiles }) {
+  const baseFee = Math.max(0, toNum(platform?.delivery_fee_base, 20));
+  const freeOver = Math.max(0, toNum(platform?.delivery_free_over, 499));
+  if (freeOver > 0 && Number(subtotal || 0) >= freeOver) {
+    return {
+      fee: 0,
+      baseFee,
+      extraDistanceFee: 0,
+      busyCharge: 0,
+      distanceMiles: Number.isFinite(distanceMiles) ? distanceMiles : null,
+    };
+  }
+
+  const thresholdMiles = Math.max(0, toNum(platform?.delivery_fee_distance_threshold_miles, 2));
+  const directPerMile = Math.max(0, toNum(platform?.delivery_fee_per_mile_after_threshold, 0));
+  const legacyPerKm = Math.max(0, toNum(platform?.delivery_fee_per_km, 0));
+  const perMileAfterThreshold = directPerMile > 0 ? directPerMile : legacyPerKm > 0 ? legacyPerKm * 1.60934 : 0;
+  const safeDistance = Number.isFinite(distanceMiles) ? Math.max(0, Number(distanceMiles)) : null;
+  const extraMiles = safeDistance != null && safeDistance > thresholdMiles ? safeDistance - thresholdMiles : 0;
+  const extraDistanceFee = extraMiles > 0 ? roundMoney(extraMiles * perMileAfterThreshold) : 0;
+  const busyCharge = asBool(platform?.delivery_fee_busy_enabled)
+    ? Math.max(0, toNum(platform?.delivery_fee_busy_charge, 0))
+    : 0;
+
+  return {
+    fee: roundMoney(baseFee + extraDistanceFee + busyCharge),
+    baseFee,
+    extraDistanceFee,
+    busyCharge,
+    distanceMiles: safeDistance,
+  };
+}
+
 async function countRows(table, filters = []) {
   try {
     let q = supabase.from(table).select("id", { count: "exact", head: true });
@@ -697,6 +747,10 @@ const PLATFORM_DEFAULTS = {
   commission_percent: "10",
   delivery_fee_base: "20",
   delivery_fee_per_km: "0",
+  delivery_fee_distance_threshold_miles: "2",
+  delivery_fee_per_mile_after_threshold: "0",
+  delivery_fee_busy_charge: "0",
+  delivery_fee_busy_enabled: false,
   delivery_free_over: "499",
   gst_percent: "5",
   default_currency: DEFAULT_CURRENCY,
@@ -738,6 +792,21 @@ async function loadPlatformSettingsSafe() {
       commission_percent: safeNumStr(json?.commission_percent, PLATFORM_DEFAULTS.commission_percent),
       delivery_fee_base: safeNumStr(json?.delivery_fee_base, PLATFORM_DEFAULTS.delivery_fee_base),
       delivery_fee_per_km: safeNumStr(json?.delivery_fee_per_km, PLATFORM_DEFAULTS.delivery_fee_per_km),
+      delivery_fee_distance_threshold_miles: safeNumStr(
+        json?.delivery_fee_distance_threshold_miles,
+        PLATFORM_DEFAULTS.delivery_fee_distance_threshold_miles
+      ),
+      delivery_fee_per_mile_after_threshold: safeNumStr(
+        json?.delivery_fee_per_mile_after_threshold,
+        PLATFORM_DEFAULTS.delivery_fee_per_mile_after_threshold
+      ),
+      delivery_fee_busy_charge: safeNumStr(
+        json?.delivery_fee_busy_charge,
+        PLATFORM_DEFAULTS.delivery_fee_busy_charge
+      ),
+      delivery_fee_busy_enabled: asBool(
+        json?.delivery_fee_busy_enabled ?? PLATFORM_DEFAULTS.delivery_fee_busy_enabled
+      ),
       delivery_free_over: safeNumStr(json?.delivery_free_over, PLATFORM_DEFAULTS.delivery_free_over),
       gst_percent: safeNumStr(json?.gst_percent, PLATFORM_DEFAULTS.gst_percent),
       default_currency: safeStr(resolvedCurrency, PLATFORM_DEFAULTS.default_currency),
@@ -1148,6 +1217,13 @@ export default function CartPage() {
 
   // âœ… Platform settings state (from Admin panel)
   const [platform, setPlatform] = useState({ ...PLATFORM_DEFAULTS });
+  const [deliveryQuote, setDeliveryQuote] = useState({
+    fee: 0,
+    distanceMiles: null,
+    baseFee: 0,
+    extraDistanceFee: 0,
+    busyCharge: 0,
+  });
 
   // Delivery fields
   const [customer_name, setCustomerName] = useState("");
@@ -1209,23 +1285,7 @@ export default function CartPage() {
 
   const itemCount = useMemo(() => (activeItems || []).reduce((s, x) => s + Number(x.qty || 0), 0), [activeItems]);
 
-  const deliveryFee = useMemo(() => {
-    if (!activeItems || activeItems.length === 0) return 0;
-
-    const baseFromAdmin = toNum(platform?.delivery_fee_base, 25);
-    const base = Math.max(0, baseFromAdmin);
-
-    const freeOver = Math.max(0, toNum(platform?.delivery_free_over, 499));
-    const computed = freeOver > 0 && subtotal >= freeOver ? 0 : base;
-    console.log("[grocery-cart] delivery fee computed", {
-      cartMode,
-      subtotal: Number(subtotal || 0),
-      baseFromAdmin,
-      freeOver,
-      computed,
-    });
-    return computed;
-  }, [activeItems, subtotal, platform]);
+  const deliveryFee = Number(deliveryQuote?.fee || 0);
 
   const gstPercent = useMemo(() => {
     const p = toNum(platform?.gst_percent, 5);
@@ -1299,6 +1359,100 @@ export default function CartPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshDeliveryQuote() {
+      if (!activeItems || activeItems.length === 0 || Number(subtotal || 0) <= 0) {
+        if (!cancelled) {
+          setDeliveryQuote({
+            fee: 0,
+            distanceMiles: null,
+            baseFee: 0,
+            extraDistanceFee: 0,
+            busyCharge: 0,
+          });
+        }
+        return;
+      }
+
+      let pickupLat = null;
+      let pickupLng = null;
+      try {
+        const sourceId =
+          cartMode === "grocery" ? activeItems[0]?.store_id : activeItems[0]?.restaurant_id;
+        const table = cartMode === "grocery" ? "grocery_stores" : "restaurants";
+        if (sourceId) {
+          const { data } = await supabase
+            .from(table)
+            .select("lat, lng, latitude, longitude, location_lat, location_lng, store_lat, store_lng")
+            .eq("id", sourceId)
+            .maybeSingle();
+          const nextLat = Number(
+            data?.lat ?? data?.latitude ?? data?.location_lat ?? data?.store_lat
+          );
+          const nextLng = Number(
+            data?.lng ?? data?.longitude ?? data?.location_lng ?? data?.store_lng
+          );
+          pickupLat = isFinite(nextLat) ? nextLat : null;
+          pickupLng = isFinite(nextLng) ? nextLng : null;
+        }
+      } catch {
+        pickupLat = null;
+        pickupLng = null;
+      }
+
+      let distanceMiles = null;
+      const addressCandidate = [
+        address_line1.trim(),
+        address_line2.trim(),
+        landmark.trim(),
+        city.trim(),
+        state_region.trim(),
+        zip.trim(),
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      if (addressCandidate) {
+        const geo = await geocodeAddressClient(addressCandidate);
+        if (
+          geo?.lat != null &&
+          geo?.lng != null &&
+          pickupLat != null &&
+          pickupLng != null
+        ) {
+          const miles = haversineMiles(pickupLat, pickupLng, geo.lat, geo.lng);
+          distanceMiles = isFinite(miles) && miles > 0 ? miles : null;
+        }
+      }
+
+      const nextQuote = calculateConfiguredDeliveryFee({
+        platform,
+        subtotal,
+        distanceMiles,
+      });
+
+      if (!cancelled) setDeliveryQuote(nextQuote);
+    }
+
+    refreshDeliveryQuote();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeItems,
+    address_line1,
+    address_line2,
+    cartMode,
+    city,
+    landmark,
+    platform,
+    state_region,
+    subtotal,
+    zip,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1822,6 +1976,13 @@ export default function CartPage() {
           deliveryDistanceMiles = null;
         }
 
+        const finalDeliveryQuote = calculateConfiguredDeliveryFee({
+          platform,
+          subtotal,
+          distanceMiles: deliveryDistanceMiles,
+        });
+        const finalDeliveryFee = Number(finalDeliveryQuote.fee || 0);
+
         let finalCoupon = null;
         let finalDiscount = 0;
 
@@ -1855,11 +2016,11 @@ export default function CartPage() {
 
         const total_amount = Math.max(
           0,
-          Number(subtotal || 0) + Number(deliveryFee || 0) + Number(gst || 0) + Number(tip || 0) + platformFee - Number(finalDiscount || 0)
+          Number(subtotal || 0) + finalDeliveryFee + Number(gst || 0) + Number(tip || 0) + platformFee - Number(finalDiscount || 0)
         );
         const deliveryPayout = Math.max(
           0,
-          Number(deliveryFee || 0) + Number(tip || 0)
+          finalDeliveryFee + Number(tip || 0)
         );
 
         const orderPayload = {
@@ -1876,7 +2037,7 @@ export default function CartPage() {
           store_lat: storeLat,
           store_lng: storeLng,
           delivery_distance_miles: deliveryDistanceMiles,
-          delivery_fee: Number(deliveryFee || 0),
+          delivery_fee: finalDeliveryFee,
           tip_amount: Number(tip || 0),
           platform_fee: platformFee,
           delivery_payout: deliveryPayout,
@@ -1977,7 +2138,7 @@ export default function CartPage() {
       const extraMeta = [
         finalCoupon?.code ? `coupon:${finalCoupon.code}` : "",
         tip ? `tip:${tip}` : "",
-        deliveryFee ? `deliveryFee:${deliveryFee}` : "",
+        finalDeliveryFee ? `deliveryFee:${finalDeliveryFee}` : "",
         gst ? `tax:${gst}` : "",
         paymentMethod ? `pay:${paymentMethod}` : "",
         platform?.commission_percent ? `platform%:${commissionPercent}` : "",
@@ -2069,6 +2230,30 @@ export default function CartPage() {
         restLng = null;
       }
 
+      let deliveryDistanceMiles = null;
+      try {
+        const cLat = Number(geo?.lat);
+        const cLng = Number(geo?.lng);
+        if (
+          isFinite(restLat) &&
+          isFinite(restLng) &&
+          isFinite(cLat) &&
+          isFinite(cLng)
+        ) {
+          const miles = haversineMiles(restLat, restLng, cLat, cLng);
+          deliveryDistanceMiles = isFinite(miles) && miles > 0 ? miles : null;
+        }
+      } catch {
+        deliveryDistanceMiles = null;
+      }
+
+      const finalDeliveryQuote = calculateConfiguredDeliveryFee({
+        platform,
+        subtotal,
+        distanceMiles: deliveryDistanceMiles,
+      });
+      const finalDeliveryFee = Number(finalDeliveryQuote.fee || 0);
+
       const subtotal_amount = Math.max(0, Number(subtotal || 0));
       const discount_amount = Math.max(0, Number(finalDiscount || 0));
 
@@ -2078,7 +2263,7 @@ export default function CartPage() {
       const total_amount = Math.max(
         0,
         subtotal_amount +
-          Number(deliveryFee || 0) +
+          finalDeliveryFee +
           Number(gst || 0) +
           Number(tip || 0) +
           platformFee -
@@ -2106,8 +2291,9 @@ export default function CartPage() {
         customer_lng: geo?.lng ?? null,
         restaurant_lat: restLat,
         restaurant_lng: restLng,
+        delivery_distance_miles: deliveryDistanceMiles,
 
-        delivery_fee: Number(deliveryFee || 0),
+        delivery_fee: finalDeliveryFee,
         tax_amount: Number(gst || 0),
         tip_amount: Number(tip || 0),
         platform_fee: platformFee,

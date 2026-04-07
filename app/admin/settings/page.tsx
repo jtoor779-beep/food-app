@@ -9,6 +9,10 @@ type SettingsState = {
   commission_percent: string; // keep as string for input
   delivery_fee_base: string;
   delivery_fee_per_km: string;
+  delivery_fee_distance_threshold_miles: string;
+  delivery_fee_per_mile_after_threshold: string;
+  delivery_fee_busy_charge: string;
+  delivery_fee_busy_enabled: boolean;
   tax_note: string;
   gst_percent: string; // Tax % (stored as gst_percent for compatibility)
 
@@ -21,6 +25,10 @@ const DEFAULTS: SettingsState = {
   commission_percent: "10",
   delivery_fee_base: "20",
   delivery_fee_per_km: "0",
+  delivery_fee_distance_threshold_miles: "2",
+  delivery_fee_per_mile_after_threshold: "0",
+  delivery_fee_busy_charge: "0",
+  delivery_fee_busy_enabled: false,
   tax_note: "Taxes will be configured later as per country/state rules.",
   gst_percent: "5",
 
@@ -334,6 +342,10 @@ export default function AdminSettingsPage() {
         commission_percent: toNumberString(form.commission_percent),
         delivery_fee_base: toNumberString(form.delivery_fee_base),
         delivery_fee_per_km: toNumberString(form.delivery_fee_per_km),
+        delivery_fee_distance_threshold_miles: toNumberString(form.delivery_fee_distance_threshold_miles),
+        delivery_fee_per_mile_after_threshold: toNumberString(form.delivery_fee_per_mile_after_threshold),
+        delivery_fee_busy_charge: toNumberString(form.delivery_fee_busy_charge),
+        delivery_fee_busy_enabled: !!form.delivery_fee_busy_enabled,
         tax_note: String(form.tax_note ?? ""),
         gst_percent: toNumberString(form.gst_percent),
       };
@@ -628,14 +640,55 @@ for each row execute function public.touch_updated_at();`}
             </div>
 
             <div>
-              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Per KM fee (optional)</div>
+              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Legacy per KM fee (optional)</div>
               <input
                 value={form.delivery_fee_per_km}
                 onChange={(e) => setForm((p) => ({ ...p, delivery_fee_per_km: e.target.value }))}
                 style={styles.input}
                 placeholder="e.g. 2"
               />
-              <div style={styles.small}>If you later calculate distance, this fee is used.</div>
+              <div style={styles.small}>Kept for old setups. If per-mile is empty, cart can still fall back to this value.</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Distance threshold miles</div>
+              <input
+                value={form.delivery_fee_distance_threshold_miles}
+                onChange={(e) => setForm((p) => ({ ...p, delivery_fee_distance_threshold_miles: e.target.value }))}
+                style={styles.input}
+                placeholder="e.g. 2"
+              />
+              <div style={styles.small}>Miles included before the extra per-mile charge starts.</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Per mile after threshold</div>
+              <input
+                value={form.delivery_fee_per_mile_after_threshold}
+                onChange={(e) => setForm((p) => ({ ...p, delivery_fee_per_mile_after_threshold: e.target.value }))}
+                style={styles.input}
+                placeholder="e.g. 1.5"
+              />
+              <div style={styles.small}>Extra amount added for each mile after the threshold.</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Busy charge</div>
+              <input
+                value={form.delivery_fee_busy_charge}
+                onChange={(e) => setForm((p) => ({ ...p, delivery_fee_busy_charge: e.target.value }))}
+                style={styles.input}
+                placeholder="e.g. 2.5"
+              />
+              <div style={styles.small}>Flat surge charge added when busy mode is enabled.</div>
+            </div>
+
+            <div style={{ alignSelf: "end" }}>
+              <Toggle
+                label="Busy charge enabled"
+                value={form.delivery_fee_busy_enabled}
+                onChange={(v) => setForm((p) => ({ ...p, delivery_fee_busy_enabled: v }))}
+              />
             </div>
           </div>
         </div>

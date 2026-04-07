@@ -52,6 +52,7 @@ function buildEnabledUpdate(u: AnyRow, action: "enable" | "disable") {
 const ROLE_OPTIONS = [
   { value: "", label: "All roles" },
   { value: "admin", label: "Admin" },
+  { value: "sub_admin", label: "Sub Admin" },
   { value: "owner", label: "Owner" },
   { value: "customer", label: "Customer" },
   { value: "delivery", label: "Delivery" },

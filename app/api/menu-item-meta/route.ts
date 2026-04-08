@@ -113,10 +113,10 @@ async function requireOwnerOrAdmin(req: Request, itemId: string) {
 
 async function saveMeta(itemId: string, value_json: any) {
   const key = `${PREFIX}${itemId}`;
-  const updated = await supabaseAdmin!.from("system_settings").update({ value_json }).eq("key", key);
-  if (!updated.error) return;
-  const inserted = await supabaseAdmin!.from("system_settings").insert({ key, value_json });
-  if (inserted.error) throw inserted.error;
+  const { error } = await supabaseAdmin!
+    .from("system_settings")
+    .upsert({ key, value_json }, { onConflict: "key" });
+  if (error) throw error;
 }
 
 export async function GET(req: Request) {

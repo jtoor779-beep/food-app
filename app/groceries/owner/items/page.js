@@ -1599,9 +1599,7 @@ export default function GroceryOwnerItemsPage() {
         } else {
           const newId = ins.id;
 
-          if (Array.isArray(weightOptions) && weightOptions.length > 0) {
-            await saveGroceryItemMeta(newId, metaPayload);
-          }
+          await saveGroceryItemMeta(newId, metaPayload);
 
           setInfoMsg("✅ Item added");
         }

@@ -6,10 +6,14 @@ import supabase from "@/lib/supabase";
 type AnyRow = Record<string, any>;
 
 function normalizeStatus(s: any) {
-  return String(s || "")
+  const raw = String(s || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
+  if (raw === "on_the_way" || raw === "delivering" || raw === "picked_up") return "out_for_delivery";
+  if (raw === "confirmed") return "accepted";
+  if (raw === "rejected") return "cancelled";
+  return raw;
 }
 
 function formatMoney(v: any) {

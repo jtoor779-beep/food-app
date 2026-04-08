@@ -218,6 +218,8 @@ export default function GroceryOwnerItemsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
+  const [originalPrice, setOriginalPrice] = useState("");
+  const [discountPrice, setDiscountPrice] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
   // We will NOT allow manual typing for category/subcategory
@@ -479,6 +481,8 @@ export default function GroceryOwnerItemsPage() {
     setName("");
     setDescription("");
     setPrice("");
+    setOriginalPrice("");
+    setDiscountPrice("");
     setImageUrl("");
     setSelectedCatId("");
     setSelectedSubId("");
@@ -551,6 +555,8 @@ export default function GroceryOwnerItemsPage() {
     setName(row?.name || "");
     setDescription(row?.description || "");
     setPrice(String(row?.price ?? ""));
+    setOriginalPrice(String(row?.original_price ?? ""));
+    setDiscountPrice(String(row?.discount_price ?? ""));
     setImageUrl(row?.image_url || "");
     setIsAvailable(!!row?.is_available);
     setInStock(!!row?.in_stock);
@@ -1396,7 +1402,10 @@ export default function GroceryOwnerItemsPage() {
     if (!catName) return setErrMsg("Selected category is invalid. Please refresh categories.");
 
     const p = Number(price || 0);
-    if (Number.isNaN(p) || p < 0) return setErrMsg("Price must be a valid number.");
+    const original = Number(originalPrice || 0);
+    const discounted = Number(discountPrice || 0);
+    const effectivePrice = Number.isFinite(discounted) && discounted > 0 ? discounted : p;
+    if (Number.isNaN(effectivePrice) || effectivePrice < 0) return setErrMsg("Price must be a valid number.");
 
     if (Array.isArray(weightOptions) && weightOptions.length > 0) {
       const bad = weightOptions.some(
@@ -1413,7 +1422,7 @@ export default function GroceryOwnerItemsPage() {
         store_id: storeId,
         name: clean(name),
         description: clean(description),
-        price: p,
+        price: effectivePrice,
         image_url: clean(imageUrl),
         category: catName,
         is_available: !!isAvailable,
@@ -1433,11 +1442,28 @@ export default function GroceryOwnerItemsPage() {
       ];
 
       const taxVariants = [{ is_taxable: !!isTaxable }, {}];
+      const pricingVariants = [
+        Number.isFinite(original) && original > effectivePrice
+          ? {
+              original_price: original,
+              discount_price:
+                Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || p || 0, effectivePrice)
+                  ? discounted
+                  : null,
+              discount_percent: Math.max(1, Math.round(((original - effectivePrice) / original) * 100)),
+            }
+          : Number.isFinite(discounted) && discounted > 0
+          ? { discount_price: discounted }
+          : {},
+        {},
+      ];
 
       const variants = [];
       for (const sv of subVariants) {
         for (const tv of taxVariants) {
-          variants.push({ ...(sv || {}), ...(tv || {}) });
+          for (const pv of pricingVariants) {
+            variants.push({ ...(sv || {}), ...(tv || {}), ...(pv || {}) });
+          }
         }
       }
 
@@ -2472,6 +2498,17 @@ export default function GroceryOwnerItemsPage() {
                   <div style={label}>Base Price *</div>
                   <input value={price} onChange={(e) => setPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
                   <div style={hintSmall}>Base price is used if you don&apos;t add weight options.</div>
+                </div>
+
+                <div>
+                  <div style={label}>Original Price</div>
+                  <input value={originalPrice} onChange={(e) => setOriginalPrice(e.target.value)} style={input} placeholder="25" inputMode="decimal" />
+                </div>
+
+                <div>
+                  <div style={label}>Discount Price</div>
+                  <input value={discountPrice} onChange={(e) => setDiscountPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
+                  <div style={hintSmall}>Customer sees strike-through original price and the discount badge.</div>
                 </div>
 
                 <div style={{ gridColumn: "1 / -1" }}>

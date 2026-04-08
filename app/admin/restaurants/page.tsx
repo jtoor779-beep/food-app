@@ -647,7 +647,7 @@ export default function AdminRestaurantsPage() {
     if (!restaurantId) return;
 
     const ok = window.confirm(
-      `Delete restaurant "${String(row?.name || restaurantId)}" from the admin panel? This will also remove related menu and order data where possible.`
+      `Delete restaurant "${String(row?.name || restaurantId)}" from the admin panel? This now archives the store, hides it from active selling, and keeps previous orders, revenue, and delivery history safe.`
     );
     if (!ok) return;
 

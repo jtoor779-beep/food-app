@@ -57,26 +57,6 @@ async function requireAdminUser(req: Request) {
   return user;
 }
 
-async function listIds(table: string, filterColumn: string, filterValue: string) {
-  try {
-    const { data, error } = await supabaseAdmin!
-      .from(table)
-      .select("id")
-      .eq(filterColumn, filterValue)
-      .limit(5000);
-    if (error) {
-      if (isIgnorableError(error)) return [] as string[];
-      throw error;
-    }
-    return Array.isArray(data)
-      ? data.map((row: any) => clean(row?.id)).filter(Boolean)
-      : [];
-  } catch (error: any) {
-    if (isIgnorableError(error)) return [] as string[];
-    throw error;
-  }
-}
-
 async function deleteByEq(table: string, column: string, value: string) {
   try {
     const { error } = await supabaseAdmin!.from(table).delete().eq(column, value);
@@ -86,60 +66,71 @@ async function deleteByEq(table: string, column: string, value: string) {
   }
 }
 
-async function deleteByIn(table: string, column: string, values: string[]) {
-  const filtered = values.map((value) => clean(value)).filter(Boolean);
-  if (!filtered.length) return;
-  try {
-    const { error } = await supabaseAdmin!.from(table).delete().in(column, filtered);
-    if (error && !isIgnorableError(error)) throw error;
-  } catch (error: any) {
-    if (!isIgnorableError(error)) throw error;
+async function updateWithVariants(table: string, matchColumn: string, matchValue: string, variants: Record<string, any>[]) {
+  let lastError: any = null;
+  for (const patch of variants) {
+    try {
+      const { error } = await supabaseAdmin!.from(table).update(patch).eq(matchColumn, matchValue);
+      if (error) throw error;
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (!isIgnorableError(error)) continue;
+    }
   }
+  if (lastError && !isIgnorableError(lastError)) throw lastError;
 }
 
-async function deleteRestaurantEntity(restaurantId: string) {
-  const orderIds = await listIds("orders", "restaurant_id", restaurantId);
+async function archiveRestaurantEntity(restaurantId: string) {
+  const archivedAt = new Date().toISOString();
 
   await Promise.allSettled([
-    deleteByEq("menu_items", "restaurant_id", restaurantId),
-    deleteByEq("order_reviews", "target_id", restaurantId),
-    deleteByEq("public_reviews", "target_id", restaurantId),
+    updateWithVariants("restaurants", "id", restaurantId, [
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", deleted_at: archivedAt, is_archived: true },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", deleted_at: archivedAt },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", is_archived: true },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted" },
+    ]),
+    updateWithVariants("menu_items", "restaurant_id", restaurantId, [
+      { in_stock: false, is_available: false, is_archived: true, deleted_at: archivedAt },
+      { in_stock: false, is_available: false, deleted_at: archivedAt },
+      { in_stock: false, is_available: false, is_archived: true },
+      { in_stock: false, is_available: false },
+      { in_stock: false },
+    ]),
     deleteByEq("home_featured_items", "restaurant_id", restaurantId),
   ]);
-
-  await Promise.allSettled([
-    deleteByIn("order_items", "order_id", orderIds),
-    deleteByIn("delivery_events", "order_id", orderIds),
-    deleteByIn("order_chat_messages", "order_id", orderIds),
-    deleteByIn("notifications", "order_id", orderIds),
-  ]);
-
-  await deleteByEq("orders", "restaurant_id", restaurantId);
-  await deleteByEq("restaurants", "id", restaurantId);
 }
 
-async function deleteGroceryEntity(storeId: string) {
-  const orderIds = await listIds("grocery_orders", "store_id", storeId);
+async function archiveGroceryEntity(storeId: string) {
+  const archivedAt = new Date().toISOString();
 
   await Promise.allSettled([
-    deleteByEq("grocery_items", "store_id", storeId),
-    deleteByEq("grocery_categories", "store_id", storeId),
-    deleteByEq("grocery_subcategories", "store_id", storeId),
-    deleteByEq("order_reviews", "target_id", storeId),
-    deleteByEq("public_reviews", "target_id", storeId),
+    updateWithVariants("grocery_stores", "id", storeId, [
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", deleted_at: archivedAt, is_archived: true },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", deleted_at: archivedAt },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted", is_archived: true },
+      { is_disabled: true, accepting_orders: false, approval_status: "deleted" },
+    ]),
+    updateWithVariants("grocery_items", "store_id", storeId, [
+      { in_stock: false, is_available: false, is_archived: true, deleted_at: archivedAt },
+      { in_stock: false, is_available: false, deleted_at: archivedAt },
+      { in_stock: false, is_available: false, is_archived: true },
+      { in_stock: false, is_available: false },
+      { in_stock: false },
+    ]),
+    updateWithVariants("grocery_categories", "store_id", storeId, [
+      { is_active: false, is_archived: true, deleted_at: archivedAt },
+      { is_active: false, deleted_at: archivedAt },
+      { is_active: false },
+    ]),
+    updateWithVariants("grocery_subcategories", "store_id", storeId, [
+      { is_active: false, is_archived: true, deleted_at: archivedAt },
+      { is_active: false, deleted_at: archivedAt },
+      { is_active: false },
+    ]),
     deleteByEq("home_featured_items", "store_id", storeId),
   ]);
-
-  await Promise.allSettled([
-    deleteByIn("grocery_order_items", "grocery_order_id", orderIds),
-    deleteByIn("grocery_order_items", "order_id", orderIds),
-    deleteByIn("delivery_events", "order_id", orderIds),
-    deleteByIn("order_chat_messages", "order_id", orderIds),
-    deleteByIn("notifications", "order_id", orderIds),
-  ]);
-
-  await deleteByEq("grocery_orders", "store_id", storeId);
-  await deleteByEq("grocery_stores", "id", storeId);
 }
 
 export async function POST(req: Request) {
@@ -159,12 +150,12 @@ export async function POST(req: Request) {
     }
 
     if (entityType === "restaurant") {
-      await deleteRestaurantEntity(entityId);
+      await archiveRestaurantEntity(entityId);
     } else {
-      await deleteGroceryEntity(entityId);
+      await archiveGroceryEntity(entityId);
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, mode: "archived" });
   } catch (error: any) {
     return NextResponse.json(
       { ok: false, error: error?.message || "Unable to delete entity." },

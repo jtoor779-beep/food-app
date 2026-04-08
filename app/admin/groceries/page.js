@@ -58,7 +58,7 @@ export default function AdminGroceriesPage() {
     if (!storeId) return;
 
     const ok = window.confirm(
-      `Delete grocery store "${clean(name) || storeId}" from the admin panel? This will also remove related grocery data and orders where possible.`
+      `Delete grocery store "${clean(name) || storeId}" from the admin panel? This now archives the store, hides it from active selling, and keeps previous orders, revenue, and delivery history safe.`
     );
     if (!ok) return;
 

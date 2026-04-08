@@ -261,16 +261,20 @@ const overlay = {
   alignItems: "center",
   justifyContent: "center",
   padding: 16,
+  overflowY: "auto",
   zIndex: 9998,
 };
 
 const modal = {
   width: "min(820px, 100%)",
+  maxHeight: "calc(100vh - 32px)",
   borderRadius: 18,
   border: "1px solid rgba(255,255,255,0.16)",
   background: "rgba(255,255,255,0.92)",
   boxShadow: "0 30px 80px rgba(0,0,0,0.30)",
   overflow: "hidden",
+  display: "flex",
+  flexDirection: "column",
 };
 
 const modalHeader = {
@@ -282,7 +286,7 @@ const modalHeader = {
   alignItems: "center",
 };
 
-const modalBody = { padding: 14 };
+const modalBody = { padding: 14, overflowY: "auto", flex: 1 };
 
 const split2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 };
 const split3 = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 };
@@ -358,6 +362,49 @@ function text(v) {
   return String(v || "").trim();
 }
 
+async function fetchMenuItemMetaMap(itemIds) {
+  const ids = Array.isArray(itemIds) ? itemIds.map((id) => text(id)).filter(Boolean) : [];
+  if (!ids.length) return {};
+  const res = await fetch(`/api/menu-item-meta?item_ids=${encodeURIComponent(ids.join(","))}`, { cache: "no-store" });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to load menu item pricing.");
+  return json.items || {};
+}
+
+async function saveMenuItemMeta(itemId, meta) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/menu-item-meta", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ itemId, meta }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save menu item pricing.");
+  return json.meta || meta;
+}
+
+function buildVariantLabel(value, unit) {
+  const rawValue = String(value || "").trim();
+  const rawUnit = String(unit || "").trim();
+  if (!rawValue && !rawUnit) return "";
+  return [rawValue, rawUnit].filter(Boolean).join(" ");
+}
+
+function priceSummary(item) {
+  const base = safeNumber(item?.price, 0);
+  const original = safeNumber(item?.original_price, 0);
+  const discount = safeNumber(item?.discount_price, 0);
+  const effective = discount > 0 ? discount : base;
+  const compareAt = original > effective ? original : base > effective ? base : 0;
+  const percent = compareAt > effective ? Math.max(1, Math.round(((compareAt - effective) / compareAt) * 100)) : 0;
+  return { effective, compareAt, percent };
+}
+
 /* =========================
    MAIN PAGE
    ========================= */
@@ -399,7 +446,8 @@ export default function RestaurantManageMenuPage() {
   const [editingId, setEditingId] = useState(null);
 
   const [fName, setFName] = useState("");
-  const [fPrice, setFPrice] = useState("");
+  const [fOriginalPrice, setFOriginalPrice] = useState("");
+  const [fDiscountPrice, setFDiscountPrice] = useState("");
   const [fCuisine, setFCuisine] = useState("");
   const [fIsVeg, setFIsVeg] = useState(true);
   const [fInStock, setFInStock] = useState(true);
@@ -415,6 +463,12 @@ export default function RestaurantManageMenuPage() {
   const [fAllergens, setFAllergens] = useState(""); // comma separated
   const [fCalories, setFCalories] = useState("");
   const [fPrepMins, setFPrepMins] = useState("");
+  const [variantUnit, setVariantUnit] = useState("lb");
+  const [variantLabel, setVariantLabel] = useState("");
+  const [variantOriginalPrice, setVariantOriginalPrice] = useState("");
+  const [variantDiscountPrice, setVariantDiscountPrice] = useState("");
+  const [variantInStock, setVariantInStock] = useState(true);
+  const [weightOptions, setWeightOptions] = useState([]);
 
   const fileRef = useRef(null);
 
@@ -436,7 +490,8 @@ export default function RestaurantManageMenuPage() {
   function openAddModal() {
     setEditingId(null);
     setFName("");
-    setFPrice("");
+    setFOriginalPrice("");
+    setFDiscountPrice("");
     setFCuisine("");
     setFIsVeg(true);
     setFInStock(true);
@@ -451,6 +506,12 @@ export default function RestaurantManageMenuPage() {
     setFAllergens("");
     setFCalories("");
     setFPrepMins("");
+    setVariantUnit("lb");
+    setVariantLabel("");
+    setVariantOriginalPrice("");
+    setVariantDiscountPrice("");
+    setVariantInStock(true);
+    setWeightOptions([]);
 
     setModalOpen(true);
   }
@@ -458,7 +519,8 @@ export default function RestaurantManageMenuPage() {
   function openEditModal(it) {
     setEditingId(it.id);
     setFName(it.name || "");
-    setFPrice(String(it.price ?? ""));
+    setFOriginalPrice(String(pick(it, ["original_price"], it.price ?? "") || ""));
+    setFDiscountPrice(String(pick(it, ["discount_price"], "") || ""));
     setFCuisine(it.cuisine || "");
     setFIsVeg(it.is_veg === true);
     setFInStock(it.in_stock !== false);
@@ -473,6 +535,28 @@ export default function RestaurantManageMenuPage() {
     setFAllergens(pick(it, ["allergens", "allergy_info"], "") || "");
     setFCalories(String(pick(it, ["calories", "kcal"], "") || ""));
     setFPrepMins(String(pick(it, ["prep_mins", "prep_time_mins"], "") || ""));
+    setVariantUnit("lb");
+    setVariantLabel("");
+    setVariantOriginalPrice("");
+    setVariantDiscountPrice("");
+    setVariantInStock(true);
+    const variants = Array.isArray(it?.variants)
+      ? it.variants.map((row, idx) => ({
+          ...row,
+          id: text(row?.id) || `variant_${idx + 1}`,
+          label: text(row?.label),
+          unit: text(row?.unit) || "lb",
+          value: row?.value == null ? null : safeNumber(row?.value, 0),
+          price: safeNumber(row?.price, 0),
+          original_price: safeNumber(pick(row, ["original_price"], row?.price), 0),
+          discount_price: safeNumber(pick(row, ["discount_price"], 0), 0) || null,
+          discount_percent: safeNumber(pick(row, ["discount_percent"], 0), 0) || 0,
+          in_stock: row?.in_stock !== false,
+          is_default: row?.is_default === true || idx === 0,
+          sort_order: safeNumber(row?.sort_order, idx),
+        }))
+      : [];
+    setWeightOptions(variants);
 
     setModalOpen(true);
   }
@@ -481,6 +565,39 @@ export default function RestaurantManageMenuPage() {
     setModalOpen(false);
     setSaving(false);
     setNote("");
+  }
+
+  function addWeightOption() {
+    const label = buildVariantLabel(variantLabel, variantUnit);
+    const originalPrice = safeNumber(variantOriginalPrice, NaN);
+    const discountPrice = safeNumber(variantDiscountPrice, 0);
+    const effectivePrice = discountPrice > 0 ? discountPrice : originalPrice;
+    if (!label) return setErr("Enter variant value and unit.");
+    if (!isFinite(originalPrice) || originalPrice <= 0) return setErr("Variant original price must be > 0.");
+    if (discountPrice > 0 && discountPrice >= originalPrice) return setErr("Variant discount price must be smaller than original price.");
+    if ((weightOptions || []).some((row) => text(row?.label).toLowerCase() === label.toLowerCase())) {
+      return setErr("This variant already exists.");
+    }
+    setWeightOptions((prev) => [
+      ...(prev || []),
+      {
+        id: `local_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        label,
+        unit: variantUnit,
+        value: safeNumber(variantLabel, null),
+        price: effectivePrice,
+        original_price: originalPrice,
+        discount_price: discountPrice > 0 ? discountPrice : null,
+        discount_percent: discountPrice > 0 ? Math.max(1, Math.round(((originalPrice - discountPrice) / originalPrice) * 100)) : 0,
+        in_stock: !!variantInStock,
+        is_default: (prev || []).length === 0,
+        sort_order: (prev || []).length,
+      },
+    ]);
+    setVariantLabel("");
+    setVariantOriginalPrice("");
+    setVariantDiscountPrice("");
+    setVariantInStock(true);
   }
 
   async function loadIdentity() {
@@ -533,8 +650,28 @@ export default function RestaurantManageMenuPage() {
 
     const { data, error } = await supabase.from("menu_items").select("*").eq("restaurant_id", rid).order("id", { ascending: false });
     if (error) throw error;
+    const rows = data || [];
+    let metaMap = {};
+    try {
+      metaMap = await fetchMenuItemMetaMap(rows.map((row) => row.id));
+    } catch {}
 
-    setItems(data || []);
+    setItems(
+      rows.map((row) => {
+        const meta = metaMap?.[String(row.id)] || {};
+        const variants = Array.isArray(meta?.variants) ? meta.variants : [];
+        const defaultVariant = variants.find((variant) => variant?.is_default) || variants[0] || null;
+        return {
+          ...row,
+          original_price: meta?.original_price || row?.price || null,
+          discount_price: meta?.discount_price || null,
+          discount_percent: meta?.discount_percent || null,
+          variants,
+          variants_count: variants.length,
+          price: defaultVariant?.price || row?.price,
+        };
+      })
+    );
   }
 
   async function loadAll() {
@@ -633,7 +770,9 @@ export default function RestaurantManageMenuPage() {
     }
 
     const name = text(fName);
-    const price = safeNumber(fPrice, 0);
+    const originalPrice = safeNumber(fOriginalPrice, 0);
+    const discountPrice = safeNumber(fDiscountPrice, 0);
+    const effectivePrice = discountPrice > 0 ? discountPrice : originalPrice;
     const cuisine = text(fCuisine);
 
     if (!name) {
@@ -641,7 +780,17 @@ export default function RestaurantManageMenuPage() {
       setSaving(false);
       return;
     }
-    if (!price || price <= 0) {
+    if (!originalPrice || originalPrice <= 0) {
+      setErr("Original price must be > 0");
+      setSaving(false);
+      return;
+    }
+    if (discountPrice > 0 && discountPrice >= originalPrice) {
+      setErr("Discount price must be smaller than original price.");
+      setSaving(false);
+      return;
+    }
+    if (!effectivePrice || effectivePrice <= 0) {
       setErr("Price must be > 0");
       setSaving(false);
       return;
@@ -650,7 +799,7 @@ export default function RestaurantManageMenuPage() {
     const basePayload = {
       restaurant_id: restaurantId,
       name,
-      price,
+      price: effectivePrice,
       cuisine: cuisine || null,
       image_url: text(fImageUrl) || null,
       is_veg: !!fIsVeg,
@@ -667,6 +816,33 @@ export default function RestaurantManageMenuPage() {
 
       // ✅ Taxable flag (safe-save; requires menu_items.is_taxable column)
       is_taxable: !!isTaxable,
+      original_price: originalPrice > effectivePrice ? originalPrice : null,
+      discount_price: discountPrice > 0 && discountPrice < Math.max(originalPrice || 0, effectivePrice) ? discountPrice : null,
+      discount_percent:
+        originalPrice > effectivePrice
+          ? Math.max(1, Math.round(((originalPrice - effectivePrice) / originalPrice) * 100))
+          : null,
+    };
+    const metaPayload = {
+      original_price: originalPrice,
+      discount_price: discountPrice > 0 && discountPrice < Math.max(originalPrice || 0, effectivePrice) ? discountPrice : null,
+      discount_percent:
+        originalPrice > effectivePrice
+          ? Math.max(1, Math.round(((originalPrice - effectivePrice) / originalPrice) * 100))
+          : 0,
+      variants: (Array.isArray(weightOptions) ? weightOptions : []).map((row, idx) => ({
+        id: text(row?.id) || `variant_${idx + 1}`,
+        label: text(row?.label),
+        unit: text(row?.unit) || null,
+        value: row?.value == null ? null : safeNumber(row?.value, 0),
+        price: safeNumber(row?.price, 0),
+        original_price: safeNumber(row?.original_price ?? row?.price, 0),
+        discount_price: safeNumber(row?.discount_price, 0) || null,
+        discount_percent: safeNumber(row?.discount_percent, 0) || 0,
+        in_stock: row?.in_stock !== false,
+        is_default: row?.is_default === true || idx === 0,
+        sort_order: idx,
+      })),
     };
 
     try {
@@ -677,9 +853,10 @@ export default function RestaurantManageMenuPage() {
         const newId = inserted?.id;
         if (newId) {
           const { anyFailed } = await tryUpdateMenuItemFields(newId, desiredExtras);
+          await saveMenuItemMeta(newId, metaPayload);
           if (anyFailed) {
             setNote(
-              "Note: Some pro fields (description/spice/allergens/calories/prep/taxable) may not be saved because your menu_items table may not have those columns yet. UI still works."
+              "Note: Some pro fields (description/spice/allergens/calories/prep/taxable/pricing) may not be saved because your menu_items table may not have those columns yet. UI still works."
             );
           }
         }
@@ -690,9 +867,10 @@ export default function RestaurantManageMenuPage() {
         if (upErr) throw upErr;
 
         const { anyFailed } = await tryUpdateMenuItemFields(editingId, desiredExtras);
+        await saveMenuItemMeta(editingId, metaPayload);
         if (anyFailed) {
           setNote(
-            "Note: Some pro fields (description/spice/allergens/calories/prep/taxable) may not be saved because your menu_items table may not have those columns yet. UI still works."
+            "Note: Some pro fields (description/spice/allergens/calories/prep/taxable/pricing) may not be saved because your menu_items table may not have those columns yet. UI still works."
           );
         }
 
@@ -943,6 +1121,7 @@ export default function RestaurantManageMenuPage() {
                 const allergens = pick(it, ["allergens", "allergy_info"], "");
                 const calories = pick(it, ["calories", "kcal"], "");
                 const prep = pick(it, ["prep_mins", "prep_time_mins"], "");
+                const pricing = priceSummary(it);
 
                 const taxable = it?.is_taxable === false ? false : true;
 
@@ -967,7 +1146,15 @@ export default function RestaurantManageMenuPage() {
                       </div>
 
                       {/* ✅ Currency formatted */}
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(it.price, currency)}</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(pricing.effective, currency)}</div>
+                        {pricing.compareAt > pricing.effective ? (
+                          <div style={{ fontWeight: 900, color: "rgba(17,24,39,0.45)", textDecoration: "line-through" }}>
+                            {money(pricing.compareAt, currency)}
+                          </div>
+                        ) : null}
+                        {pricing.percent > 0 ? <span style={badgeBest}>{pricing.percent}% OFF</span> : null}
+                      </div>
                     </div>
 
                     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1046,9 +1233,17 @@ export default function RestaurantManageMenuPage() {
 
                 <div style={split2}>
                   <div>
-                    <div style={label}>Price</div>
-                    <input value={fPrice} onChange={(e) => setFPrice(e.target.value)} placeholder="e.g. 199" style={inputStyle} />
+                    <div style={label}>Original Price</div>
+                    <input value={fOriginalPrice} onChange={(e) => setFOriginalPrice(e.target.value)} placeholder="e.g. 249" style={inputStyle} />
                   </div>
+
+                  <div>
+                    <div style={label}>Discount Price</div>
+                    <input value={fDiscountPrice} onChange={(e) => setFDiscountPrice(e.target.value)} placeholder="e.g. 199" style={inputStyle} />
+                  </div>
+                </div>
+
+                <div style={split2}>
 
                   <div>
                     <div style={label}>Cuisine / Tag</div>
@@ -1090,6 +1285,99 @@ export default function RestaurantManageMenuPage() {
                 <div>
                   <div style={label}>Allergens (comma separated)</div>
                   <input value={fAllergens} onChange={(e) => setFAllergens(e.target.value)} placeholder="e.g. milk, nuts, gluten" style={inputStyle} />
+                </div>
+
+                <div style={{ ...panelGlass, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Item Variants</div>
+                      <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
+                        Add sizes like oz, lb, kg, pcs. Customers can choose from these options.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "rgba(17,24,39,0.65)" }}>
+                      Variants: <b>{weightOptions.length}</b>
+                    </div>
+                  </div>
+
+                  <div style={{ ...split2, marginTop: 10 }}>
+                    <div>
+                      <div style={label}>Variant Value</div>
+                      <input value={variantLabel} onChange={(e) => setVariantLabel(e.target.value)} placeholder="e.g. 0.5 or 1" style={inputStyle} />
+                    </div>
+                    <div>
+                      <div style={label}>Unit</div>
+                      <select value={variantUnit} onChange={(e) => setVariantUnit(e.target.value)} style={inputStyle}>
+                        {["oz", "lb", "kg", "g", "ml", "l", "pcs", "pack", "box", "tray"].map((unit) => (
+                          <option key={unit} value={unit}>{unit}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ ...split3, marginTop: 10 }}>
+                    <div>
+                      <div style={label}>Variant Original Price</div>
+                      <input value={variantOriginalPrice} onChange={(e) => setVariantOriginalPrice(e.target.value)} placeholder="e.g. 349" style={inputStyle} />
+                    </div>
+                    <div>
+                      <div style={label}>Variant Discount Price</div>
+                      <input value={variantDiscountPrice} onChange={(e) => setVariantDiscountPrice(e.target.value)} placeholder="e.g. 299" style={inputStyle} />
+                    </div>
+                    <div>
+                      <div style={label}>Preview</div>
+                      <div style={{ ...inputStyle, minHeight: 44, display: "flex", alignItems: "center" }}>
+                        {variantOriginalPrice
+                          ? `${money(safeNumber(variantDiscountPrice, 0) > 0 ? safeNumber(variantDiscountPrice, 0) : safeNumber(variantOriginalPrice, 0), currency)}${safeNumber(variantDiscountPrice, 0) > 0 ? ` from ${money(safeNumber(variantOriginalPrice, 0), currency)}` : ""}`
+                          : "Enter variant prices"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                    <button onClick={() => setVariantInStock(true)} style={{ ...btnSmall, ...(variantInStock ? btnDark : {}), borderRadius: 14 }}>
+                      Variant In Stock
+                    </button>
+                    <button onClick={() => setVariantInStock(false)} style={{ ...btnSmall, ...(!variantInStock ? btnDark : {}), borderRadius: 14 }}>
+                      Variant Out
+                    </button>
+                    <button onClick={addWeightOption} style={{ ...btnSmall, ...btnDark, borderRadius: 14 }}>
+                      Add Variant
+                    </button>
+                  </div>
+
+                  {weightOptions.length ? (
+                    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                      {weightOptions.map((variant, idx) => (
+                        <div key={variant.id || `${variant.label}-${idx}`} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "10px 12px", borderRadius: 14, border: "1px solid rgba(0,0,0,0.08)", background: "rgba(255,255,255,0.9)" }}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <span style={tag}>{variant.label}</span>
+                            <span style={tag}>{money(variant.price, currency)}</span>
+                            {safeNumber(variant?.discount_price, 0) > 0 ? (
+                              <>
+                                <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(variant.original_price, currency)}</span>
+                                <span style={badgeBest}>{safeNumber(variant.discount_percent, 0)}% OFF</span>
+                              </>
+                            ) : null}
+                            <span style={variant.in_stock ? badgeIn : badgeOut}>{variant.in_stock ? "In stock" : "Out"}</span>
+                            {variant.is_default ? <span style={badgeBest}>Default</span> : null}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button onClick={() => setWeightOptions((prev) => (prev || []).map((row) => ({ ...row, is_default: row.id === variant.id })))} style={btnSmall}>
+                              Make Default
+                            </button>
+                            <button onClick={() => setWeightOptions((prev) => (prev || []).filter((row) => row.id !== variant.id).map((row, rowIndex) => ({ ...row, sort_order: rowIndex, is_default: rowIndex === 0 ? true : !!row.is_default })))} style={btnSmall}>
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 10, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.65)" }}>
+                      No variants added. Customer will use the regular item price.
+                    </div>
+                  )}
                 </div>
 
                 {/* Image upload */}

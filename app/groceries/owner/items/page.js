@@ -11,6 +11,34 @@ import supabase from "@/lib/supabase";
 function clean(v) {
   return String(v || "").trim();
 }
+function safeNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+async function fetchGroceryItemMetaMap(itemIds) {
+  const ids = Array.isArray(itemIds) ? itemIds.map((id) => clean(id)).filter(Boolean) : [];
+  if (!ids.length) return {};
+  const res = await fetch(`/api/grocery-item-meta?item_ids=${encodeURIComponent(ids.join(","))}`, { cache: "no-store" });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to load grocery item pricing.");
+  return json.items || {};
+}
+async function saveGroceryItemMeta(itemId, meta) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/grocery-item-meta", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ itemId, meta }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save grocery item pricing.");
+  return json.meta || meta;
+}
 function normalizeRole(r) {
   return String(r || "")
     .trim()
@@ -244,7 +272,8 @@ export default function GroceryOwnerItemsPage() {
      ========================================================= */
   const [variantUnit, setVariantUnit] = useState("lb"); // lb | oz | kg | g | gm | mg | ml | l | pcs | pack | box | bottle | can | jar | dozen | tray
   const [variantLabel, setVariantLabel] = useState(""); // e.g. "1"
-  const [variantPrice, setVariantPrice] = useState(""); // e.g. "20"
+  const [variantOriginalPrice, setVariantOriginalPrice] = useState("");
+  const [variantDiscountPrice, setVariantDiscountPrice] = useState("");
   const [variantInStock, setVariantInStock] = useState(true);
 
   // array of { label: "1 lb", unit: "lb", value: 1, price: 20, in_stock: true, is_default: boolean }
@@ -460,7 +489,8 @@ export default function GroceryOwnerItemsPage() {
   function resetVariantsUI() {
     setVariantUnit("lb");
     setVariantLabel("");
-    setVariantPrice("");
+    setVariantOriginalPrice("");
+    setVariantDiscountPrice("");
     setVariantInStock(true);
     setWeightOptions([]);
     setFormulaBaseValue("");
@@ -520,32 +550,26 @@ export default function GroceryOwnerItemsPage() {
   async function loadItemVariants(itemId) {
     if (!itemId) return;
     try {
-      const { data, error } = await supabase
-        .from("grocery_item_variants")
-        .select("id, item_id, label, unit, value, price, in_stock, is_default, sort_order, created_at")
-        .eq("item_id", itemId)
-        .order("sort_order", { ascending: true })
-        .order("created_at", { ascending: true });
-
-      if (error) throw error;
-
-      const list = Array.isArray(data) ? data : [];
-      const mapped = list.map((v) => ({
-        id: v.id,
+      const metaMap = await fetchGroceryItemMetaMap([itemId]);
+      const meta = metaMap?.[String(itemId)] || {};
+      const list = Array.isArray(meta?.variants) ? meta.variants : [];
+      const mapped = list.map((v, idx) => ({
+        id: v.id || `variant_${idx + 1}`,
         label: clean(v.label),
         unit: clean(v.unit) || "lb",
         value: Number(v.value || 0) || 0,
         price: Number(v.price || 0) || 0,
+        original_price: Number(v.original_price || v.price || 0) || 0,
+        discount_price: Number(v.discount_price || 0) || 0,
+        discount_percent: Number(v.discount_percent || 0) || 0,
         in_stock: typeof v.in_stock === "boolean" ? v.in_stock : true,
-        is_default: !!v.is_default,
-        sort_order: Number(v.sort_order || 0) || 0,
+        is_default: !!v.is_default || idx === 0,
+        sort_order: Number(v.sort_order || idx) || 0,
       }));
 
-      // Pick a unit for UI from first variant
       if (mapped?.[0]?.unit) setVariantUnit(mapped[0].unit);
       setWeightOptions(mapped.length ? mapped : []);
     } catch (e) {
-      // If table missing, just ignore (keep old behavior)
       setWeightOptions([]);
     }
   }
@@ -608,11 +632,17 @@ export default function GroceryOwnerItemsPage() {
       setErrMsg("Enter a valid weight number (e.g. 1, 2, 5).");
       return;
     }
-    const p = Number(variantPrice);
-    if (!Number.isFinite(p) || p < 0) {
-      setErrMsg("Enter a valid variant price.");
+    const original = Number(variantOriginalPrice);
+    const discount = Number(variantDiscountPrice || 0);
+    if (!Number.isFinite(original) || original <= 0) {
+      setErrMsg("Enter a valid variant original price.");
       return;
     }
+    if (Number.isFinite(discount) && discount > 0 && discount >= original) {
+      setErrMsg("Variant discount price must be smaller than original price.");
+      return;
+    }
+    const p = Number.isFinite(discount) && discount > 0 ? discount : original;
 
     const unit = clean(variantUnit) || "lb";
     const label = buildVariantLabel(v, unit);
@@ -632,6 +662,12 @@ export default function GroceryOwnerItemsPage() {
         unit,
         value: v,
         price: p,
+        original_price: original,
+        discount_price: Number.isFinite(discount) && discount > 0 ? discount : null,
+        discount_percent:
+          Number.isFinite(discount) && discount > 0 && original > p
+            ? Math.max(1, Math.round(((original - p) / original) * 100))
+            : 0,
         in_stock: !!variantInStock,
         is_default: (weightOptions || []).length === 0, // first one default automatically
         sort_order: (weightOptions || []).length,
@@ -642,7 +678,8 @@ export default function GroceryOwnerItemsPage() {
 
     // clear inputs but keep unit
     setVariantLabel("");
-    setVariantPrice("");
+    setVariantOriginalPrice("");
+    setVariantDiscountPrice("");
     setVariantInStock(true);
   }
 
@@ -705,6 +742,9 @@ export default function GroceryOwnerItemsPage() {
         unit,
         value: val,
         price: computedPrice,
+        original_price: computedPrice,
+        discount_price: null,
+        discount_percent: 0,
         in_stock: true,
         is_default: false,
         sort_order: 0,
@@ -1192,7 +1232,27 @@ export default function GroceryOwnerItemsPage() {
       }
 
       if (lastError) throw lastError;
-      setItems(loaded || []);
+      const rows = loaded || [];
+      let metaMap = {};
+      try {
+        metaMap = await fetchGroceryItemMetaMap(rows.map((row) => row.id));
+      } catch {}
+      setItems(
+        rows.map((row) => {
+          const meta = metaMap?.[String(row.id)] || {};
+          const variants = Array.isArray(meta?.variants) ? meta.variants : [];
+          const defaultVariant = variants.find((variant) => variant?.is_default) || variants[0] || null;
+          return {
+            ...row,
+            original_price: meta?.original_price || row?.original_price || row?.price || null,
+            discount_price: meta?.discount_price || row?.discount_price || null,
+            discount_percent: meta?.discount_percent || row?.discount_percent || null,
+            variants,
+            variants_count: variants.length,
+            price: defaultVariant?.price || row?.price,
+          };
+        })
+      );
     } catch (e) {
       setErrMsg(e?.message || String(e));
       setItems([]);
@@ -1410,7 +1470,10 @@ export default function GroceryOwnerItemsPage() {
     if (Array.isArray(weightOptions) && weightOptions.length > 0) {
       const bad = weightOptions.some(
         (x) =>
-          !Number.isFinite(Number(x.price)) || Number(x.price) < 0 || !clean(x.label)
+          !Number.isFinite(Number(x.original_price ?? x.price)) ||
+          Number(x.original_price ?? x.price) <= 0 ||
+          (Number(x.discount_price || 0) > 0 && Number(x.discount_price || 0) >= Number(x.original_price ?? x.price)) ||
+          !clean(x.label)
       );
       if (bad) return setErrMsg("Please fix weight options: label & price must be valid.");
     }
@@ -1466,6 +1529,36 @@ export default function GroceryOwnerItemsPage() {
           }
         }
       }
+      const metaPayload = {
+        original_price: Number.isFinite(original) && original > 0 ? original : effectivePrice,
+        discount_price:
+          Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || p || 0, effectivePrice)
+            ? discounted
+            : null,
+        discount_percent:
+          Number.isFinite(original) && original > effectivePrice
+            ? Math.max(1, Math.round(((original - effectivePrice) / original) * 100))
+            : 0,
+        variants: (Array.isArray(weightOptions) ? weightOptions : []).map((x, idx) => {
+          const variantOriginal = safeNumber(x.original_price ?? x.price, 0);
+          const variantDiscount = safeNumber(x.discount_price, 0);
+          const variantEffective = variantDiscount > 0 ? variantDiscount : variantOriginal;
+          return {
+            id: clean(x.id) || `variant_${idx + 1}`,
+            label: clean(x.label),
+            unit: clean(x.unit) || "lb",
+            value: Number(x.value || 0) || 0,
+            price: variantEffective,
+            original_price: variantOriginal,
+            discount_price: variantDiscount > 0 ? variantDiscount : null,
+            discount_percent:
+              variantOriginal > variantEffective ? Math.max(1, Math.round(((variantOriginal - variantEffective) / variantOriginal) * 100)) : 0,
+            in_stock: typeof x.in_stock === "boolean" ? x.in_stock : true,
+            is_default: !!x.is_default || idx === 0,
+            sort_order: idx,
+          };
+        }),
+      };
 
       if (editingId) {
         const res = await trySaveWithVariants({
@@ -1477,9 +1570,7 @@ export default function GroceryOwnerItemsPage() {
         });
         if (!res.ok) throw res.error;
 
-        if (Array.isArray(weightOptions) && weightOptions.length > 0) {
-          await saveVariantsForItem(editingId);
-        }
+        await saveGroceryItemMeta(editingId, metaPayload);
 
         setInfoMsg("✅ Item updated");
       } else {
@@ -1509,7 +1600,7 @@ export default function GroceryOwnerItemsPage() {
           const newId = ins.id;
 
           if (Array.isArray(weightOptions) && weightOptions.length > 0) {
-            await saveVariantsForItem(newId);
+            await saveGroceryItemMeta(newId, metaPayload);
           }
 
           setInfoMsg("✅ Item added");
@@ -2559,8 +2650,13 @@ export default function GroceryOwnerItemsPage() {
                       </div>
 
                       <div>
-                        <div style={label}>Price</div>
-                        <input value={variantPrice} onChange={(e) => setVariantPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" disabled={busy} />
+                        <div style={label}>Original Price</div>
+                        <input value={variantOriginalPrice} onChange={(e) => setVariantOriginalPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" disabled={busy} />
+                      </div>
+
+                      <div>
+                        <div style={label}>Discount Price</div>
+                        <input value={variantDiscountPrice} onChange={(e) => setVariantDiscountPrice(e.target.value)} style={input} placeholder="15" inputMode="decimal" disabled={busy} />
                       </div>
 
                       <div>
@@ -2633,7 +2729,15 @@ export default function GroceryOwnerItemsPage() {
                           <div key={o.id} style={variantRow}>
                             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                               <span style={o.is_default ? tagStrong : tag}>{o.label}</span>
-                              <span style={tag}>{money(o.price)}</span>
+                              {Number(o.discount_price || 0) > 0 && Number(o.original_price || 0) > Number(o.price || 0) ? (
+                                <>
+                                  <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(o.original_price)}</span>
+                                  <span style={tagStrong}>{money(o.price)}</span>
+                                  <span style={tagStrong}>{o.discount_percent || Math.max(1, Math.round(((Number(o.original_price || 0) - Number(o.price || 0)) / Number(o.original_price || 1)) * 100))}% OFF</span>
+                                </>
+                              ) : (
+                                <span style={tag}>{money(o.price)}</span>
+                              )}
                               <span style={o.in_stock ? openPill : closedPill}>{o.in_stock ? "In stock" : "Out"}</span>
                               {o.is_default ? <span style={tagStrong}>Default</span> : <span style={tag}>Not default</span>}
                             </div>

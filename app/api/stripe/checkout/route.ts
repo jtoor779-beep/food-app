@@ -374,6 +374,15 @@ export async function POST(req: Request) {
       "platformFee",
     ]);
     const tip = pickMoney(meta, ["tip", "tip_amount", "tipAmount"]);
+    const feesIncludedInItems =
+      safeStr(
+        pickFirst(
+          body?.fees_included_in_items,
+          body?.feesIncludedInItems,
+          meta?.fees_included_in_items,
+          meta?.feesIncludedInItems
+        )
+      ).toLowerCase() === "true";
 
     const addFeeItem = (name: string, amount: number) => {
       const cents = Math.round(toNumber(amount, 0) * 100);
@@ -388,10 +397,12 @@ export async function POST(req: Request) {
       });
     };
 
-    addFeeItem("Delivery fee", deliveryFee);
-    addFeeItem("Platform fee", platformFee);
-    addFeeItem("Tax", tax);
-    addFeeItem("Tip", tip);
+    if (!feesIncludedInItems) {
+      addFeeItem("Delivery fee", deliveryFee);
+      addFeeItem("Platform fee", platformFee);
+      addFeeItem("Tax", tax);
+      addFeeItem("Tip", tip);
+    }
 
     const customerName = pickMetaStr(meta, [
       "customer_name",

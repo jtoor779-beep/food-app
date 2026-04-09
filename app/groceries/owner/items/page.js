@@ -709,7 +709,7 @@ export default function GroceryOwnerItemsPage() {
       return;
     }
     if (!Number.isFinite(basePrice) || basePrice < 0) {
-      setErrMsg("Enter a valid formula base price.");
+      setErrMsg("Enter a valid formula original price.");
       return;
     }
 
@@ -1461,11 +1461,19 @@ export default function GroceryOwnerItemsPage() {
     const catName = clean(catObj?.name);
     if (!catName) return setErrMsg("Selected category is invalid. Please refresh categories.");
 
-    const p = Number(price || 0);
     const original = Number(originalPrice || 0);
     const discounted = Number(discountPrice || 0);
-    const effectivePrice = Number.isFinite(discounted) && discounted > 0 ? discounted : p;
+    const fallbackOriginal = Number(price || 0);
+    const effectivePrice = Number.isFinite(discounted) && discounted > 0
+      ? discounted
+      : Number.isFinite(original) && original > 0
+      ? original
+      : fallbackOriginal;
     if (Number.isNaN(effectivePrice) || effectivePrice < 0) return setErrMsg("Price must be a valid number.");
+    if (!Number.isFinite(original) || original <= 0) return setErrMsg("Original price must be a valid number.");
+    if (Number.isFinite(discounted) && discounted > 0 && discounted >= original) {
+      return setErrMsg("Discount price must be smaller than original price.");
+    }
 
     if (Array.isArray(weightOptions) && weightOptions.length > 0) {
       const bad = weightOptions.some(
@@ -1510,7 +1518,7 @@ export default function GroceryOwnerItemsPage() {
           ? {
               original_price: original,
               discount_price:
-                Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || p || 0, effectivePrice)
+                Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || 0, effectivePrice)
                   ? discounted
                   : null,
               discount_percent: Math.max(1, Math.round(((original - effectivePrice) / original) * 100)),
@@ -1532,7 +1540,7 @@ export default function GroceryOwnerItemsPage() {
       const metaPayload = {
         original_price: Number.isFinite(original) && original > 0 ? original : effectivePrice,
         discount_price:
-          Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || p || 0, effectivePrice)
+          Number.isFinite(discounted) && discounted > 0 && discounted < Math.max(original || 0, effectivePrice)
             ? discounted
             : null,
         discount_percent:
@@ -2584,13 +2592,7 @@ export default function GroceryOwnerItemsPage() {
                 </div>
 
                 <div>
-                  <div style={label}>Base Price *</div>
-                  <input value={price} onChange={(e) => setPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
-                  <div style={hintSmall}>Base price is used if you don&apos;t add weight options.</div>
-                </div>
-
-                <div>
-                  <div style={label}>Original Price</div>
+                  <div style={label}>Original Price *</div>
                   <input value={originalPrice} onChange={(e) => setOriginalPrice(e.target.value)} style={input} placeholder="25" inputMode="decimal" />
                 </div>
 
@@ -2598,6 +2600,10 @@ export default function GroceryOwnerItemsPage() {
                   <div style={label}>Discount Price</div>
                   <input value={discountPrice} onChange={(e) => setDiscountPrice(e.target.value)} style={input} placeholder="20" inputMode="decimal" />
                   <div style={hintSmall}>Customer sees strike-through original price and the discount badge.</div>
+                </div>
+
+                <div style={{ display: "none" }}>
+                  <input value={price} onChange={(e) => setPrice(e.target.value)} style={input} inputMode="decimal" />
                 </div>
 
                 <div style={{ gridColumn: "1 / -1" }}>
@@ -2698,7 +2704,7 @@ export default function GroceryOwnerItemsPage() {
                         </div>
 
                         <div>
-                          <div style={label}>Base Price</div>
+                          <div style={label}>Original Price</div>
                           <input value={formulaBasePrice} onChange={(e) => setFormulaBasePrice(e.target.value)} style={input} placeholder="200" inputMode="decimal" disabled={busy} />
                         </div>
 
@@ -2755,7 +2761,7 @@ export default function GroceryOwnerItemsPage() {
                         </div>
                       </div>
                     ) : (
-                      <div style={hintSmall}>No weight options added. Customer will just see base price.</div>
+                      <div style={hintSmall}>No weight options added. Customer will just see the regular price.</div>
                     )}
                   </div>
                 </div>

@@ -56,10 +56,32 @@ async function selectSingleWithFallback(table: string, orderId: string, selects:
 async function updateOrderWithFallback(table: string, orderId: string, patches: Array<Record<string, unknown>>) {
   let lastError: any = null;
   for (const patch of patches) {
-    const { error } = await supabaseAdmin!.from(table).update(patch).eq("id", orderId);
-    if (!error) return true;
-    lastError = error;
-    if (!String(error?.message || "").toLowerCase().includes("does not exist")) throw error;
+    const nextPatch = { ...patch };
+    const removed = new Set<string>();
+
+    for (let i = 0; i < 10; i += 1) {
+      const { error } = await supabaseAdmin!.from(table).update(nextPatch).eq("id", orderId);
+      if (!error) return true;
+      lastError = error;
+      const msg = String(error?.message || "").toLowerCase();
+      if (!msg.includes("does not exist") && !msg.includes("schema cache") && !msg.includes("could not find")) {
+        throw error;
+      }
+
+      const quoted = String(error?.message || "").match(/'([^']+)'/);
+      const rawColumn = quoted?.[1] || "";
+      const missingColumn = rawColumn.includes(".")
+        ? rawColumn.split(".").slice(-1)[0].trim()
+        : rawColumn.trim();
+
+      if (missingColumn && missingColumn in nextPatch && !removed.has(missingColumn)) {
+        removed.add(missingColumn);
+        delete (nextPatch as any)[missingColumn];
+        continue;
+      }
+
+      break;
+    }
   }
   if (lastError) throw lastError;
   return false;

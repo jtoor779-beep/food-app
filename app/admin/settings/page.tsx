@@ -515,7 +515,6 @@ export default function AdminSettingsPage() {
   useEffect(() => {
     loadSettings();
     loadCoupons();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -640,17 +639,6 @@ for each row execute function public.touch_updated_at();`}
             </div>
 
             <div>
-              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Legacy per KM fee (optional)</div>
-              <input
-                value={form.delivery_fee_per_km}
-                onChange={(e) => setForm((p) => ({ ...p, delivery_fee_per_km: e.target.value }))}
-                style={styles.input}
-                placeholder="e.g. 2"
-              />
-              <div style={styles.small}>Kept for old setups. If per-mile is empty, cart can still fall back to this value.</div>
-            </div>
-
-            <div>
               <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Distance threshold miles</div>
               <input
                 value={form.delivery_fee_distance_threshold_miles}
@@ -762,21 +750,21 @@ for each row execute function public.touch_updated_at();`}
                 <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Type</div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button onClick={() => setNewType("flat")} style={newType === "flat" ? styles.chipOn : styles.chip}>
-                    Flat ₹
+                    Flat $
                   </button>
                   <button onClick={() => setNewType("percent")} style={newType === "percent" ? styles.chipOn : styles.chip}>
                     Percent %
                   </button>
                 </div>
-                <div style={styles.small}>Flat = ₹ off, Percent = % off</div>
+                <div style={styles.small}>Flat = $ off, Percent = % off</div>
               </div>
 
               <div>
                 <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>
-                  {newType === "percent" ? "Percent" : "Value (₹)"}
+                  {newType === "percent" ? "Percent" : "Value ($)"}
                 </div>
                 <input value={newValue} onChange={(e) => setNewValue(toNumberString(e.target.value))} style={styles.input} placeholder="50" />
-                <div style={styles.small}>{newType === "percent" ? "1–100" : "₹ amount"}</div>
+                <div style={styles.small}>{newType === "percent" ? "1-100" : "$ amount"}</div>
               </div>
 
               <div>
@@ -869,7 +857,7 @@ for each row execute function public.touch_updated_at();`}
                         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                           <div style={{ fontWeight: 1000, fontSize: 14 }}>{code || "COUPON"}</div>
                           <div style={{ fontSize: 12, fontWeight: 900, color: styles.muted }}>
-                            {type === "percent" ? `${value}% OFF` : `₹${value} OFF`}
+                            {type === "percent" ? `${value}% OFF` : `$${value} OFF`}
                           </div>
 
                           <span
@@ -927,7 +915,7 @@ for each row execute function public.touch_updated_at();`}
 
                           <div>
                             <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>
-                              {type === "percent" ? "Percent" : "Value (₹)"}
+                              {type === "percent" ? "Percent" : "Value ($)"}
                             </div>
                             <input
                               defaultValue={String(c.value ?? "")}
@@ -1020,9 +1008,9 @@ for each row execute function public.touch_updated_at();`}
 
         {/* Advanced note */}
         <div style={{ ...styles.card, gridColumn: "span 12", background: "rgba(15, 23, 42, 0.03)" }}>
-          <div style={{ fontSize: 13, fontWeight: 950 }}>Next we connect coupon validation into Cart</div>
+          <div style={{ fontSize: 13, fontWeight: 950 }}>Coupon checkout flow</div>
           <div style={{ ...styles.small, marginTop: 8 }}>
-            Next step: Cart will validate coupon from <b>coupons</b> table (is_active + rules), then save into <b>orders</b>:
+            Cart validates each coupon from <b>coupons</b>, applies it to the full payable amount, and stores
             <b> coupon_id, coupon_code, discount_amount, subtotal_amount, total_amount</b>.
           </div>
         </div>

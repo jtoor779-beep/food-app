@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -617,7 +617,7 @@ export default function MenuPage() {
 
         <div style={{ minWidth: 360, width: "100%" }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <Link href="/" style={btnOutline}>
+            <Link href="/home" style={btnOutline}>
               Home
             </Link>
             <Link href="/restaurants" style={btnOutline}>

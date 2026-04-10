@@ -332,7 +332,7 @@ export default function RestaurantPage() {
 
       {/* Top actions */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => router.push("/")} style={btnOutlineBtn}>
+        <button onClick={() => router.push("/home")} style={btnOutlineBtn}>
           ← Home
         </button>
         <Link href="/restaurants" style={btnOutline}>

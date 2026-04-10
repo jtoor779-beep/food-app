@@ -75,7 +75,7 @@ function seedIfEmpty() {
         body: "Your dashboard is ready. Browse restaurants or groceries and start ordering.",
         ts: Date.now() - 1000 * 60 * 45,
         read: false,
-        href: "/",
+        href: "/home",
       },
       {
         id: "tips",
@@ -654,6 +654,7 @@ const unreadCount = useMemo(() => notifs.filter((n) => !n.read).length, [notifs]
   }, [mounted]);
 
 const isAdminPath = pathname?.startsWith("/admin");
+const isLandingPath = pathname === "/";
 const isLoggedIn = !loading && !!userEmail;
   const profileDisplayName = String(profileName || "").trim() || String(userEmail || "").split("@")[0] || "Profile";
   const profileDisplayEmail = userEmail || "";
@@ -668,7 +669,7 @@ const isLoggedIn = !loading && !!userEmail;
 
   const roleUnknown = isLoggedIn && !isCustomer && !isOwner && !isGroceryOwner && !isDelivery && !isAdmin;
 
-  const homeHref = "/";
+  const homeHref = isLoggedIn ? "/home" : "/";
 
   //  login button on right
   const rightLoginHref = "/login";
@@ -698,7 +699,7 @@ const isLoggedIn = !loading && !!userEmail;
 
   //  Desktop sidebar (DoorDash-style)  keep old logic intact
   const sidebarWidth = 240;
-  const showSidebar = !isMobile && !isAdminPath;
+  const showSidebar = !isMobile && !isAdminPath && !isLandingPath;
   const showMyOrdersSide = isLoggedIn && (isCustomer || roleUnknown);
 
   //  Apply left padding to the page so fixed sidebar doesn't cover content
@@ -1292,7 +1293,7 @@ const isLoggedIn = !loading && !!userEmail;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, supportHref]);
 
-  if (isAdminPath) return null;
+  if (isAdminPath || isLandingPath) return null;
 
   return (
     <>

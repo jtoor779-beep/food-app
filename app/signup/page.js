@@ -43,10 +43,10 @@ async function redirectByRole(router) {
     return;
   }
 
-  router.push("/");
+  router.push("/home");
 }
 
-// ✅ helper: email confirmed check
+// âœ… helper: email confirmed check
 function isEmailConfirmed(user) {
   const a = user?.email_confirmed_at;
   const b = user?.confirmed_at;
@@ -128,7 +128,7 @@ export default function SignupPage() {
           ? `${window.location.origin}/auth/callback`
           : undefined;
 
-      // ✅ A) Signup that requires email confirmation (if enabled in Supabase)
+      // âœ… A) Signup that requires email confirmation (if enabled in Supabase)
       const { data: signData, error: signErr } = await supabase.auth.signUp({
         email: email.trim(),
         password: password.trim(),
@@ -162,9 +162,9 @@ export default function SignupPage() {
         if (profErr) throw profErr;
       }
 
-      // ✅ If email confirmation required, user must verify before login
+      // âœ… If email confirmation required, user must verify before login
       setInfoMsg(
-        "✅ Account created! Please check your email and click the verification link. After verifying, come back and login."
+        "âœ… Account created! Please check your email and click the verification link. After verifying, come back and login."
       );
 
       // Optional: auto redirect to login after short delay
@@ -181,7 +181,7 @@ export default function SignupPage() {
   if (checkingSession) {
     return (
       <main style={{ padding: 24 }}>
-        <div style={{ maxWidth: 720, margin: "0 auto" }}>Checking session…</div>
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>Checking sessionâ€¦</div>
       </main>
     );
   }
@@ -210,7 +210,7 @@ export default function SignupPage() {
             Create your account
           </h1>
           <div style={{ color: "#666", marginTop: 6 }}>
-            Customer, Restaurant Owner, Grocery Owner, or Delivery Partner — all supported
+            Customer, Restaurant Owner, Grocery Owner, or Delivery Partner â€” all supported
           </div>
         </div>
 
@@ -421,7 +421,7 @@ export default function SignupPage() {
               opacity: loading ? 0.85 : 1,
             }}
           >
-            {loading ? "Creating…" : "Create Account"}
+            {loading ? "Creatingâ€¦" : "Create Account"}
           </button>
 
           <div style={{ marginTop: 12, fontSize: 13, color: "#666" }}>
@@ -435,10 +435,11 @@ export default function SignupPage() {
           </div>
 
           <div style={{ marginTop: 10, fontSize: 12, color: "#777", lineHeight: 1.5 }}>
-            After signup, we’ll email you a verification link. You must confirm your email before you can log in and place orders.
+            After signup, weâ€™ll email you a verification link. You must confirm your email before you can log in and place orders.
           </div>
         </form>
       </div>
     </main>
   );
 }
+

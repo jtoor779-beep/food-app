@@ -698,7 +698,7 @@ function PaymentSuccessInner() {
             return;
           }
 
-          //  No cart + no DB id yet → still redirect user to Orders (no scary warning)
+          //  No cart + no DB id yet â†’ still redirect user to Orders (no scary warning)
           setSoftRedirectOk(true);
           setOrderSaving(false);
           return;
@@ -1006,8 +1006,8 @@ function PaymentSuccessInner() {
         <div style={{ maxWidth: 980, margin: "0 auto" }}>
           <div style={heroGlass}>
             <div style={pillOk}>Returning to Homyfod App</div>
-            <h1 style={{ ...headline, marginTop: 12 }}>Opening your order…</h1>
-            <div style={subText}>Your payment is confirmed. We’re taking you back into the app now.</div>
+            <h1 style={{ ...headline, marginTop: 12 }}>Opening your orderâ€¦</h1>
+            <div style={subText}>Your payment is confirmed. Weâ€™re taking you back into the app now.</div>
           </div>
         </div>
       </main>
@@ -1046,7 +1046,7 @@ function PaymentSuccessInner() {
               <Link href="/orders" style={btnPrimary}>
                 View My Orders
               </Link>
-              <Link href="/" style={btnGhost}>
+              <Link href="/home" style={btnGhost}>
                 Back to Home
               </Link>
               <button onClick={() => router.push("/cart")} style={btnGhostBtn}>
@@ -1170,7 +1170,7 @@ export default function PaymentSuccessPage() {
                   <Link href="/orders" style={btnPrimary}>
                     View My Orders
                   </Link>
-                  <Link href="/" style={btnGhost}>
+                  <Link href="/home" style={btnGhost}>
                     Back to Home
                   </Link>
                 </div>
@@ -1397,5 +1397,6 @@ const v = {
   color: "#0b1220",
   fontSize: 12,
 };
+
 
 

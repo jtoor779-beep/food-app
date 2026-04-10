@@ -67,7 +67,7 @@ function fmtTime(iso?: string | null) {
 function clamp(s: any, max = 80) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "â€¦";
 }
 
 function safeLower(s: any) {
@@ -144,35 +144,35 @@ export default function HelpSupportPage() {
 
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
-  const [dbWarn, setDbWarn] = useState(""); // ✅ added: warns if DB columns/tables missing
+  const [dbWarn, setDbWarn] = useState(""); // âœ… added: warns if DB columns/tables missing
 
   // FAQ
   const [faqQ, setFaqQ] = useState("");
   const faqs = useMemo(
     () => [
       {
-        q: "I placed an order but it’s not showing in My Orders.",
-        a: "Try refreshing the page, then logout/login. If it still doesn’t show, create a ticket with your order id (if any) and we’ll check the order table + payment status.",
+        q: "I placed an order but itâ€™s not showing in My Orders.",
+        a: "Try refreshing the page, then logout/login. If it still doesnâ€™t show, create a ticket with your order id (if any) and weâ€™ll check the order table + payment status.",
         tag: "orders",
       },
       {
         q: "Payment deducted but order failed.",
-        a: "Create a ticket under Payment with the approximate time and amount. We’ll verify the Stripe session / payment logs and update you.",
+        a: "Create a ticket under Payment with the approximate time and amount. Weâ€™ll verify the Stripe session / payment logs and update you.",
         tag: "payment",
       },
       {
         q: "My cart keeps clearing or not updating.",
-        a: "This can happen if your browser blocks localStorage or you’re switching accounts. Try another browser/device. If it continues, create a ticket and mention Food vs Groceries cart.",
+        a: "This can happen if your browser blocks localStorage or youâ€™re switching accounts. Try another browser/device. If it continues, create a ticket and mention Food vs Groceries cart.",
         tag: "cart",
       },
       {
         q: "How do I change my delivery address or phone number?",
-        a: "Open Profile/Settings and update your details. If you can’t find a field, create a ticket under Account and we’ll help.",
+        a: "Open Profile/Settings and update your details. If you canâ€™t find a field, create a ticket under Account and weâ€™ll help.",
         tag: "account",
       },
       {
         q: "Restaurant/Grocery store is missing items or closed.",
-        a: "Create a ticket under Restaurant or Groceries with the store name. We’ll check enabled/approval status and stock flags.",
+        a: "Create a ticket under Restaurant or Groceries with the store name. Weâ€™ll check enabled/approval status and stock flags.",
         tag: "store",
       },
     ],
@@ -201,7 +201,7 @@ export default function HelpSupportPage() {
   const [channel, setChannel] = useState<"web" | "pwa" | "ios" | "android">("web");
   const [creating, setCreating] = useState(false);
 
-  // ✅ Create ticket attachments
+  // âœ… Create ticket attachments
   const [createFiles, setCreateFiles] = useState<File[]>([]);
   const [createPreviews, setCreatePreviews] = useState<string[]>([]);
   const createFileRef = useRef<HTMLInputElement | null>(null);
@@ -213,7 +213,7 @@ export default function HelpSupportPage() {
   const [reply, setReply] = useState("");
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ Reply attachments
+  // âœ… Reply attachments
   const [replyFiles, setReplyFiles] = useState<File[]>([]);
   const [replyPreviews, setReplyPreviews] = useState<string[]>([]);
   const replyFileRef = useRef<HTMLInputElement | null>(null);
@@ -403,7 +403,7 @@ export default function HelpSupportPage() {
       if (profErr) throw profErr;
       setRole(normalizeRole((prof as any)?.role));
 
-      // ✅ Try full select first (best UX)
+      // âœ… Try full select first (best UX)
       const fullSelect =
         "id, created_at, updated_at, user_id, user_email, subject, category, priority, status, order_id, channel, message, attachments, last_customer_message_at, last_support_message_at";
 
@@ -416,7 +416,7 @@ export default function HelpSupportPage() {
         .order("updated_at", { ascending: false });
 
       if (fullRes.error) {
-        // ✅ fallback if missing columns/table so page still loads
+        // âœ… fallback if missing columns/table so page still loads
         if (isMissingColumnOrTableError(fullRes.error.message)) {
           setDbWarn(buildDbHint(fullRes.error.message));
 
@@ -565,7 +565,7 @@ export default function HelpSupportPage() {
         throw error;
       }
 
-      // ✅ upload attachments (if any)
+      // âœ… upload attachments (if any)
       let ticketAtts: AttachmentMeta[] = [];
       if (data?.id && createFiles.length > 0) {
         ticketAtts = await uploadAttachments(userId, data.id, createFiles);
@@ -600,7 +600,7 @@ export default function HelpSupportPage() {
         }
       }
 
-      showToast("Ticket created ✅");
+      showToast("Ticket created âœ…");
       setCreateOpen(false);
       setSubject("");
       setOrderId("");
@@ -632,7 +632,7 @@ export default function HelpSupportPage() {
     try {
       const nowIso = new Date().toISOString();
 
-      // ✅ upload attachments first
+      // âœ… upload attachments first
       const metas = await uploadAttachments(userId, activeTicket.id, replyFiles);
 
       const { error: msgErr } = await supabase.from("support_ticket_messages").insert({
@@ -670,7 +670,7 @@ export default function HelpSupportPage() {
       const fresh = tickets.find((x) => x.id === activeTicket.id) || activeTicket;
       setActiveTicket({ ...fresh });
       await openTicket({ ...fresh });
-      showToast("Sent ✅");
+      showToast("Sent âœ…");
     } catch (e: any) {
       const msg = e?.message || String(e);
       setErr(msg);
@@ -688,7 +688,7 @@ export default function HelpSupportPage() {
         if (isMissingColumnOrTableError(error.message)) setDbWarn(buildDbHint(error.message));
         throw error;
       }
-      showToast("Marked resolved ✅");
+      showToast("Marked resolved âœ…");
       await loadMeAndTickets();
       const updated = tickets.find((x) => x.id === activeTicket.id);
       if (updated) setActiveTicket(updated);
@@ -775,7 +775,7 @@ export default function HelpSupportPage() {
         <div style={topRow}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={kicker}>HELP & SUPPORT</div>
-            <h1 style={title}>We’re here for you.</h1>
+            <h1 style={title}>Weâ€™re here for you.</h1>
             <div style={subTitle}>
               Create a ticket, track updates, and get fast help for Food + Groceries (and Delivery if needed).
             </div>
@@ -785,7 +785,7 @@ export default function HelpSupportPage() {
                 <Link href="/login" style={btnPrimary}>
                   Login to create tickets
                 </Link>
-                <Link href="/" style={btnGhost}>
+                <Link href="/home" style={btnGhost}>
                   Back to Home
                 </Link>
               </div>
@@ -801,7 +801,7 @@ export default function HelpSupportPage() {
                 >
                   + Create Support Ticket
                 </button>
-                <Link href="/" style={btnGhost}>
+                <Link href="/home" style={btnGhost}>
                   Back to Home
                 </Link>
               </div>
@@ -831,7 +831,7 @@ export default function HelpSupportPage() {
               <div style={miniValue}>{isLoggedIn ? userEmail || "user" : "guest"}</div>
               <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <span style={roleBadge}>{isLoggedIn ? role || "user" : "guest"}</span>
-                <span style={roleBadgeSoft}>Food • Groceries</span>
+                <span style={roleBadgeSoft}>Food â€¢ Groceries</span>
               </div>
             </div>
           </div>
@@ -839,13 +839,13 @@ export default function HelpSupportPage() {
 
         {dbWarn ? <div style={alertWarn}>{dbWarn}</div> : null}
         {err ? <div style={alertErr}>{err}</div> : null}
-        {loading ? <div style={loadingHint}>Loading support center…</div> : null}
+        {loading ? <div style={loadingHint}>Loading support centerâ€¦</div> : null}
 
         {/* FAQ */}
         <div style={sectionRow}>
           <div style={sectionTitle}>Quick Help (FAQ)</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <input value={faqQ} onChange={(e) => setFaqQ(e.target.value)} placeholder="Search help topics…" style={searchInput} />
+            <input value={faqQ} onChange={(e) => setFaqQ(e.target.value)} placeholder="Search help topicsâ€¦" style={searchInput} />
           </div>
         </div>
 
@@ -900,7 +900,7 @@ export default function HelpSupportPage() {
                   ))}
                 </select>
 
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search tickets…" style={searchMini} />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ticketsâ€¦" style={searchMini} />
               </div>
             </div>
 
@@ -908,7 +908,7 @@ export default function HelpSupportPage() {
               <div style={emptyBox}>Login to view and create support tickets.</div>
             ) : filteredTickets.length === 0 ? (
               <div style={emptyBox}>
-                No tickets yet. Create one and you’ll see it here.
+                No tickets yet. Create one and youâ€™ll see it here.
                 <div style={{ marginTop: 10 }}>
                   <button
                     onClick={() => {
@@ -968,7 +968,7 @@ export default function HelpSupportPage() {
                 <div style={panelSub}>
                   {activeTicket ? (
                     <>
-                      Ticket: <b>{activeTicket.subject}</b> • Status: <b>{activeTicket.status}</b>
+                      Ticket: <b>{activeTicket.subject}</b> â€¢ Status: <b>{activeTicket.status}</b>
                     </>
                   ) : (
                     "Open a ticket to view the chat thread."
@@ -1005,7 +1005,7 @@ export default function HelpSupportPage() {
                 </div>
               </div>
             ) : threadLoading ? (
-              <div style={emptyBox}>Loading conversation…</div>
+              <div style={emptyBox}>Loading conversationâ€¦</div>
             ) : (
               <>
                 <div style={threadWrap}>
@@ -1066,7 +1066,7 @@ export default function HelpSupportPage() {
                               style={previewX}
                               title="Remove"
                             >
-                              ✕
+                              âœ•
                             </button>
                           </div>
                         ))}
@@ -1074,7 +1074,7 @@ export default function HelpSupportPage() {
                     ) : null}
 
                     <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-                      <textarea value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Write a reply…" style={replyInput} rows={2} />
+                      <textarea value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Write a replyâ€¦" style={replyInput} rows={2} />
 
                       <button type="button" onClick={() => replyFileRef.current?.click()} style={btnAttach}>
                         + Photo{replyFiles.length ? ` (${replyFiles.length})` : ""}
@@ -1086,7 +1086,7 @@ export default function HelpSupportPage() {
                     </div>
 
                     <div style={attachHint}>
-                      Attach up to {MAX_FILES} images • Max {MAX_MB}MB each • JPG/PNG/WebP
+                      Attach up to {MAX_FILES} images â€¢ Max {MAX_MB}MB each â€¢ JPG/PNG/WebP
                     </div>
                   </div>
                 </div>
@@ -1108,7 +1108,7 @@ export default function HelpSupportPage() {
             <div style={modalTop}>
               <div>
                 <div style={modalTitle}>Create Support Ticket</div>
-                <div style={modalSub}>Tell us what happened — we’ll respond inside this ticket.</div>
+                <div style={modalSub}>Tell us what happened â€” weâ€™ll respond inside this ticket.</div>
               </div>
 
               <button
@@ -1117,14 +1117,14 @@ export default function HelpSupportPage() {
                 }}
                 style={btnTiny}
               >
-                ✕ Close
+                âœ• Close
               </button>
             </div>
 
             <div style={formGrid}>
               <div style={field}>
                 <div style={label}>Subject</div>
-                <input value={subject} onChange={(e) => setSubject(e.target.value)} style={input} placeholder="Short title…" />
+                <input value={subject} onChange={(e) => setSubject(e.target.value)} style={input} placeholder="Short titleâ€¦" />
               </div>
 
               <div style={field}>
@@ -1163,7 +1163,7 @@ export default function HelpSupportPage() {
 
               <div style={fieldWide}>
                 <div style={label}>Order ID (optional)</div>
-                <input value={orderId} onChange={(e) => setOrderId(e.target.value)} style={input} placeholder="If order related…" />
+                <input value={orderId} onChange={(e) => setOrderId(e.target.value)} style={input} placeholder="If order relatedâ€¦" />
               </div>
 
               <div style={fieldWide}>
@@ -1173,11 +1173,11 @@ export default function HelpSupportPage() {
                   onChange={(e) => setMessage(e.target.value)}
                   style={textarea}
                   rows={6}
-                  placeholder="Explain the issue. Include steps, time, amount, screenshots details…"
+                  placeholder="Explain the issue. Include steps, time, amount, screenshots detailsâ€¦"
                 />
               </div>
 
-              {/* ✅ Attach pictures in create ticket */}
+              {/* âœ… Attach pictures in create ticket */}
               <div style={fieldWide}>
                 <div style={label}>Pictures (optional)</div>
 
@@ -1202,7 +1202,7 @@ export default function HelpSupportPage() {
                   ) : null}
 
                   <span style={attachHint}>
-                    Up to {MAX_FILES} images • Max {MAX_MB}MB each
+                    Up to {MAX_FILES} images â€¢ Max {MAX_MB}MB each
                   </span>
                 </div>
 
@@ -1218,7 +1218,7 @@ export default function HelpSupportPage() {
                           style={previewX}
                           title="Remove"
                         >
-                          ✕
+                          âœ•
                         </button>
                       </div>
                     ))}
@@ -1237,7 +1237,7 @@ export default function HelpSupportPage() {
                   Cancel
                 </button>
                 <button onClick={createTicket} style={btnPrimarySmall} disabled={creating}>
-                  {creating ? "Creating…" : "Create Ticket"}
+                  {creating ? "Creatingâ€¦" : "Create Ticket"}
                 </button>
               </div>
 

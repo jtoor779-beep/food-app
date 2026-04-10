@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import supabase from "@/lib/supabase";
@@ -16,7 +16,7 @@ function normalize(s: any) {
 function clampText(s: any, max = 34) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "...";
 }
 
 function pickName(u: AnyRow) {
@@ -30,6 +30,46 @@ function pickName(u: AnyRow) {
     u?.user_id ||
     "User"
   );
+}
+
+function pickEmail(u: AnyRow) {
+  return (
+    u?.email ||
+    u?.user_email ||
+    u?.auth_email ||
+    u?.login_email ||
+    u?.contact_email ||
+    ""
+  );
+}
+
+function pickPhone(u: AnyRow) {
+  return u?.phone || u?.mobile || u?.contact_phone || "";
+}
+
+function pickAddress(u: AnyRow) {
+  return [
+    u?.address_line1 || u?.address1 || u?.street || u?.address,
+    u?.address_line2 || u?.address2,
+    u?.city,
+    u?.state,
+    u?.postal_code || u?.zip,
+    u?.country,
+  ]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatDateTime(value: any) {
+  try {
+    if (!value) return "-";
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return "-";
+    return dt.toLocaleString();
+  } catch {
+    return "-";
+  }
 }
 
 function inferEnabledState(u: AnyRow) {
@@ -67,7 +107,6 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
 
-  // ✅ keep explicit map type
   const [restaurantsByOwner, setRestaurantsByOwner] = useState<RestaurantsMap>({});
 
   // Modal
@@ -90,7 +129,6 @@ export default function AdminUsersPage() {
       color: pageText,
     };
 
-    // ✅ FIX: no shorthand padding here (so select can safely use paddingRight)
     const input: React.CSSProperties = {
       width: "100%",
       paddingTop: 11,
@@ -239,13 +277,13 @@ export default function AdminUsersPage() {
         return;
       }
 
-      // ✅ IMPORTANT: keep this as string[] to avoid deep TS inference
+      // Keep this as string[] to avoid deep TS inference.
       const colsToTry: string[] = ["owner_user_id", "owner_id", "user_id", "created_by"];
 
       const map: RestaurantsMap = {};
 
       for (const col of colsToTry) {
-        // ✅ IMPORTANT: make builder `any` so TS stops "excessively deep" inference
+        // Keep builder as `any` here to avoid excessively deep TS inference.
         const builder: any = supabase
           .from("restaurants")
           .select(
@@ -334,7 +372,7 @@ export default function AdminUsersPage() {
     const payload = buildEnabledUpdate(u, action);
     if (!payload) {
       setError(
-        "Your profiles table does not have enable/disable columns (is_disabled/disabled/is_active/enabled). Tell me what column you want to use and I’ll map it."
+        "Your profiles table does not have enable/disable columns (is_disabled/disabled/is_active/enabled). Tell me what column you want to use and I'll map it."
       );
       return;
     }
@@ -412,12 +450,12 @@ export default function AdminUsersPage() {
         <div>
           <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: -0.2 }}>Users</div>
           <div style={{ fontSize: 13, color: styles.muted, marginTop: 6, fontWeight: 700 }}>
-            Profiles list — filter by role, search, enable/disable, and see linked restaurants.
+            Clean account details for customers, owners, and delivery partners.
           </div>
         </div>
 
         <button onClick={loadUsers} style={styles.btnPrimary} disabled={loading}>
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading ? "Refreshing..." : "Refresh"}
         </button>
       </div>
 
@@ -470,7 +508,7 @@ export default function AdminUsersPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name / email / phone / user id / role…"
+              placeholder="Search by name / email / phone / user id / role..."
               style={styles.input}
             />
           </div>
@@ -508,35 +546,35 @@ export default function AdminUsersPage() {
 
         <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
           {loading ? (
-            <div style={styles.card}>Loading users…</div>
+            <div style={styles.card}>Loading users...</div>
           ) : filteredUsers.length === 0 ? (
             <div style={styles.card}>No users found.</div>
           ) : (
             filteredUsers.map((u) => {
               const uid = String(u?.user_id ?? u?.id ?? "");
               const nm = pickName(u);
-              const email = u?.email ?? "";
-              const phone = u?.phone ?? u?.mobile ?? "";
+              const email = pickEmail(u);
+              const phone = pickPhone(u);
               const role = normalize(u?.role) || "unknown";
               const enabledState = normalize(inferEnabledState(u));
 
               const linked = (restaurantsByOwner[uid] || []) as AnyRow[];
               const linkedLabel =
-                linked.length === 0 ? "—" : linked.length === 1 ? linked[0]?.name || "1 restaurant" : `${linked.length} restaurants`;
+                linked.length === 0 ? "-" : linked.length === 1 ? linked[0]?.name || "1 restaurant" : `${linked.length} restaurants`;
 
               return (
                 <div key={uid || Math.random()} style={rowStyle} onClick={() => setSelected(u)} title="Click to view details">
                   <div style={{ fontWeight: 950 }}>
                     {clampText(nm, 34)}
                     <div style={{ fontSize: 12, color: styles.muted, marginTop: 2, fontWeight: 700 }}>
-                      {uid ? `UID: ${clampText(uid, 30)}` : "UID: —"}
+                      {uid ? `UID: ${clampText(uid, 30)}` : "UID: -"}
                     </div>
                   </div>
 
                   <div style={{ opacity: 0.98 }}>
-                    <div style={{ fontWeight: 950 }}>{email ? clampText(email, 40) : "—"}</div>
+                    <div style={{ fontWeight: 950 }}>{email ? clampText(email, 40) : "-"}</div>
                     <div style={{ fontSize: 12, color: styles.muted, marginTop: 2, fontWeight: 700 }}>
-                      {phone ? clampText(phone, 18) : "—"}
+                      {phone ? clampText(phone, 18) : "-"}
                     </div>
                   </div>
 
@@ -594,7 +632,7 @@ export default function AdminUsersPage() {
               <div>
                 <div style={{ fontSize: 18, fontWeight: 950, letterSpacing: -0.2 }}>{pickName(selected)}</div>
                 <div style={{ fontSize: 13, color: styles.muted, marginTop: 4, fontWeight: 700 }}>
-                  UID: {String(selected?.user_id ?? selected?.id ?? "—")}
+                  UID: {String(selected?.user_id ?? selected?.id ?? "-")}
                 </div>
               </div>
 
@@ -603,42 +641,94 @@ export default function AdminUsersPage() {
               </button>
             </div>
 
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div style={{ ...styles.card, background: "rgba(15, 23, 42, 0.03)" }}>
-                <div style={{ fontSize: 13, fontWeight: 950 }}>Profile</div>
-                <div style={{ marginTop: 10, fontSize: 13, opacity: 0.95, lineHeight: 1.6 }}>
-                  <div>
-                    <b>Role:</b> {String(selected?.role ?? "—")}
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: 12 }}>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ ...styles.card, background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 13, fontWeight: 950 }}>Account overview</div>
+                    <span
+                      style={styles.badge(
+                        normalize(inferEnabledState(selected)) === "disabled"
+                          ? "disabled"
+                          : normalize(inferEnabledState(selected)) === "enabled"
+                          ? "enabled"
+                          : "unknown"
+                      )}
+                    >
+                      {inferEnabledState(selected)}
+                    </span>
                   </div>
-                  <div>
-                    <b>Email:</b> {String(selected?.email ?? "—")}
+
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Role</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 950 }}>{String(selected?.role ?? "—")}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Joined</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>{formatDateTime(selected?.created_at)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Email</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900, wordBreak: "break-word" }}>
+                        {pickEmail(selected) || "Email not saved in profile yet"}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Phone</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>{pickPhone(selected) || "—"}</div>
+                    </div>
                   </div>
-                  <div>
-                    <b>Phone:</b> {String(selected?.phone ?? selected?.mobile ?? "—")}
-                  </div>
-                  <div>
-                    <b>Status:</b> {inferEnabledState(selected)}
+
+                  <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                    {normalize(inferEnabledState(selected)) === "disabled" ? (
+                      <button
+                        style={styles.btnPrimary}
+                        disabled={busyId === String(selected?.user_id ?? selected?.id ?? "")}
+                        onClick={() => setUserEnabled(selected, "enable")}
+                      >
+                        Enable user
+                      </button>
+                    ) : (
+                      <button
+                        style={styles.btn}
+                        disabled={busyId === String(selected?.user_id ?? selected?.id ?? "")}
+                        onClick={() => setUserEnabled(selected, "disable")}
+                      >
+                        Disable user
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-                  {normalize(inferEnabledState(selected)) === "disabled" ? (
-                    <button
-                      style={styles.btnPrimary}
-                      disabled={busyId === String(selected?.user_id ?? selected?.id ?? "")}
-                      onClick={() => setUserEnabled(selected, "enable")}
-                    >
-                      Enable user
-                    </button>
-                  ) : (
-                    <button
-                      style={styles.btn}
-                      disabled={busyId === String(selected?.user_id ?? selected?.id ?? "")}
-                      onClick={() => setUserEnabled(selected, "disable")}
-                    >
-                      Disable user
-                    </button>
-                  )}
+                <div style={{ ...styles.card, background: "rgba(15, 23, 42, 0.03)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 950 }}>Contact & address</div>
+                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>City</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>{String(selected?.city || "—")}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>State</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>{String(selected?.state || "—")}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Zip code</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>
+                        {String(selected?.postal_code ?? selected?.zip ?? "—")}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Country</div>
+                      <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900 }}>{String(selected?.country || "—")}</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Full address</div>
+                    <div style={{ marginTop: 6, fontSize: 15, fontWeight: 900, lineHeight: 1.5 }}>
+                      {pickAddress(selected) || "No address saved yet"}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -675,10 +765,10 @@ export default function AdminUsersPage() {
                           >
                             <div style={{ fontWeight: 950 }}>{r?.name || "Restaurant"}</div>
                             <div style={{ fontSize: 12, color: styles.muted, marginTop: 4, fontWeight: 700 }}>
-                              #{clampText(r?.id, 26)} {addr ? `• ${clampText(addr, 42)}` : ""}
+                              #{clampText(r?.id, 26)} {addr ? `- ${clampText(addr, 42)}` : ""}
                             </div>
                             <div style={{ fontSize: 12, color: styles.muted, marginTop: 4, fontWeight: 700 }}>
-                              Accepting: <b>{accepting === null ? "—" : accepting ? "YES" : "NO"}</b>
+                              Accepting: <b>{accepting === null ? "-" : accepting ? "YES" : "NO"}</b>
                             </div>
                           </div>
                         );
@@ -690,19 +780,31 @@ export default function AdminUsersPage() {
             </div>
 
             <div style={{ ...styles.card, marginTop: 12, background: "rgba(15, 23, 42, 0.03)" }}>
-              <div style={{ fontSize: 13, fontWeight: 950 }}>Raw user data (debug)</div>
-              <pre
-                style={{
-                  marginTop: 10,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  fontSize: 12,
-                  opacity: 0.9,
-                  color: styles.pageText,
-                }}
-              >
-{JSON.stringify(selected, null, 2)}
-              </pre>
+              <div style={{ fontSize: 13, fontWeight: 950 }}>Account notes</div>
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>User ID</div>
+                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900, wordBreak: "break-word" }}>
+                    {String(selected?.user_id ?? selected?.id ?? "—")}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Active restaurant</div>
+                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900 }}>
+                    {String(selected?.active_restaurant_id || "—")}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: styles.muted, fontWeight: 900, textTransform: "uppercase" }}>Delivery approval</div>
+                  <div style={{ marginTop: 6, fontSize: 14, fontWeight: 900 }}>
+                    {typeof selected?.delivery_approved === "boolean"
+                      ? selected.delivery_approved
+                        ? "Approved"
+                        : "Pending"
+                      : "—"}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -710,3 +812,7 @@ export default function AdminUsersPage() {
     </div>
   );
 }
+
+
+
+

@@ -70,7 +70,7 @@ async function getRoleAndRedirect(router) {
     return;
   }
 
-  router.push("/");
+  router.push("/home");
 }
 
 function isEmailConfirmed(user) {
@@ -100,7 +100,7 @@ export default function LoginPage() {
 
   const [resendLoading, setResendLoading] = useState(false);
 
-  // ✅ OPTIONAL: Put your real images here (URL or /public path)
+  // âœ… OPTIONAL: Put your real images here (URL or /public path)
   // Example:
   // const HERO_PHOTO = "/images/login-hero.jpg";
   // const PARTNER_PHOTO = "/images/partner.jpg";
@@ -161,12 +161,12 @@ export default function LoginPage() {
       if (!isEmailConfirmed(user)) {
         await supabase.auth.signOut();
         setErrMsg(
-          "✅ Account created, but email is not verified yet. Please check your inbox and confirm your email. Then login again."
+          "âœ… Account created, but email is not verified yet. Please check your inbox and confirm your email. Then login again."
         );
         return;
       }
 
-      setInfoMsg("✅ Logged in successfully. Redirecting...");
+      setInfoMsg("âœ… Logged in successfully. Redirecting...");
       await getRoleAndRedirect(router);
       router.refresh();
     } catch (e) {
@@ -200,7 +200,7 @@ export default function LoginPage() {
       if (error) throw error;
 
       setInfoMsg(
-        "✅ Password reset email sent. Please check your inbox (and spam)."
+        "âœ… Password reset email sent. Please check your inbox (and spam)."
       );
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -234,7 +234,7 @@ export default function LoginPage() {
 
       if (error) throw error;
 
-      setInfoMsg("✅ Verification email re-sent. Check inbox/spam.");
+      setInfoMsg("âœ… Verification email re-sent. Check inbox/spam.");
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -267,7 +267,7 @@ export default function LoginPage() {
       if (error) throw error;
 
       setOtpSent(true);
-      setInfoMsg("✅ Code sent to your email. Enter the code below.");
+      setInfoMsg("âœ… Code sent to your email. Enter the code below.");
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -302,7 +302,7 @@ export default function LoginPage() {
         return;
       }
 
-      setInfoMsg("✅ Logged in successfully. Redirecting...");
+      setInfoMsg("âœ… Logged in successfully. Redirecting...");
       await getRoleAndRedirect(router);
       router.refresh();
     } catch (e) {
@@ -316,7 +316,7 @@ export default function LoginPage() {
     router.push(`/signup?role=${encodeURIComponent(role)}`);
   }
   function goGetApp() {
-    router.push("/");
+    router.push("/home");
   }
   const emailValid = /\S+@\S+\.\S+/.test(String(email || "").trim());
   const passValid = String(password || "").trim().length >= 8;
@@ -453,19 +453,19 @@ export default function LoginPage() {
           </div>
           <div className="hf_phoneScreen">
             <div className="hf_phoneHeader">
-              <div className="hf_phoneLogo">🍔</div>
+              <div className="hf_phoneLogo">ðŸ”</div>
               <div className="hf_phoneBrand">
                 <div className="hf_phoneName">HomyFod</div>
-                <div className="hf_phoneTag">Fast • Grocery • Food</div>
+                <div className="hf_phoneTag">Fast â€¢ Grocery â€¢ Food</div>
               </div>
             </div>
 
             <div className="hf_phoneCard">
               <div className="hf_phoneCardRow">
-                <div className="hf_bubble">🔥</div>
+                <div className="hf_bubble">ðŸ”¥</div>
                 <div className="hf_phoneCardText">
                   <div className="hf_phoneCardTitle">Trending near you</div>
-                  <div className="hf_phoneCardSub">Fresh deals • live orders</div>
+                  <div className="hf_phoneCardSub">Fresh deals â€¢ live orders</div>
                 </div>
               </div>
               <div className="hf_phoneBtn">Order now</div>
@@ -473,14 +473,14 @@ export default function LoginPage() {
 
             <div className="hf_phoneMiniGrid">
               <div className="hf_phoneMini">
-                <div className="hf_mi">🍕</div>
+                <div className="hf_mi">ðŸ•</div>
                 <div className="hf_mt">
                   <div className="hf_mtt">Restaurants</div>
                   <div className="hf_mts">Hot & fast</div>
                 </div>
               </div>
               <div className="hf_phoneMini">
-                <div className="hf_mi">🛒</div>
+                <div className="hf_mi">ðŸ›’</div>
                 <div className="hf_mt">
                   <div className="hf_mtt">Groceries</div>
                   <div className="hf_mts">Essentials</div>
@@ -507,10 +507,10 @@ export default function LoginPage() {
             <div className="hf_authCard hf_reveal hf_r2">
               <div className="hf_authTop">
                 <div className="hf_brand">
-                  <div className="hf_brandLogo">🍔</div>
+                  <div className="hf_brandLogo">ðŸ”</div>
                   <div>
                     <div className="hf_brandName">HomyFod</div>
-                    <div className="hf_brandSub">Preparing your session…</div>
+                    <div className="hf_brandSub">Preparing your sessionâ€¦</div>
                   </div>
                 </div>
                 <div className="hf_pillStatic">Secure</div>
@@ -518,7 +518,7 @@ export default function LoginPage() {
 
               <div className="hf_notice">
                 <span className="hf_dot" />
-                Checking session…
+                Checking sessionâ€¦
               </div>
             </div>
           </div>
@@ -543,10 +543,10 @@ export default function LoginPage() {
         <div className="hf_heroDecor hf_dLeft" aria-hidden="true" />
         <div className="hf_heroDecor hf_dRight" aria-hidden="true" />
         <div className="hf_heroFood hf_fLeft" aria-hidden="true">
-          🥡
+          ðŸ¥¡
         </div>
         <div className="hf_heroFood hf_fRight" aria-hidden="true">
-          🍟
+          ðŸŸ
         </div>
 
         <WaveSvg className="hf_wave hf_wave1" />
@@ -559,7 +559,7 @@ export default function LoginPage() {
               <div className="hf_heroBrand">HomyFod</div>
               <h1 className="hf_heroTitle">Sign in to order fast</h1>
               <p className="hf_heroSubtitle">
-                Restaurants + Groceries • Live updates • Smooth checkout
+                Restaurants + Groceries â€¢ Live updates â€¢ Smooth checkout
               </p>
               <div className="hf_socialProof hf_reveal hf_r2">
                 <div className="hf_statItem">
@@ -583,7 +583,7 @@ export default function LoginPage() {
           <div className="hf_authCard hf_reveal hf_r2">
             <div className="hf_authTop">
               <div className="hf_brand">
-                <div className="hf_brandLogo">🍕</div>
+                <div className="hf_brandLogo">ðŸ•</div>
                 <div>
                   <div className="hf_brandName">Welcome back</div>
                   <div className="hf_brandSub">Sign in to continue</div>
@@ -613,7 +613,7 @@ export default function LoginPage() {
               <form onSubmit={handleLogin} className="hf_form">
                 <label className="hf_label">Email</label>
                 <div className={`hf_inputWrap ${email ? (emailValid ? "hf_valid" : "hf_invalid") : ""}`}>
-                  <span className="hf_icon">✉️</span>
+                  <span className="hf_icon">âœ‰ï¸</span>
                   <input
                     className="hf_input"
                     value={email}
@@ -628,12 +628,12 @@ export default function LoginPage() {
                   Password
                 </label>
                 <div className={`hf_inputWrap ${password ? (passValid ? "hf_valid" : "hf_invalid") : ""}`}>
-                  <span className="hf_icon">🔒</span>
+                  <span className="hf_icon">ðŸ”’</span>
                   <input
                     className="hf_input hf_inputPass"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
                     type={showPass ? "text" : "password"}
                     autoComplete="current-password"
                   />
@@ -644,7 +644,7 @@ export default function LoginPage() {
                     onClick={() => setShowPass((v) => !v)}
                     aria-label={showPass ? "Hide password" : "Show password"}
                   >
-                    {showPass ? "🙈" : "👁️"}
+                    {showPass ? "ðŸ™ˆ" : "ðŸ‘ï¸"}
                   </button>
                 </div>
 
@@ -655,7 +655,7 @@ export default function LoginPage() {
                     onClick={handleForgotPassword}
                     disabled={resetLoading}
                   >
-                    {resetLoading ? "Sending reset…" : "Forgot password?"}
+                    {resetLoading ? "Sending resetâ€¦" : "Forgot password?"}
                   </button>
 
                   <button
@@ -663,16 +663,16 @@ export default function LoginPage() {
                     className="hf_link"
                     onClick={resendVerificationEmail}
                     disabled={resendLoading}
-                    title="If you didn’t receive verification email"
+                    title="If you didnâ€™t receive verification email"
                   >
-                    {resendLoading ? "Resending…" : "Resend verification"}
+                    {resendLoading ? "Resendingâ€¦" : "Resend verification"}
                   </button>
                 </div>
 
                 <button className="hf_btnPrimary" type="submit" disabled={loading}>
                   {loading ? (
                     <span className="hf_btnSpin">
-                      <SpinnerDark /> Signing in…
+                      <SpinnerDark /> Signing inâ€¦
                     </span>
                   ) : (
                     "Sign In"
@@ -680,7 +680,7 @@ export default function LoginPage() {
                 </button>
 
                 <div className="hf_footer">
-                  Don’t have an account?{" "}
+                  Donâ€™t have an account?{" "}
                   <span className="hf_footerLink" onClick={() => router.push("/signup")}>
                     Create one
                   </span>
@@ -690,7 +690,7 @@ export default function LoginPage() {
               <form onSubmit={verifyLoginCode} className="hf_form">
                 <label className="hf_label">Email</label>
                 <div className={`hf_inputWrap ${email ? (emailValid ? "hf_valid" : "hf_invalid") : ""}`}>
-                  <span className="hf_icon">✉️</span>
+                  <span className="hf_icon">âœ‰ï¸</span>
                   <input
                     className="hf_input"
                     value={email}
@@ -711,7 +711,7 @@ export default function LoginPage() {
                   >
                     {otpLoading ? (
                       <span className="hf_btnSpin">
-                        <SpinnerDark /> Sending code…
+                        <SpinnerDark /> Sending codeâ€¦
                       </span>
                     ) : (
                       "Send code to email"
@@ -723,7 +723,7 @@ export default function LoginPage() {
                       Enter code
                     </label>
                     <div className={`hf_inputWrap ${otpCode ? (otpValid ? "hf_valid" : "hf_invalid") : ""}`}>
-                      <span className="hf_icon">🔑</span>
+                      <span className="hf_icon">ðŸ”‘</span>
                       <input
                         className="hf_input"
                         value={otpCode}
@@ -741,7 +741,7 @@ export default function LoginPage() {
                         onClick={sendLoginCode}
                         disabled={otpLoading}
                       >
-                        {otpLoading ? "Resending…" : "Resend code"}
+                        {otpLoading ? "Resendingâ€¦" : "Resend code"}
                       </button>
 
                       <button
@@ -761,7 +761,7 @@ export default function LoginPage() {
                     <button className="hf_btnPrimary" type="submit" disabled={otpLoading}>
                       {otpLoading ? (
                         <span className="hf_btnSpin">
-                          <SpinnerDark /> Verifying…
+                          <SpinnerDark /> Verifyingâ€¦
                         </span>
                       ) : (
                         "Verify & Sign in"
@@ -771,7 +771,7 @@ export default function LoginPage() {
                 )}
 
                 <div className="hf_footer">
-                  Don’t have an account?{" "}
+                  Donâ€™t have an account?{" "}
                   <span className="hf_footerLink" onClick={() => router.push("/signup")}>
                     Create one
                   </span>
@@ -788,11 +788,11 @@ export default function LoginPage() {
             <div className="hf_terms">
               {otpMode ? (
                 <>
-                  Code login is extra secure. <b>We’ll email you a one-time code</b>.
+                  Code login is extra secure. <b>Weâ€™ll email you a one-time code</b>.
                 </>
               ) : (
                 <>
-                  By signing in you agree to our basic terms. <b>Fast • Secure • Smooth</b>
+                  By signing in you agree to our basic terms. <b>Fast â€¢ Secure â€¢ Smooth</b>
                 </>
               )}
             </div>
@@ -816,7 +816,7 @@ export default function LoginPage() {
 
         <div className="hf_joinGrid">
           <div className="hf_joinCard hf_reveal hf_r1">
-            <div className="hf_joinIcon">🛵</div>
+            <div className="hf_joinIcon">ðŸ›µ</div>
             <div className="hf_joinTitle">Become a Delivery Partner</div>
             <div className="hf_joinDesc">
               Deliver orders, earn money and work on your schedule. Sign up in minutes.
@@ -827,7 +827,7 @@ export default function LoginPage() {
           </div>
 
           <div className="hf_joinCard hf_reveal hf_r2">
-            <div className="hf_joinIcon">🏪</div>
+            <div className="hf_joinIcon">ðŸª</div>
             <div className="hf_joinTitle">Become a Merchant</div>
             <div className="hf_joinDesc">
               Attract new customers and grow sales with online orders.
@@ -864,7 +864,7 @@ const heroCss = `
     border-bottom: 1px solid rgba(0,0,0,0.08);
   }
 
-  /* ✅ OPTIONAL PHOTO layer */
+  /* âœ… OPTIONAL PHOTO layer */
   .hf_photoLayer{
     position:absolute;
     inset:0;
@@ -1485,7 +1485,7 @@ const heroCss = `
     border-top: 1px solid rgba(0,0,0,0.06);
   }
 
-  /* ✅ OPTIONAL partner photo */
+  /* âœ… OPTIONAL partner photo */
   .hf_partnerPhoto{
     position:absolute;
     inset:0;
@@ -1602,7 +1602,7 @@ const heroCss = `
     place-items:center;
   }
 
-  /* ✅ Footer now light red */
+  /* âœ… Footer now light red */
   .hf_footerBar{
     background:
       radial-gradient(900px 520px at 20% 30%, rgba(255,255,255,0.22), rgba(255,255,255,0) 62%),
@@ -1736,3 +1736,4 @@ const heroCss = `
     .hf_heroFood{ display:none; }
   }
 `;
+

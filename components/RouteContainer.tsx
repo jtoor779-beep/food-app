@@ -10,9 +10,10 @@ export default function RouteContainer({
 }) {
   const pathname = usePathname() || "";
   const isAdmin = pathname.startsWith("/admin");
+  const isLanding = pathname === "/";
 
   // Admin = full width
-  if (isAdmin) {
+  if (isAdmin || isLanding) {
     return <div style={{ width: "100%" }}>{children}</div>;
   }
 

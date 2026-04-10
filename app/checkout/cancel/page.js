@@ -8,7 +8,7 @@ export default function CheckoutCancelPage() {
       <div style={{ maxWidth: 980, margin: "0 auto" }}>
         <div style={card}>
           <div style={badge}>Payment Cancelled</div>
-          <h1 style={title}>No worries 🙂</h1>
+          <h1 style={title}>No worries ðŸ™‚</h1>
           <p style={sub}>
             Your payment was cancelled. You can go back to your cart and try again anytime.
           </p>
@@ -18,7 +18,7 @@ export default function CheckoutCancelPage() {
               Back to Cart
             </Link>
 
-            <Link href="/" style={btnGhost}>
+            <Link href="/home" style={btnGhost}>
               Home
             </Link>
           </div>

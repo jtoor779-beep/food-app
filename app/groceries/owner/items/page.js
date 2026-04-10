@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { DEFAULT_APP_CURRENCY, formatAppMoney, getStoredAppCurrency, syncAppCurrency } from "@/lib/appCurrency";
 
 /* =========================
    Helpers (keep old logic)
@@ -45,9 +46,8 @@ function normalizeRole(r) {
     .toLowerCase()
     .replace(/\s+/g, "_");
 }
-function money(v) {
-  const n = Number(v || 0);
-  return `₹${n.toFixed(0)}`;
+function money(v, currency = DEFAULT_APP_CURRENCY) {
+  return formatAppMoney(v, currency);
 }
 function clampText(s, max = 80) {
   const str = String(s ?? "");
@@ -196,6 +196,7 @@ export default function GroceryOwnerItemsPage() {
 
   const [stores, setStores] = useState([]);
   const [storeId, setStoreId] = useState("");
+  const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   const [items, setItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
@@ -288,6 +289,40 @@ export default function GroceryOwnerItemsPage() {
   const [csvPreview, setCsvPreview] = useState([]);
   const [csvErrors, setCsvErrors] = useState([]);
   const [csvImporting, setCsvImporting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCurrency() {
+      try {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      } catch {
+        setCurrency(DEFAULT_APP_CURRENCY);
+      }
+
+      const nextCurrency = await syncAppCurrency(DEFAULT_APP_CURRENCY);
+      if (!cancelled) setCurrency(nextCurrency);
+    }
+
+    loadCurrency();
+
+    function onStorage(e) {
+      if (e?.key === "foodapp_currency") {
+        setCurrency(getStoredAppCurrency(DEFAULT_APP_CURRENCY));
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", onStorage);
+    }
+
+    return () => {
+      cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("storage", onStorage);
+      }
+    };
+  }, []);
 
   const canAccess = useMemo(() => {
     return role === "grocery_owner" || role === "admin";
@@ -1407,6 +1442,84 @@ export default function GroceryOwnerItemsPage() {
     }
   }
 
+  async function deleteCategory() {
+    if (!storeId) return setErrMsg("Select a store first.");
+    if (!manageCatId) return setErrMsg("Select a category first.");
+
+    const category = (categories || []).find((c) => c.id === manageCatId);
+    const categoryName = clean(category?.name) || "this category";
+    const linkedItems = (items || []).filter((it) => getItemCategoryId(it) === manageCatId || getItemCategoryName(it).toLowerCase() === categoryName.toLowerCase());
+    if (linkedItems.length > 0) {
+      return setErrMsg(`Cannot delete ${categoryName} yet. Move or delete ${linkedItems.length} item(s) in this category first.`);
+    }
+    if ((subcategories || []).length > 0) {
+      return setErrMsg(`Delete the subcategories inside ${categoryName} first, then remove the category.`);
+    }
+
+    const okay = typeof window === "undefined" ? true : window.confirm(`Delete category "${categoryName}"?`);
+    if (!okay) return;
+
+    setBusy(true);
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      const { error } = await supabase.from("grocery_categories").delete().eq("id", manageCatId).eq("store_id", storeId);
+      if (error) throw error;
+
+      setInfoMsg("Category deleted.");
+      setManageCatId("");
+      setSubcategories([]);
+      await loadCategoriesForStore(storeId, { keepSelection: false });
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteSubcategory(subcategoryId) {
+    const sub = (subcategories || []).find((s) => s.id === subcategoryId);
+    const subName = clean(sub?.name) || "this subcategory";
+    if (!storeId) return setErrMsg("Select a store first.");
+    if (!manageCatId) return setErrMsg("Select a category first.");
+    if (!subcategoryId) return setErrMsg("Select a subcategory first.");
+
+    const linkedItems = (items || []).filter(
+      (it) =>
+        clean(it?.subcategory_id) === clean(subcategoryId) ||
+        getItemSubcategoryName(it).toLowerCase() === subName.toLowerCase()
+    );
+    if (linkedItems.length > 0) {
+      return setErrMsg(`Cannot delete ${subName} yet. Move or delete ${linkedItems.length} item(s) using this subcategory first.`);
+    }
+
+    const okay = typeof window === "undefined" ? true : window.confirm(`Delete subcategory "${subName}"?`);
+    if (!okay) return;
+
+    setBusy(true);
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      const { error } = await supabase
+        .from("grocery_subcategories")
+        .delete()
+        .eq("id", subcategoryId)
+        .eq("store_id", storeId)
+        .eq("category_id", manageCatId);
+      if (error) throw error;
+
+      if (selectedSubId === subcategoryId) setSelectedSubId("");
+      setInfoMsg("Subcategory deleted.");
+      await loadSubcategoriesForCategory(storeId, manageCatId);
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /* =========================
      ✅ Save variants (safe)
      ========================= */
@@ -2158,6 +2271,20 @@ export default function GroceryOwnerItemsPage() {
                 ) : categories.length === 0 ? (
                   <div style={hint}>No categories yet. Create your first category above.</div>
                 ) : null}
+
+                {manageCatId ? (
+                  <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      onClick={deleteCategory}
+                      style={btnTinyDanger}
+                      disabled={!storeId || !manageCatId || busy}
+                      title="Delete selected category"
+                    >
+                      Delete Category
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -2203,9 +2330,29 @@ export default function GroceryOwnerItemsPage() {
                 ) : (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {subcategories.slice(0, 12).map((s) => (
-                      <span key={s.id} style={tag}>
-                        {s.name}
-                      </span>
+                      <div
+                        key={s.id}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "6px 8px",
+                          borderRadius: 999,
+                          border: "1px solid rgba(0,0,0,0.08)",
+                          background: "rgba(255,255,255,0.92)",
+                        }}
+                      >
+                        <span style={{ ...tag, margin: 0 }}>{s.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => deleteSubcategory(s.id)}
+                          style={btnTinyDanger}
+                          disabled={busy}
+                          title={`Delete ${s.name}`}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     ))}
                     {subcategories.length > 12 ? <span style={tag}>+{subcategories.length - 12} more</span> : null}
                   </div>
@@ -2486,7 +2633,7 @@ export default function GroceryOwnerItemsPage() {
                     )}
 
                     <div style={topBadges}>
-                      <span style={badgeDark}>{money(it.price)}</span>
+                      <span style={badgeDark}>{money(it.price, currency)}</span>
                       <span style={badgeLight}>{clean(it.category) || "General"}</span>
                     </div>
                   </div>
@@ -2735,12 +2882,12 @@ export default function GroceryOwnerItemsPage() {
                               <span style={o.is_default ? tagStrong : tag}>{o.label}</span>
                               {Number(o.discount_price || 0) > 0 && Number(o.original_price || 0) > Number(o.price || 0) ? (
                                 <>
-                                  <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(o.original_price)}</span>
-                                  <span style={tagStrong}>{money(o.price)}</span>
+                                  <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(o.original_price, currency)}</span>
+                                  <span style={tagStrong}>{money(o.price, currency)}</span>
                                   <span style={tagStrong}>{o.discount_percent || Math.max(1, Math.round(((Number(o.original_price || 0) - Number(o.price || 0)) / Number(o.original_price || 1)) * 100))}% OFF</span>
                                 </>
                               ) : (
-                                <span style={tag}>{money(o.price)}</span>
+                                <span style={tag}>{money(o.price, currency)}</span>
                               )}
                               <span style={o.in_stock ? openPill : closedPill}>{o.in_stock ? "In stock" : "Out"}</span>
                               {o.is_default ? <span style={tagStrong}>Default</span> : <span style={tag}>Not default</span>}

@@ -68,7 +68,7 @@ function PaymentCancelInner() {
         <div style={card}>
           <div style={pillBad}>Payment Cancelled</div>
 
-          <h1 style={title}>No worries 🙂</h1>
+          <h1 style={title}>No worries ðŸ™‚</h1>
           <div style={sub}>
             Your payment was cancelled. You can go back and try again anytime.
           </div>
@@ -77,7 +77,7 @@ function PaymentCancelInner() {
             <Link href="/cart" style={btnPrimary}>
               Back to Cart
             </Link>
-            <Link href="/" style={btnGhost}>
+            <Link href="/home" style={btnGhost}>
               Back to Home
             </Link>
           </div>
@@ -175,3 +175,4 @@ const note = {
   fontWeight: 850,
   color: "rgba(17,24,39,0.65)",
 };
+

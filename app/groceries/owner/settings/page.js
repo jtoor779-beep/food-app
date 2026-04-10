@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -232,7 +232,9 @@ export default function GroceryOwnerSettingsPage() {
   const [userEmail, setUserEmail] = useState("");
   const [role, setRole] = useState("");
 
-  const [store, setStore] = useState(null);
+  const [stores, setStores] = useState([]);
+  const [storeId, setStoreId] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
 
   // Create / Edit fields
   const [name, setName] = useState("");
@@ -241,13 +243,14 @@ export default function GroceryOwnerSettingsPage() {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
 
-  // ✅ NEW: Store location (lat/lng)
+  // âœ… NEW: Store location (lat/lng)
   const [lat, setLat] = useState("");
   const [lng, setLng] = useState("");
   const [gettingGps, setGettingGps] = useState(false);
   const [savingLoc, setSavingLoc] = useState(false);
 
-  const storeId = useMemo(() => store?.id || "", [store]);
+  const activeStore = useMemo(() => stores.find((s) => s.id === storeId) || null, [stores, storeId]);
+  const isCreateMode = showCreate || !activeStore;
 
   /* =========================
      NEW: Store Image Upload
@@ -258,6 +261,49 @@ export default function GroceryOwnerSettingsPage() {
   const [uploadingImg, setUploadingImg] = useState(false);
   const [imgFile, setImgFile] = useState(null);
   const [imgPreviewUrl, setImgPreviewUrl] = useState("");
+
+  function resetStoreFields() {
+    setName("");
+    setCity("");
+    setImageUrl("");
+    setPhone("");
+    setAddress("");
+    setLat("");
+    setLng("");
+    resetImagePicker();
+  }
+
+  function hydrateStoreFields(nextStore) {
+    if (!nextStore?.id) {
+      resetStoreFields();
+      return;
+    }
+
+    setStoreId(nextStore.id);
+    setName(pick(nextStore, ["name", "store_name"], ""));
+    setCity(pick(nextStore, ["city"], ""));
+    setImageUrl(pick(nextStore, ["image_url", "logo_url", "banner_url"], ""));
+    setPhone(pick(nextStore, ["phone", "store_phone"], ""));
+    setAddress(pick(nextStore, ["address", "address_line1", "store_address"], ""));
+
+    const la = pick(nextStore, ["lat", "location_lat", "latitude"], "");
+    const lo = pick(nextStore, ["lng", "location_lng", "longitude"], "");
+    setLat(la !== "" ? String(la) : "");
+    setLng(lo !== "" ? String(lo) : "");
+
+    resetImagePicker();
+  }
+
+  async function loadOwnerStores(uid) {
+    const { data, error } = await supabase
+      .from("grocery_stores")
+      .select("*")
+      .eq("owner_user_id", uid)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
 
   function resetImagePicker() {
     setImgFile(null);
@@ -340,7 +386,7 @@ export default function GroceryOwnerSettingsPage() {
     }
   }
 
-  // ✅ NEW: Use current GPS (browser)
+  // âœ… NEW: Use current GPS (browser)
   async function useMyCurrentGps() {
     setErr("");
     setInfo("");
@@ -374,7 +420,7 @@ export default function GroceryOwnerSettingsPage() {
     }
   }
 
-  // ✅ NEW: Save lat/lng to DB for existing store
+  // âœ… NEW: Save lat/lng to DB for existing store
   async function saveLocationToDb() {
     setErr("");
     setInfo("");
@@ -402,7 +448,7 @@ export default function GroceryOwnerSettingsPage() {
 
       if (error) throw error;
 
-      setStore(data);
+      setStores((prev) => prev.map((s) => (s.id === data.id ? data : s)));
       setInfo("Location saved for your grocery store.");
     } catch (e) {
       setErr(e?.message || String(e));
@@ -435,18 +481,19 @@ export default function GroceryOwnerSettingsPage() {
 
       if (error) throw error;
 
-      setStore(null);
-      setName("");
-      setCity("");
-      setImageUrl("");
-      setPhone("");
-      setAddress("");
-      setLat("");
-      setLng("");
-      resetImagePicker();
+      const list = await loadOwnerStores(userId);
+      setStores(list);
+
+      if (list.length > 0) {
+        hydrateStoreFields(list[0]);
+        setShowCreate(false);
+      } else {
+        setStoreId("");
+        resetStoreFields();
+        setShowCreate(true);
+      }
 
       setInfo("Grocery store deleted successfully.");
-      router.push("/groceries/owner/dashboard");
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -489,47 +536,23 @@ export default function GroceryOwnerSettingsPage() {
       const r = normalizeRole(prof?.role);
       setRole(r);
 
-      // 🔒 Only Grocery Owners
       if (r !== "grocery_owner") {
         setErr("Access denied: This page is only for Grocery Owners.");
         return;
       }
 
-      // Load owner store (latest)
-      const { data: s, error: sErr } = await supabase
-        .from("grocery_stores")
-        .select("*")
-        .eq("owner_user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const list = await loadOwnerStores(user.id);
+      setStores(list);
 
-      if (sErr) throw sErr;
-
-      if (s?.id) {
-        setStore(s);
-
-        setName(pick(s, ["name", "store_name"], ""));
-        setCity(pick(s, ["city"], ""));
-        setImageUrl(pick(s, ["image_url", "logo_url", "banner_url"], ""));
-        setPhone(pick(s, ["phone", "store_phone"], ""));
-        setAddress(pick(s, ["address", "address_line1", "store_address"], ""));
-
-        // ✅ NEW: load saved lat/lng from DB
-        const la = pick(s, ["lat", "location_lat", "latitude"], "");
-        const lo = pick(s, ["lng", "location_lng", "longitude"], "");
-        setLat(la !== "" ? String(la) : "");
-        setLng(lo !== "" ? String(lo) : "");
+      if (list.length > 0) {
+        const selected = (storeId && list.find((s) => s.id === storeId)) || list[0];
+        hydrateStoreFields(selected);
+        setShowCreate(false);
       } else {
-        setStore(null);
-
-        // reset store fields but keep what user typed? (keeping current behavior: store null)
-        // location too
-        setLat("");
-        setLng("");
+        setStoreId("");
+        resetStoreFields();
+        setShowCreate(true);
       }
-
-      resetImagePicker();
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -554,7 +577,6 @@ export default function GroceryOwnerSettingsPage() {
       if (!name.trim()) throw new Error("Please enter store name.");
       if (!city.trim()) throw new Error("Please enter city.");
 
-      // ✅ NEW: include lat/lng if present (optional during create)
       const la = num(lat);
       const lo = num(lng);
 
@@ -565,11 +587,8 @@ export default function GroceryOwnerSettingsPage() {
         image_url: imageUrl.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
-
-        // optional location
         lat: la,
         lng: lo,
-
         approval_status: "pending",
         is_disabled: false,
         accepting_orders: true,
@@ -578,18 +597,17 @@ export default function GroceryOwnerSettingsPage() {
       const { data, error } = await supabase.from("grocery_stores").insert(payload).select("*").single();
       if (error) throw error;
 
-      setStore(data);
+      const list = await loadOwnerStores(userId);
+      setStores(list);
+      hydrateStoreFields(data);
+      setShowCreate(false);
 
-      // refresh lat/lng from created row (safe)
       const la2 = pick(data, ["lat"], "");
       const lo2 = pick(data, ["lng"], "");
       setLat(la2 !== "" ? String(la2) : lat);
       setLng(lo2 !== "" ? String(lo2) : lng);
 
       setInfo("Grocery store created. Status: Pending approval.");
-
-      // ✅ IMPORTANT FIX: After create, go to dashboard (so owner sees real dashboard)
-      router.push("/groceries/owner/dashboard");
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -607,7 +625,6 @@ export default function GroceryOwnerSettingsPage() {
       if (!name.trim()) throw new Error("Please enter store name.");
       if (!city.trim()) throw new Error("Please enter city.");
 
-      // ✅ NEW: include lat/lng (keeps location in sync)
       const la = num(lat);
       const lo = num(lng);
 
@@ -630,9 +647,8 @@ export default function GroceryOwnerSettingsPage() {
 
       if (error) throw error;
 
-      setStore(data);
+      setStores((prev) => prev.map((s) => (s.id === data.id ? data : s)));
 
-      // keep inputs consistent
       const la2 = pick(data, ["lat"], "");
       const lo2 = pick(data, ["lng"], "");
       setLat(la2 !== "" ? String(la2) : lat);
@@ -661,12 +677,15 @@ export default function GroceryOwnerSettingsPage() {
           <div style={{ minWidth: 260 }}>
             <div style={pill}>Grocery Owner</div>
             <h1 style={heroTitle}>Grocery Store Settings</h1>
-            <div style={subText}>Create your store - Update store info - Go to dashboard</div>
+            <div style={subText}>Create stores, switch stores, and update each grocery location safely.</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <button onClick={loadEverything} style={btnLight}>
               Refresh
+            </button>
+            <button onClick={() => { setShowCreate(true); setStoreId(""); resetStoreFields(); setErr(""); setInfo(""); }} style={btnDark}>
+              + Add Grocery Store
             </button>
             <button onClick={() => router.push("/groceries/owner/dashboard")} style={btnLight}>
               Go to Dashboard
@@ -681,8 +700,9 @@ export default function GroceryOwnerSettingsPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <span style={pill}>Email: {userEmail || "-"}</span>
             <span style={pill}>Role: {role || "-"}</span>
-            <span style={pill}>Store: {store?.name || "Not created yet"}</span>
+            <span style={pill}>Store: {activeStore?.name || "Not selected yet"}</span>
             <span style={pill}>Store ID: {storeId || "-"}</span>
+            <span style={pill}>Stores: {stores.length}</span>
           </div>
 
           {err ? <div style={alertErr}>{err}</div> : null}
@@ -690,14 +710,41 @@ export default function GroceryOwnerSettingsPage() {
         </div>
 
         <div style={{ ...cardGlass, marginTop: 12 }}>
-          {!store ? (
-            <>
-              <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>Create your Grocery Store</div>
+          {stores.length > 0 ? (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>Switch Grocery Store</div>
               <div style={{ marginTop: 8, color: "rgba(17,24,39,0.68)", fontWeight: 850 }}>
-                Create the store first, then the dashboard will show Manage Menu and Orders like the restaurant owner flow.
+                Choose which grocery store you want to edit, or create a new one.
+              </div>
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "minmax(260px, 1fr) auto auto", gap: 12, alignItems: "end" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Selected Store</div>
+                  <select value={storeId} onChange={(e) => { const nextId = e.target.value; setStoreId(nextId); const nextStore = stores.find((s) => s.id === nextId); hydrateStoreFields(nextStore); setShowCreate(false); }} style={inputStyle}>
+                    {stores.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {pick(s, ["name", "store_name"], "Store")} - {pick(s, ["city"], "City")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button onClick={() => { const nextStore = stores.find((s) => s.id === storeId); hydrateStoreFields(nextStore); setShowCreate(false); }} style={btnLight}>
+                  Edit Selected
+                </button>
+                <button onClick={() => { setShowCreate(true); setStoreId(""); resetStoreFields(); }} style={btnDark}>
+                  Create Another Store
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {isCreateMode ? (
+            <>
+              <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>{stores.length > 0 ? "Create Another Grocery Store" : "Create your Grocery Store"}</div>
+              <div style={{ marginTop: 8, color: "rgba(17,24,39,0.68)", fontWeight: 850 }}>
+                Add a new grocery store under the same owner account, just like restaurant owners can.
               </div>
 
-              {/* ✅ NEW: Store Location (Create) */}
+              {/* âœ… NEW: Store Location (Create) */}
               <div style={locBox}>
                 <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Store Location</div>
                 <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12 }}>
@@ -830,7 +877,7 @@ export default function GroceryOwnerSettingsPage() {
             <>
               <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 14 }}>Update Store Info</div>
 
-              {/* ✅ NEW: Store Location (Update) */}
+              {/* âœ… NEW: Store Location (Update) */}
               <div style={locBox}>
                 <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Store Location</div>
                 <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12 }}>
@@ -978,7 +1025,7 @@ export default function GroceryOwnerSettingsPage() {
               </div>
 
               <div style={{ marginTop: 12, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.7)" }}>
-                Store status: <b>{String(store?.approval_status || "pending")}</b> - Disabled: <b>{String(!!store?.is_disabled)}</b>
+                Store status: <b>{String(activeStore?.approval_status || "pending")}</b> - Disabled: <b>{String(!!activeStore?.is_disabled)}</b>
               </div>
             </>
           )}
@@ -987,4 +1034,13 @@ export default function GroceryOwnerSettingsPage() {
     </main>
   );
 }
+
+
+
+
+
+
+
+
+
 

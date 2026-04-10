@@ -14,9 +14,9 @@ function SuccessInner() {
         <div style={card}>
           <div style={badgeOk}>Payment Successful</div>
 
-          <h1 style={title}>Thank you! 🎉</h1>
+          <h1 style={title}>Thank you! ðŸŽ‰</h1>
           <p style={sub}>
-            Your payment has been completed successfully. We’re preparing your order now.
+            Your payment has been completed successfully. Weâ€™re preparing your order now.
           </p>
 
           {sessionId ? (
@@ -28,7 +28,7 @@ function SuccessInner() {
           ) : (
             <div style={sessionBox}>
               <div style={hint}>
-                (No session_id found in URL — still okay, but we can wire verification next.)
+                (No session_id found in URL â€” still okay, but we can wire verification next.)
               </div>
             </div>
           )}
@@ -38,7 +38,7 @@ function SuccessInner() {
               View My Orders
             </Link>
 
-            <Link href="/" style={btnGhost}>
+            <Link href="/home" style={btnGhost}>
               Back to Home
             </Link>
 
@@ -65,7 +65,7 @@ export default function CheckoutSuccessPage() {
           <div style={{ maxWidth: 980, margin: "0 auto" }}>
             <div style={card}>
               <div style={badgeOk}>Payment Successful</div>
-              <h1 style={title}>Loading…</h1>
+              <h1 style={title}>Loadingâ€¦</h1>
               <p style={sub}>Preparing your confirmation details.</p>
             </div>
           </div>

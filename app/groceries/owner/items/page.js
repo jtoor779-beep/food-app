@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -52,7 +52,7 @@ function money(v, currency = DEFAULT_APP_CURRENCY) {
 function clampText(s, max = 80) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 1) + "â€¦";
 }
 function safeIdPart(v) {
   return String(v || "unknown").replace(/[^\w-]/g, "_");
@@ -160,7 +160,7 @@ async function trySaveWithVariants({ table, mode, matchEq, basePayload, variants
   return { ok: false, error: lastErr };
 }
 
-// ✅ Insert and return created row id (safe: if select not supported, it will throw and we fallback)
+// âœ… Insert and return created row id (safe: if select not supported, it will throw and we fallback)
 async function tryInsertReturningIdWithVariants({ table, basePayload, variants }) {
   let lastErr = null;
 
@@ -223,6 +223,14 @@ export default function GroceryOwnerItemsPage() {
   const [bulkUpdateType, setBulkUpdateType] = useState("set_exact"); // set_exact | add_fixed | subtract_fixed | increase_pct | decrease_pct
   const [bulkPriceValue, setBulkPriceValue] = useState("");
   const [bulkKeyword, setBulkKeyword] = useState("");
+  const [bulkCategoryId, setBulkCategoryId] = useState("");
+  const [bulkSubcategoryId, setBulkSubcategoryId] = useState("");
+  const [bulkSubcategories, setBulkSubcategories] = useState([]);
+  const [bulkVariantUnit, setBulkVariantUnit] = useState("lb");
+  const [bulkVariantValue, setBulkVariantValue] = useState("");
+  const [bulkVariantOriginalPrice, setBulkVariantOriginalPrice] = useState("");
+  const [bulkVariantDiscountPrice, setBulkVariantDiscountPrice] = useState("");
+  const [bulkVariantInStock, setBulkVariantInStock] = useState(true);
 
   // smart variant pricing formula
   const [formulaBaseValue, setFormulaBaseValue] = useState("");
@@ -261,13 +269,13 @@ export default function GroceryOwnerItemsPage() {
   const [isBestSeller, setIsBestSeller] = useState(false);
   const [isRecommended, setIsRecommended] = useState(false);
 
-  // ✅ NEW: Taxable toggle (default YES)
+  // âœ… NEW: Taxable toggle (default YES)
   const [isTaxable, setIsTaxable] = useState(true);
 
   const [editingId, setEditingId] = useState("");
 
   /* =========================================================
-     ✅ NEW: Weight / Variant options (lbs, kg, pack)
+     âœ… NEW: Weight / Variant options (lbs, kg, pack)
      - Safe: if you don't add variants, old price logic stays.
      - We will save variants into table "grocery_item_variants" if it exists.
      ========================================================= */
@@ -281,7 +289,7 @@ export default function GroceryOwnerItemsPage() {
   const [weightOptions, setWeightOptions] = useState([]);
 
   /* =========================================================
-     ✅ NEW: CSV bulk upload states
+     âœ… NEW: CSV bulk upload states
      ========================================================= */
   const [showCsvPanel, setShowCsvPanel] = useState(false);
   const [csvFileName, setCsvFileName] = useState("");
@@ -324,6 +332,44 @@ export default function GroceryOwnerItemsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBulkSubcategories() {
+      if (!storeId || !bulkCategoryId) {
+        if (!cancelled) {
+          setBulkSubcategories([]);
+          setBulkSubcategoryId("");
+        }
+        return;
+      }
+      try {
+        const { data, error } = await supabase
+          .from("grocery_subcategories")
+          .select("id, store_id, category_id, name, slug, created_at")
+          .eq("store_id", storeId)
+          .eq("category_id", bulkCategoryId)
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        if (!cancelled) {
+          const list = Array.isArray(data) ? data : [];
+          setBulkSubcategories(list);
+          if (bulkSubcategoryId && !list.some((s) => clean(s.id) === clean(bulkSubcategoryId))) {
+            setBulkSubcategoryId("");
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setBulkSubcategories([]);
+          setBulkSubcategoryId("");
+        }
+      }
+    }
+    loadBulkSubcategories();
+    return () => {
+      cancelled = true;
+    };
+  }, [storeId, bulkCategoryId, bulkSubcategoryId]);
+
   const canAccess = useMemo(() => {
     return role === "grocery_owner" || role === "admin";
   }, [role]);
@@ -340,7 +386,7 @@ export default function GroceryOwnerItemsPage() {
     return !!activeStore?.is_disabled;
   }, [activeStore]);
 
-  // ✅ normalize taxable from item row (default true)
+  // âœ… normalize taxable from item row (default true)
   function isTaxableRow(it) {
     if (typeof it?.is_taxable === "boolean") return it.is_taxable;
     const s = String(it?.is_taxable ?? it?.taxable ?? "").toLowerCase();
@@ -511,6 +557,8 @@ export default function GroceryOwnerItemsPage() {
   const showingCount = filteredItems?.length || 0;
   const selectedCount = selectedItemIds?.length || 0;
   const bulkPreviewCount = bulkTargetItems?.length || 0;
+  const bulkCategoryOptions = useMemo(() => categories || [], [categories]);
+  const bulkSubcategoryOptions = useMemo(() => bulkSubcategories || [], [bulkSubcategories]);
 
   function resetFilters() {
     setSearch("");
@@ -557,10 +605,10 @@ export default function GroceryOwnerItemsPage() {
     setIsBestSeller(false);
     setIsRecommended(false);
 
-    // ✅ default taxable ON
+    // âœ… default taxable ON
     setIsTaxable(true);
 
-    // ✅ variants reset
+    // âœ… variants reset
     resetVariantsUI();
   }
 
@@ -581,7 +629,7 @@ export default function GroceryOwnerItemsPage() {
     setShowModal(true);
   }
 
-  // ✅ load variants for editing (safe: if table doesn't exist, ignore)
+  // âœ… load variants for editing (safe: if table doesn't exist, ignore)
   async function loadItemVariants(itemId) {
     if (!itemId) return;
     try {
@@ -623,7 +671,7 @@ export default function GroceryOwnerItemsPage() {
     setIsBestSeller(!!row?.is_best_seller);
     setIsRecommended(!!row?.is_recommended);
 
-    // ✅ Taxable: default true if not present
+    // âœ… Taxable: default true if not present
     setIsTaxable(isTaxableRow(row));
 
     // If your grocery_items table contains category as string (it does), try to map it back to a category id by name
@@ -637,7 +685,7 @@ export default function GroceryOwnerItemsPage() {
     }
     setSelectedSubId("");
 
-    // ✅ load variants for this item (safe)
+    // âœ… load variants for this item (safe)
     resetVariantsUI();
     setFormulaBaseValue("1");
     setFormulaBasePrice(String(row?.price ?? ""));
@@ -804,7 +852,7 @@ export default function GroceryOwnerItemsPage() {
     }
 
     setWeightOptions(next);
-    setInfoMsg(`✅ Generated ${generated.length} weight option(s) from formula.`);
+    setInfoMsg(`âœ… Generated ${generated.length} weight option(s) from formula.`);
   }
 
   function toggleSelectItem(id) {
@@ -834,48 +882,180 @@ export default function GroceryOwnerItemsPage() {
     setSelectedItemIds([]);
   }
 
-  async function applyBulkPriceUpdate() {
+  function buildBulkVariantPayload() {
+    const value = Number(bulkVariantValue);
+    const original = Number(bulkVariantOriginalPrice);
+    const discount = Number(bulkVariantDiscountPrice || 0);
+    if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a valid bulk size value.");
+    if (!Number.isFinite(original) || original <= 0) throw new Error("Enter a valid bulk size original price.");
+    if (Number.isFinite(discount) && discount > 0 && discount >= original) {
+      throw new Error("Bulk size discount price must be smaller than original price.");
+    }
+
+    const unit = clean(bulkVariantUnit) || "lb";
+    const label = buildVariantLabel(value, unit);
+    const finalPrice = discount > 0 ? discount : original;
+    return {
+      id: `bulk_${unit}_${value}`,
+      label,
+      unit,
+      value,
+      price: Number(finalPrice.toFixed(2)),
+      original_price: Number(original.toFixed(2)),
+      discount_price: discount > 0 ? Number(discount.toFixed(2)) : 0,
+      discount_percent: discount > 0 ? Math.max(1, Math.round(((original - discount) / original) * 100)) : 0,
+      in_stock: !!bulkVariantInStock,
+      is_default: false,
+      sort_order: 999,
+    };
+  }
+
+  async function applyBulkAction() {
     setErrMsg("");
     setInfoMsg("");
 
     if (!storeId) return setErrMsg("Select a store first.");
     if (!bulkTargetItems.length) return setErrMsg("No items match this bulk update scope.");
 
-    const rawValue = Number(bulkPriceValue);
-    if (!Number.isFinite(rawValue) || rawValue < 0) {
-      return setErrMsg("Enter a valid bulk price value.");
-    }
-
-    const computeNextPrice = (currentPrice) => {
-      const current = Number(currentPrice || 0);
-      if (bulkUpdateType === "set_exact") return rawValue;
-      if (bulkUpdateType === "add_fixed") return current + rawValue;
-      if (bulkUpdateType === "subtract_fixed") return Math.max(0, current - rawValue);
-      if (bulkUpdateType === "increase_pct") return current + (current * rawValue) / 100;
-      if (bulkUpdateType === "decrease_pct") return Math.max(0, current - (current * rawValue) / 100);
-      return current;
-    };
-
     setBusy(true);
 
     try {
       let success = 0;
       let failed = 0;
+      const isPriceAction = ["set_exact", "add_fixed", "subtract_fixed", "increase_pct", "decrease_pct"].includes(bulkUpdateType);
+      const rawValue = Number(bulkPriceValue);
+
+      const computeNextPrice = (currentPrice) => {
+        const current = Number(currentPrice || 0);
+        if (bulkUpdateType === "set_exact") return rawValue;
+        if (bulkUpdateType === "add_fixed") return current + rawValue;
+        if (bulkUpdateType === "subtract_fixed") return Math.max(0, current - rawValue);
+        if (bulkUpdateType === "increase_pct") return current + (current * rawValue) / 100;
+        if (bulkUpdateType === "decrease_pct") return Math.max(0, current - (current * rawValue) / 100);
+        return current;
+      };
+
+      if (isPriceAction && (!Number.isFinite(rawValue) || rawValue < 0)) {
+        throw new Error("Enter a valid bulk price value.");
+      }
+
+      let targetCategoryName = "";
+      let targetSubcategoryName = "";
+      if (bulkUpdateType === "move_category") {
+        if (!bulkCategoryId) throw new Error("Select a target category.");
+        const cat = (categories || []).find((c) => clean(c.id) === clean(bulkCategoryId));
+        targetCategoryName = clean(cat?.name);
+        if (!targetCategoryName) throw new Error("Target category is invalid.");
+        if (bulkSubcategoryId) {
+          const sub = (bulkSubcategories || []).find((s) => clean(s.id) === clean(bulkSubcategoryId));
+          targetSubcategoryName = clean(sub?.name);
+        }
+      }
+
+      const bulkVariant = bulkUpdateType === "add_variant" ? buildBulkVariantPayload() : null;
 
       for (const item of bulkTargetItems) {
         try {
-          const nextPrice = Number(computeNextPrice(item?.price).toFixed(2));
-          const { error } = await supabase.from("grocery_items").update({ price: nextPrice }).eq("id", item.id);
-          if (error) throw error;
+          if (isPriceAction) {
+            const nextPrice = Number(computeNextPrice(item?.price).toFixed(2));
+            const { error } = await supabase.from("grocery_items").update({ price: nextPrice }).eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "move_category") {
+            const result = await trySaveWithVariants({
+              table: "grocery_items",
+              mode: "update",
+              matchEq: { col: "id", val: item.id },
+              basePayload: {
+                category: targetCategoryName,
+                ...(bulkSubcategoryId ? { subcategory: targetSubcategoryName } : { subcategory: null }),
+              },
+              variants: [
+                {
+                  category_id: bulkCategoryId,
+                  ...(bulkSubcategoryId ? { subcategory_id: bulkSubcategoryId } : { subcategory_id: null }),
+                },
+                bulkSubcategoryId ? { subcategory_id: bulkSubcategoryId } : {},
+                {},
+              ],
+            });
+            if (!result.ok) throw result.error || new Error("Could not move category.");
+          } else if (bulkUpdateType === "clear_subcategory") {
+            const result = await trySaveWithVariants({
+              table: "grocery_items",
+              mode: "update",
+              matchEq: { col: "id", val: item.id },
+              basePayload: { subcategory: null },
+              variants: [{ subcategory_id: null }, {}],
+            });
+            if (!result.ok) throw result.error || new Error("Could not clear subcategory.");
+          } else if (bulkUpdateType === "mark_available" || bulkUpdateType === "mark_hidden") {
+            const { error } = await supabase
+              .from("grocery_items")
+              .update({ is_available: bulkUpdateType === "mark_available" })
+              .eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "mark_in_stock" || bulkUpdateType === "mark_out_stock") {
+            const { error } = await supabase
+              .from("grocery_items")
+              .update({ in_stock: bulkUpdateType === "mark_in_stock" })
+              .eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "mark_veg" || bulkUpdateType === "mark_nonveg") {
+            const { error } = await supabase
+              .from("grocery_items")
+              .update({ is_veg: bulkUpdateType === "mark_veg" })
+              .eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "mark_best" || bulkUpdateType === "unmark_best") {
+            const { error } = await supabase
+              .from("grocery_items")
+              .update({ is_best_seller: bulkUpdateType === "mark_best" })
+              .eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "mark_rec" || bulkUpdateType === "unmark_rec") {
+            const { error } = await supabase
+              .from("grocery_items")
+              .update({ is_recommended: bulkUpdateType === "mark_rec" })
+              .eq("id", item.id);
+            if (error) throw error;
+          } else if (bulkUpdateType === "mark_taxable" || bulkUpdateType === "mark_nontaxable") {
+            const result = await trySaveWithVariants({
+              table: "grocery_items",
+              mode: "update",
+              matchEq: { col: "id", val: item.id },
+              basePayload: {},
+              variants: [{ is_taxable: bulkUpdateType === "mark_taxable" }, {}],
+            });
+            if (!result.ok) throw result.error || new Error("Could not update taxable flag.");
+          } else if (bulkUpdateType === "add_variant" || bulkUpdateType === "clear_variants") {
+            const metaMap = await fetchGroceryItemMetaMap([item.id]);
+            const existingMeta = metaMap?.[String(item.id)] || {};
+            const existingVariants = Array.isArray(existingMeta?.variants) ? existingMeta.variants : [];
+            let nextVariants = existingVariants;
+
+            if (bulkUpdateType === "clear_variants") {
+              nextVariants = [];
+            } else {
+              const exists = existingVariants.some((v) => clean(v.label).toLowerCase() === clean(bulkVariant.label).toLowerCase());
+              if (!exists) {
+                nextVariants = [
+                  ...existingVariants.map((v, idx) => ({ ...v, sort_order: Number(v.sort_order ?? idx) })),
+                  { ...bulkVariant, is_default: existingVariants.length === 0, sort_order: existingVariants.length },
+                ];
+              }
+            }
+
+            await saveGroceryItemMeta(item.id, { ...existingMeta, variants: nextVariants });
+          }
           success += 1;
-        } catch (e) {
+        } catch {
           failed += 1;
         }
       }
 
       await loadItems(storeId);
       if (bulkScope === "selected") setSelectedItemIds([]);
-      setInfoMsg(`✅ Bulk price update finished. Updated: ${success}, Failed: ${failed}`);
+      setInfoMsg(`Bulk update finished. Updated: ${success}, Failed: ${failed}`);
     } catch (e) {
       setErrMsg(e?.message || String(e));
     } finally {
@@ -883,8 +1063,12 @@ export default function GroceryOwnerItemsPage() {
     }
   }
 
+  async function applyBulkPriceUpdate() {
+    return applyBulkAction();
+  }
+
   /* =========================
-     ✅ NEW: CSV helpers/actions
+     âœ… NEW: CSV helpers/actions
      ========================= */
   function downloadSampleCsv() {
     const sample =
@@ -1157,7 +1341,7 @@ export default function GroceryOwnerItemsPage() {
       }
 
       setInfoMsg(
-        `✅ CSV import finished. Imported: ${imported}, Failed: ${failed}, Categories created: ${createdCats}, Subcategories created: ${createdSubs}`
+        `âœ… CSV import finished. Imported: ${imported}, Failed: ${failed}, Categories created: ${createdCats}, Subcategories created: ${createdSubs}`
       );
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -1384,7 +1568,7 @@ export default function GroceryOwnerItemsPage() {
 
       if (error) throw error;
 
-      setInfoMsg("✅ Category created");
+      setInfoMsg("âœ… Category created");
       setNewCatName("");
 
       await loadCategoriesForStore(storeId, { keepSelection: false });
@@ -1432,7 +1616,7 @@ export default function GroceryOwnerItemsPage() {
 
       if (error) throw error;
 
-      setInfoMsg("✅ Subcategory created");
+      setInfoMsg("âœ… Subcategory created");
       setNewSubName("");
       await loadSubcategoriesForCategory(storeId, manageCatId);
     } catch (e) {
@@ -1521,7 +1705,7 @@ export default function GroceryOwnerItemsPage() {
   }
 
   /* =========================
-     ✅ Save variants (safe)
+     âœ… Save variants (safe)
      ========================= */
   async function saveVariantsForItem(itemId) {
     const list = Array.isArray(weightOptions) ? weightOptions : [];
@@ -1693,7 +1877,7 @@ export default function GroceryOwnerItemsPage() {
 
         await saveGroceryItemMeta(editingId, metaPayload);
 
-        setInfoMsg("✅ Item updated");
+        setInfoMsg("âœ… Item updated");
       } else {
         const ins = await tryInsertReturningIdWithVariants({
           table: "grocery_items",
@@ -1715,14 +1899,14 @@ export default function GroceryOwnerItemsPage() {
               "Item saved but variants could not be linked (could not read inserted id). We will fix by ensuring grocery_item_variants table exists + insert returns id."
             );
           } else {
-            setInfoMsg("✅ Item added");
+            setInfoMsg("âœ… Item added");
           }
         } else {
           const newId = ins.id;
 
           await saveGroceryItemMeta(newId, metaPayload);
 
-          setInfoMsg("✅ Item added");
+          setInfoMsg("âœ… Item added");
         }
       }
 
@@ -1753,7 +1937,7 @@ export default function GroceryOwnerItemsPage() {
         await supabase.from("grocery_item_variants").delete().eq("item_id", id);
       } catch {}
 
-      setInfoMsg("🗑️ Item deleted");
+      setInfoMsg("ðŸ—‘ï¸ Item deleted");
       await loadItems(storeId);
     } catch (e) {
       setErrMsg(e?.message || String(e));
@@ -1809,7 +1993,7 @@ export default function GroceryOwnerItemsPage() {
           const { data: pub } = supabase.storage.from(bucket).getPublicUrl(path);
           publicUrl = pub?.publicUrl || "";
           if (!publicUrl) throw new Error("Could not generate public URL.");
-          setInfoMsg(`✅ Image uploaded (${bucket})`);
+          setInfoMsg(`âœ… Image uploaded (${bucket})`);
           break;
         } catch (e) {
           lastErr = e;
@@ -1921,7 +2105,7 @@ export default function GroceryOwnerItemsPage() {
 
   return (
     <main style={pageBg}>
-      {/* ✅ FIX: width spelling + 100% */}
+      {/* âœ… FIX: width spelling + 100% */}
       <div style={{ width: "100%", maxWidth: 1200, margin: "0 auto" }}>
         {/* ===== HERO ===== */}
         <div style={heroGlass}>
@@ -2044,13 +2228,13 @@ export default function GroceryOwnerItemsPage() {
             </div>
 
             {!storeId ? (
-              <div style={alertInfoMini}>✅ Select a store to manage menu.</div>
+              <div style={alertInfoMini}>âœ… Select a store to manage menu.</div>
             ) : !storeApproved ? (
               <div style={alertInfoMini}>Store is pending. Admin approval is required before adding items.</div>
             ) : storeDisabled ? (
               <div style={alertErrMini}>Store disabled by admin.</div>
             ) : (
-              <div style={okMini}>✅ No manual typing inside Add Item</div>
+              <div style={okMini}>âœ… No manual typing inside Add Item</div>
             )}
           </div>
         </div>
@@ -2197,7 +2381,7 @@ export default function GroceryOwnerItemsPage() {
             <div>
               <div style={panelTitle}>Categories & Subcategories</div>
               <div style={panelSub}>
-                Flow: Create Category → Select Category → Create Subcategory → Add Item (select from dropdown)
+                Flow: Create Category â†’ Select Category â†’ Create Subcategory â†’ Add Item (select from dropdown)
               </div>
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -2212,7 +2396,7 @@ export default function GroceryOwnerItemsPage() {
               >
                 Refresh
               </button>
-              <span style={tag}>No manual typing inside Add Item ✅</span>
+              <span style={tag}>No manual typing inside Add Item âœ…</span>
             </div>
           </div>
 
@@ -2522,9 +2706,9 @@ export default function GroceryOwnerItemsPage() {
           <div style={bulkPanel}>
             <div style={panelHeaderRow}>
               <div>
-                <div style={panelTitle}>Bulk Price Update</div>
+                <div style={panelTitle}>Bulk Owner Actions</div>
                 <div style={panelSub}>
-                  3 ways ready now: selected items, all current filtered items / keyword matches, and smart variant formula inside Add/Edit Item.
+                  Update prices, move category, clear subcategory, switch item flags, and add one shared size option to many products at once.
                 </div>
               </div>
               <span style={tagStrong}>Preview: {bulkPreviewCount} item(s)</span>
@@ -2550,6 +2734,22 @@ export default function GroceryOwnerItemsPage() {
                   <option value="subtract_fixed">Subtract fixed amount</option>
                   <option value="increase_pct">Increase by %</option>
                   <option value="decrease_pct">Decrease by %</option>
+                  <option value="move_category">Move to category</option>
+                  <option value="clear_subcategory">Clear subcategory</option>
+                  <option value="mark_available">Mark available</option>
+                  <option value="mark_hidden">Hide items</option>
+                  <option value="mark_in_stock">Mark in stock</option>
+                  <option value="mark_out_stock">Mark out of stock</option>
+                  <option value="mark_veg">Mark veg</option>
+                  <option value="mark_nonveg">Mark non-veg</option>
+                  <option value="mark_best">Mark best seller</option>
+                  <option value="unmark_best">Remove best seller</option>
+                  <option value="mark_rec">Mark recommended</option>
+                  <option value="unmark_rec">Remove recommended</option>
+                  <option value="mark_taxable">Mark taxable</option>
+                  <option value="mark_nontaxable">Mark non-taxable</option>
+                  <option value="add_variant">Add one size option</option>
+                  <option value="clear_variants">Clear all size options</option>
                 </select>
               </div>
 
@@ -2561,10 +2761,96 @@ export default function GroceryOwnerItemsPage() {
                   style={input}
                   placeholder={bulkUpdateType.includes("pct") ? "10" : "20"}
                   inputMode="decimal"
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    !["set_exact", "add_fixed", "subtract_fixed", "increase_pct", "decrease_pct"].includes(bulkUpdateType)
+                  }
                 />
               </div>
             </div>
+
+            {bulkUpdateType === "move_category" ? (
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div style={label}>Target category</div>
+                  <select value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)} style={input} disabled={busy}>
+                    <option value="">-- Select Category --</option>
+                    {bulkCategoryOptions.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div style={label}>Target subcategory (optional)</div>
+                  <select
+                    value={bulkSubcategoryId}
+                    onChange={(e) => setBulkSubcategoryId(e.target.value)}
+                    style={input}
+                    disabled={busy || !bulkCategoryId}
+                  >
+                    <option value="">-- No Subcategory --</option>
+                    {bulkSubcategoryOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : null}
+
+            {bulkUpdateType === "add_variant" ? (
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "0.9fr 0.9fr 1fr 1fr 0.8fr", gap: 10 }}>
+                <div>
+                  <div style={label}>Unit</div>
+                  <select value={bulkVariantUnit} onChange={(e) => setBulkVariantUnit(e.target.value)} style={input} disabled={busy}>
+                    {["lb", "oz", "kg", "g", "gm", "ml", "l", "pcs", "pack", "box", "bottle", "can", "jar", "dozen", "tray"].map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div style={label}>Value</div>
+                  <input value={bulkVariantValue} onChange={(e) => setBulkVariantValue(e.target.value)} style={input} inputMode="decimal" placeholder="1" />
+                </div>
+                <div>
+                  <div style={label}>Original price</div>
+                  <input
+                    value={bulkVariantOriginalPrice}
+                    onChange={(e) => setBulkVariantOriginalPrice(e.target.value)}
+                    style={input}
+                    inputMode="decimal"
+                    placeholder="7.99"
+                  />
+                </div>
+                <div>
+                  <div style={label}>Discount price</div>
+                  <input
+                    value={bulkVariantDiscountPrice}
+                    onChange={(e) => setBulkVariantDiscountPrice(e.target.value)}
+                    style={input}
+                    inputMode="decimal"
+                    placeholder="5.99"
+                  />
+                </div>
+                <div>
+                  <div style={label}>Stock</div>
+                  <select
+                    value={bulkVariantInStock ? "yes" : "no"}
+                    onChange={(e) => setBulkVariantInStock(e.target.value === "yes")}
+                    style={input}
+                    disabled={busy}
+                  >
+                    <option value="yes">In stock</option>
+                    <option value="no">Out</option>
+                  </select>
+                </div>
+              </div>
+            ) : null}
 
             <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
               <div>
@@ -2588,10 +2874,11 @@ export default function GroceryOwnerItemsPage() {
                   !bulkPreviewCount ||
                   (bulkScope === "keyword" && !clean(bulkKeyword)) ||
                   (bulkScope === "category" && categoryFilter === "all") ||
-                  (bulkScope === "subcategory" && subcategoryFilter === "all")
+                  (bulkScope === "subcategory" && subcategoryFilter === "all") ||
+                  (bulkUpdateType === "move_category" && !bulkCategoryId)
                 }
               >
-                {busy ? "Applying..." : "Apply Bulk Price"}
+                {busy ? "Applying..." : "Apply Bulk Action"}
               </button>
             </div>
 
@@ -2730,7 +3017,7 @@ export default function GroceryOwnerItemsPage() {
               </button>
             </div>
 
-            {/* ✅ FIX: modalBody scroll + always visible footer */}
+            {/* âœ… FIX: modalBody scroll + always visible footer */}
             <div style={modalBody}>
               <div style={modalGrid}>
                 <div>
@@ -2838,7 +3125,7 @@ export default function GroceryOwnerItemsPage() {
                         <div>
                           <div style={{ fontWeight: 1000, color: "#0b1220" }}>Smart Variant Pricing Formula</div>
                           <div style={{ fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.62)" }}>
-                            Example: if 1 kg = ₹200, auto-create 0.5 kg, 2 kg, 5 kg with matching prices.
+                            Example: if 1 kg = â‚¹200, auto-create 0.5 kg, 2 kg, 5 kg with matching prices.
                           </div>
                         </div>
                         <span style={tagStrong}>Auto</span>
@@ -2941,7 +3228,7 @@ export default function GroceryOwnerItemsPage() {
 
                 <div style={{ gridColumn: "1 / -1" }}>
                   <div style={label}>Description</div>
-                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={textarea} placeholder="Short description…" rows={3} />
+                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} style={textarea} placeholder="Short descriptionâ€¦" rows={3} />
                 </div>
 
                 <div style={{ gridColumn: "1 / -1" }}>
@@ -3537,7 +3824,7 @@ const modalOverlay = {
   zIndex: 9999,
 };
 
-/* ✅ FIX: maxHeight + flex so body scroll works */
+/* âœ… FIX: maxHeight + flex so body scroll works */
 const modalCard = {
   width: "min(920px, 96vw)",
   maxHeight: "92vh",
@@ -3570,7 +3857,7 @@ const iconBtn = {
   fontWeight: 1000,
 };
 
-/* ✅ FIX: scroll inside modal body */
+/* âœ… FIX: scroll inside modal body */
 const modalBody = {
   padding: 14,
   overflowY: "auto",
@@ -3719,7 +4006,7 @@ const notePill = {
   fontWeight: 850,
 };
 
-/* ✅ NEW variant styles */
+/* âœ… NEW variant styles */
 const variantBox = {
   borderRadius: 16,
   border: "1px solid rgba(0,0,0,0.10)",
@@ -3806,7 +4093,7 @@ const formulaBox = {
   padding: 12,
 };
 
-/* ✅ NEW csv styles */
+/* âœ… NEW csv styles */
 const csvTableWrap = {
   marginTop: 12,
   width: "100%",
@@ -3839,4 +4126,5 @@ const csvTd = {
   color: "rgba(17,24,39,0.82)",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
 };
+
 

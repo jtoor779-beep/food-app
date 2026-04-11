@@ -42,8 +42,8 @@ const glassCard = {
   boxShadow: "0 18px 48px rgba(15,23,42,0.08)",
 };
 
-const layeredBackground = (primary: string, fallback: string, overlay: string) =>
-  `${overlay}, url('${primary}'), url('${fallback}')`;
+const layeredBackground = (primary: string, _fallback: string, overlay: string) =>
+  `${overlay}, url('${primary}')`;
 
 const imageTile = (primary: string, fallback: string) => ({
   minHeight: 260,
@@ -78,14 +78,25 @@ const heroSlides = [
   },
 ];
 
-const rightLargeSlides = [
+const upperRightSlides = [
   {
-    src: "/landing-media/right-big-1.jpg",
+    src: "/landing-media/right-top-1.jpg",
     fallback: "/landing-media/driver-banner-1.jpg",
   },
   {
-    src: "/landing-media/right-big-2.jpg",
+    src: "/landing-media/right-top-2.jpg",
     fallback: "/landing-media/driver-banner-2.jpg",
+  },
+];
+
+const lowerRightSlides = [
+  {
+    src: "/landing-media/right-bottom-1.jpg",
+    fallback: "/landing-media/driver-banner-2.jpg",
+  },
+  {
+    src: "/landing-media/right-bottom-2.jpg",
+    fallback: "/landing-media/driver-banner-3.jpg",
   },
 ];
 
@@ -118,7 +129,8 @@ const initialVideoSlides = [
 
 export default function LandingPage() {
   const [heroIndex, setHeroIndex] = useState(0);
-  const [promoIndex, setPromoIndex] = useState(0);
+  const [upperRightIndex, setUpperRightIndex] = useState(0);
+  const [lowerRightIndex, setLowerRightIndex] = useState(0);
   const [driverIndex, setDriverIndex] = useState(0);
   const [mediaFallbackIndex, setMediaFallbackIndex] = useState(0);
   const [videoSlides, setVideoSlides] = useState(initialVideoSlides);
@@ -135,8 +147,15 @@ export default function LandingPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setPromoIndex((prev) => (prev + 1) % rightLargeSlides.length);
+      setUpperRightIndex((prev) => (prev + 1) % upperRightSlides.length);
     }, 4700);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setLowerRightIndex((prev) => (prev + 1) % lowerRightSlides.length);
+    }, 5200);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -514,7 +533,7 @@ export default function LandingPage() {
               transition: "transform 180ms linear",
             }}
           >
-            {rightLargeSlides.map((slide, index) => (
+            {upperRightSlides.map((slide, index) => (
               <div
                 key={slide.fallback}
                 style={{
@@ -528,7 +547,7 @@ export default function LandingPage() {
                   backgroundBlendMode: "overlay",
                   backgroundSize: "cover",
                   backgroundPosition: "center",
-                  opacity: promoIndex === index ? 1 : 0,
+                  opacity: upperRightIndex === index ? 1 : 0,
                   transition: "opacity 1100ms ease-in-out",
                 }}
               />
@@ -644,7 +663,7 @@ export default function LandingPage() {
               position: "relative",
             }}
           >
-            {rightLargeSlides.map((slide, index) => (
+            {lowerRightSlides.map((slide, index) => (
               <div
                 key={`${slide.fallback}-lower`}
                 style={{
@@ -657,7 +676,7 @@ export default function LandingPage() {
                   ),
                   backgroundSize: "cover",
                   backgroundPosition: "center",
-                  opacity: promoIndex === index ? 1 : 0,
+                  opacity: lowerRightIndex === index ? 1 : 0,
                   transition: "opacity 1100ms ease-in-out",
                 }}
               />

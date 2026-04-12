@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import supabase from "@/lib/supabase";
 import { fetchReviewsByTarget, summarizeReviews } from "@/lib/reviews";
+import { getStoreAvailability } from "@/lib/storeAvailability";
 
 /* =========================================================
    ✅ CURRENCY SUPPORT (SAFE, FORMATTING ONLY)
@@ -108,6 +109,7 @@ export default function MenuPage() {
   const [restaurantId, setRestaurantId] = useState("");
 
   const [items, setItems] = useState([]);
+  const [restaurantMeta, setRestaurantMeta] = useState(null);
 
   const [q, setQ] = useState("");
   const [vegMode, setVegMode] = useState("all"); // all | veg | non_veg
@@ -143,6 +145,7 @@ export default function MenuPage() {
 
   // Dish Details Modal
   const [openDish, setOpenDish] = useState(null);
+  const restaurantAvailability = useMemo(() => getStoreAvailability(restaurantMeta), [restaurantMeta]);
 
   function showToast(msg) {
     setToast(msg);
@@ -166,7 +169,11 @@ export default function MenuPage() {
      * Use PUBLIC VIEW so customers only see ENABLED restaurants
      * View name: restaurants_public
      */
-    const { data, error } = await supabase.from("restaurants_public").select("id, name").order("name", { ascending: true });
+    const { data, error } = await supabase
+      .from("restaurants")
+      .select("id, name, city, approval_status, is_disabled, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
+      .eq("is_disabled", false)
+      .order("name", { ascending: true });
 
     if (error) throw error;
 
@@ -190,6 +197,7 @@ export default function MenuPage() {
   async function loadMenu(rid) {
     if (!rid) {
       setItems([]);
+      setRestaurantMeta(null);
       return;
     }
 
@@ -215,6 +223,15 @@ export default function MenuPage() {
     }));
 
     setItems(safe);
+
+    const { data: restaurantRow, error: restaurantError } = await supabase
+      .from("restaurants")
+      .select("id, name, city, approval_status, is_disabled, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
+      .eq("id", rid)
+      .maybeSingle();
+
+    if (restaurantError) throw restaurantError;
+    setRestaurantMeta(restaurantRow || null);
   }
 
   async function loadRestaurantReviews(rid) {
@@ -352,6 +369,7 @@ export default function MenuPage() {
   }, [restaurantId]);
 
   function addToCart(it) {
+    if (!restaurantAvailability.canAddToCart) return showToast(restaurantAvailability.nextOpenText || restaurantAvailability.customerMessage || "Restaurant is closed");
     if (it.in_stock === false) return showToast("Out of stock");
     const price_each = Number(it.price || 0);
     if (!price_each || price_each <= 0) return showToast("Invalid price");
@@ -603,7 +621,7 @@ export default function MenuPage() {
           <div style={pill}>Menu</div>
           <h1 style={heroTitle}>{restaurantName}</h1>
           <div style={{ color: "rgba(17,24,39,0.70)", marginTop: 6, fontWeight: 800 }}>
-            Pick items and add to cart. Tap any dish to view details.
+            {restaurantAvailability.customerMessage || "Pick items and add to cart. Tap any dish to view details."}
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
@@ -612,6 +630,9 @@ export default function MenuPage() {
             <span style={badgeLight}>{demoEta(restaurantId || "0")} mins</span>
             <span style={badgeLight}>Best offers</span>
             <span style={badgeLight}>Currency: {currency}</span>
+            <span style={restaurantAvailability.isOpen ? badgeLight : { ...badgeLight, background: "#fef2f2", color: "#991b1b" }}>
+              {restaurantAvailability.statusLabel}
+            </span>
           </div>
         </div>
 

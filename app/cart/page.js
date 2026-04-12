@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { getStoreAvailability } from "@/lib/storeAvailability";
 
 function normalizeRole(r) {
   return String(r || "")
@@ -395,6 +396,17 @@ function asBool(v) {
   if (typeof v === "boolean") return v;
   const s = String(v ?? "").toLowerCase();
   return s === "true" || s === "1" || s === "yes";
+}
+
+async function fetchStoreAvailability(kind, id) {
+  const table = kind === "grocery" ? "grocery_stores" : "restaurants";
+  const { data, error } = await supabase
+    .from(table)
+    .select("id, approval_status, is_disabled, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
+    .eq("id", String(id || ""))
+    .maybeSingle();
+  if (error) throw error;
+  return getStoreAvailability(data);
 }
 
 function roundMoney(v) {
@@ -1845,6 +1857,11 @@ export default function CartPage() {
       const multi = gItems.some((x) => x.store_id !== store_id);
       if (multi) return setErrMsg("Please order from one grocery store at a time.");
 
+      const groceryAvailability = await fetchStoreAvailability("grocery", store_id);
+      if (!groceryAvailability.canCheckout) {
+        return setErrMsg(groceryAvailability.nextOpenText || groceryAvailability.customerMessage || "Store is closed right now.");
+      }
+
       setPlacing(true);
       try {
         const { data: userData, error: userErr } = await supabase.auth.getUser();
@@ -2101,6 +2118,11 @@ export default function CartPage() {
 
     const multi = items.some((x) => x.restaurant_id !== restaurant_id);
     if (multi) return setErrMsg("Please order from one restaurant at a time.");
+
+    const restaurantAvailability = await fetchStoreAvailability("restaurant", restaurant_id);
+    if (!restaurantAvailability.canCheckout) {
+      return setErrMsg(restaurantAvailability.nextOpenText || restaurantAvailability.customerMessage || "Restaurant is closed right now.");
+    }
 
     setPlacing(true);
     try {

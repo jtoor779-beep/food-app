@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
+import { getStoreAvailability } from "@/lib/storeAvailability";
 
 /* =========================
    PREMIUM THEME (same vibe)
@@ -218,6 +219,34 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function defaultTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+  } catch {
+    return "America/Los_Angeles";
+  }
+}
+
+function toDateTimeInputValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function buildNextOpeningValue(timeValue) {
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  const match = String(timeValue || "").match(/^(\d{1,2}):(\d{2})/);
+  if (match) next.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  else next.setHours(9, 0, 0, 0);
+  const offset = next.getTimezoneOffset();
+  const local = new Date(next.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 export default function GroceryOwnerSettingsPage() {
   const router = useRouter();
 
@@ -248,9 +277,28 @@ export default function GroceryOwnerSettingsPage() {
   const [lng, setLng] = useState("");
   const [gettingGps, setGettingGps] = useState(false);
   const [savingLoc, setSavingLoc] = useState(false);
+  const [opensAtTime, setOpensAtTime] = useState("");
+  const [closesAtTime, setClosesAtTime] = useState("");
+  const [timeZone, setTimeZone] = useState(defaultTimeZone());
+  const [manualNextOpenAt, setManualNextOpenAt] = useState("");
+  const [acceptingOrders, setAcceptingOrders] = useState(true);
+  const [savingAvailability, setSavingAvailability] = useState(false);
 
   const activeStore = useMemo(() => stores.find((s) => s.id === storeId) || null, [stores, storeId]);
   const isCreateMode = showCreate || !activeStore;
+  const availability = useMemo(
+    () =>
+      getStoreAvailability({
+        approval_status: activeStore?.approval_status || "approved",
+        is_disabled: !!activeStore?.is_disabled,
+        accepting_orders: acceptingOrders,
+        opens_at_time: opensAtTime || null,
+        closes_at_time: closesAtTime || null,
+        timezone: timeZone || defaultTimeZone(),
+        manual_next_open_at: manualNextOpenAt || null,
+      }),
+    [acceptingOrders, activeStore?.approval_status, activeStore?.is_disabled, closesAtTime, manualNextOpenAt, opensAtTime, timeZone]
+  );
 
   /* =========================
      NEW: Store Image Upload
@@ -270,6 +318,11 @@ export default function GroceryOwnerSettingsPage() {
     setAddress("");
     setLat("");
     setLng("");
+    setOpensAtTime("");
+    setClosesAtTime("");
+    setTimeZone(defaultTimeZone());
+    setManualNextOpenAt("");
+    setAcceptingOrders(true);
     resetImagePicker();
   }
 
@@ -290,6 +343,11 @@ export default function GroceryOwnerSettingsPage() {
     const lo = pick(nextStore, ["lng", "location_lng", "longitude"], "");
     setLat(la !== "" ? String(la) : "");
     setLng(lo !== "" ? String(lo) : "");
+    setOpensAtTime(pick(nextStore, ["opens_at_time"], ""));
+    setClosesAtTime(pick(nextStore, ["closes_at_time"], ""));
+    setTimeZone(pick(nextStore, ["timezone"], defaultTimeZone()));
+    setManualNextOpenAt(toDateTimeInputValue(pick(nextStore, ["manual_next_open_at"], "")));
+    setAcceptingOrders(nextStore?.accepting_orders !== false);
 
     resetImagePicker();
   }
@@ -592,6 +650,7 @@ export default function GroceryOwnerSettingsPage() {
         approval_status: "pending",
         is_disabled: false,
         accepting_orders: true,
+        timezone: defaultTimeZone(),
       };
 
       const { data, error } = await supabase.from("grocery_stores").insert(payload).select("*").single();
@@ -636,6 +695,7 @@ export default function GroceryOwnerSettingsPage() {
         address: address.trim() || null,
         lat: la,
         lng: lo,
+        timezone: timeZone || defaultTimeZone(),
       };
 
       const { data, error } = await supabase
@@ -659,6 +719,85 @@ export default function GroceryOwnerSettingsPage() {
       setErr(e?.message || String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function saveAvailability() {
+    setErr("");
+    setInfo("");
+    setSavingAvailability(true);
+
+    try {
+      if (!storeId) throw new Error("No store found to update.");
+
+      const payload = {
+        opens_at_time: opensAtTime || null,
+        closes_at_time: closesAtTime || null,
+        timezone: timeZone || defaultTimeZone(),
+        manual_next_open_at: manualNextOpenAt ? new Date(manualNextOpenAt).toISOString() : null,
+      };
+
+      const { data, error } = await supabase
+        .from("grocery_stores")
+        .update(payload)
+        .eq("id", storeId)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      setStores((prev) => prev.map((store) => (store.id === data.id ? data : store)));
+      hydrateStoreFields(data);
+      setInfo("Open and close timing saved.");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setSavingAvailability(false);
+    }
+  }
+
+  async function setStoreOpenState(nextOpen) {
+    setErr("");
+    setInfo("");
+    setSavingAvailability(true);
+
+    try {
+      if (!storeId) throw new Error("No store found to update.");
+
+      if (!nextOpen && !manualNextOpenAt) {
+        const suggested = buildNextOpeningValue(opensAtTime);
+        setManualNextOpenAt(suggested);
+        throw new Error("Set the next opening time, then click Close Until Next Open again.");
+      }
+
+      const payload = nextOpen
+        ? {
+            accepting_orders: true,
+            manual_next_open_at: null,
+            timezone: timeZone || defaultTimeZone(),
+          }
+        : {
+            accepting_orders: false,
+            manual_next_open_at: new Date(manualNextOpenAt).toISOString(),
+            timezone: timeZone || defaultTimeZone(),
+          };
+
+      const { data, error } = await supabase
+        .from("grocery_stores")
+        .update(payload)
+        .eq("id", storeId)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      setStores((prev) => prev.map((store) => (store.id === data.id ? data : store)));
+      hydrateStoreFields(data);
+      setInfo(nextOpen ? "Store is open for customers." : "Store closed until the next opening time.");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setSavingAvailability(false);
     }
   }
 
@@ -733,6 +872,70 @@ export default function GroceryOwnerSettingsPage() {
                 <button onClick={() => { setShowCreate(true); setStoreId(""); resetStoreFields(); }} style={btnDark}>
                   Create Another Store
                 </button>
+              </div>
+            </div>
+          ) : null}
+
+          {!isCreateMode && activeStore ? (
+            <div style={{ ...locBox, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Open / close control</div>
+                  <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12 }}>
+                    Customers can still browse your grocery items while closed, but they cannot add to cart or place orders.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <span
+                    style={
+                      availability.isOpen
+                        ? pill
+                        : { ...pill, background: "rgba(254,242,242,0.92)", border: "1px solid #fecaca", color: "#991b1b" }
+                    }
+                  >
+                    {availability.statusLabel}
+                  </span>
+                  {availability.customerMessage ? <span style={pill}>{availability.customerMessage}</span> : null}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Daily open time</div>
+                  <input type="time" value={opensAtTime} onChange={(e) => setOpensAtTime(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Daily close time</div>
+                  <input type="time" value={closesAtTime} onChange={(e) => setClosesAtTime(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Timezone</div>
+                  <input value={timeZone} onChange={(e) => setTimeZone(e.target.value)} style={inputStyle} placeholder="America/Los_Angeles" />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Next opening time after manual close</div>
+                  <input type="datetime-local" value={manualNextOpenAt} onChange={(e) => setManualNextOpenAt(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={saveAvailability} style={btnLight} disabled={savingAvailability || loading}>
+                  {savingAvailability ? "Saving..." : "Save Hours"}
+                </button>
+                <button onClick={() => setStoreOpenState(true)} style={btnDark} disabled={savingAvailability || loading}>
+                  Open Now
+                </button>
+                <button onClick={() => setStoreOpenState(false)} style={btnLight} disabled={savingAvailability || loading}>
+                  Close Until Next Open
+                </button>
+              </div>
+
+              <div style={tinyNote}>
+                {availability.scheduleText ? `Daily hours: ${availability.scheduleText}. ` : ""}
+                {availability.nextOpenText || "Choose the next opening time before closing so customers can see when you will reopen."}
               </div>
             </div>
           ) : null}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import supabase from "@/lib/supabase";
+import { getStoreAvailability } from "@/lib/storeAvailability";
 
 function normalizeRole(r) {
   return String(r || "")
@@ -213,6 +214,34 @@ function googleMapsLink(lat, lng) {
   return `https://www.google.com/maps?q=${lat},${lng}`;
 }
 
+function defaultTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+  } catch {
+    return "America/Los_Angeles";
+  }
+}
+
+function toDateTimeInputValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function buildNextOpeningValue(timeValue) {
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  const match = String(timeValue || "").match(/^(\d{1,2}):(\d{2})/);
+  if (match) next.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  else next.setHours(9, 0, 0, 0);
+  const offset = next.getTimezoneOffset();
+  const local = new Date(next.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
 /* =========================
    Leaflet Map Picker (SSR-safe)
    ========================= */
@@ -283,6 +312,12 @@ export default function RestaurantSettingsPage() {
   // ✅ Location for selected restaurant
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
+  const [opensAtTime, setOpensAtTime] = useState("");
+  const [closesAtTime, setClosesAtTime] = useState("");
+  const [timeZone, setTimeZone] = useState(defaultTimeZone());
+  const [manualNextOpenAt, setManualNextOpenAt] = useState("");
+  const [acceptingOrders, setAcceptingOrders] = useState(true);
+  const [savingAvailability, setSavingAvailability] = useState(false);
 
   const [isNewOwnerNoRestaurant, setIsNewOwnerNoRestaurant] = useState(false);
 
@@ -305,6 +340,20 @@ export default function RestaurantSettingsPage() {
     if (!Number.isFinite(Number(newLat)) || !Number.isFinite(Number(newLng))) return null;
     return { lat: Number(newLat), lng: Number(newLng) };
   }, [newLat, newLng]);
+
+  const availability = useMemo(
+    () =>
+      getStoreAvailability({
+        approval_status: "approved",
+        is_disabled: false,
+        accepting_orders: acceptingOrders,
+        opens_at_time: opensAtTime || null,
+        closes_at_time: closesAtTime || null,
+        timezone: timeZone || defaultTimeZone(),
+        manual_next_open_at: manualNextOpenAt || null,
+      }),
+    [acceptingOrders, closesAtTime, manualNextOpenAt, opensAtTime, timeZone]
+  );
 
   async function uploadImageIfAny(uid, fileToUpload) {
     if (!fileToUpload) return { url: null };
@@ -329,7 +378,7 @@ export default function RestaurantSettingsPage() {
   async function loadOwnerRestaurants(uid) {
     const { data, error } = await supabase
       .from("restaurants")
-      .select("id, name, city, image_url, owner_user_id, lat, lng")
+      .select("id, name, city, image_url, owner_user_id, lat, lng, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
       .eq("owner_user_id", uid)
       .order("name", { ascending: true });
 
@@ -347,6 +396,11 @@ export default function RestaurantSettingsPage() {
 
     setLat(Number.isFinite(Number(rest?.lat)) ? Number(rest.lat) : null);
     setLng(Number.isFinite(Number(rest?.lng)) ? Number(rest.lng) : null);
+    setOpensAtTime(rest?.opens_at_time || "");
+    setClosesAtTime(rest?.closes_at_time || "");
+    setTimeZone(rest?.timezone || defaultTimeZone());
+    setManualNextOpenAt(toDateTimeInputValue(rest?.manual_next_open_at));
+    setAcceptingOrders(rest?.accepting_orders !== false);
   }
 
   async function loadAll() {
@@ -530,12 +584,14 @@ export default function RestaurantSettingsPage() {
         image_url: newImageUrl,
         lat: Number(newLat),
         lng: Number(newLng),
+        accepting_orders: true,
+        timezone: defaultTimeZone(),
       };
 
       const { data: created, error: insErr } = await supabase
         .from("restaurants")
         .insert(insertPayload)
-        .select("id, name, city, image_url, lat, lng")
+        .select("id, name, city, image_url, lat, lng, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
         .single();
 
       if (insErr) throw insErr;
@@ -583,14 +639,14 @@ export default function RestaurantSettingsPage() {
         newImageUrl = up.url;
       }
 
-      const payload = { name: name.trim(), city: city.trim() };
+      const payload = { name: name.trim(), city: city.trim(), timezone: timeZone || defaultTimeZone() };
       if (newImageUrl) payload.image_url = newImageUrl;
 
       const { data: updated, error: updErr } = await supabase
         .from("restaurants")
         .update(payload)
         .eq("id", restaurantId)
-        .select("id, name, city, image_url, lat, lng")
+        .select("id, name, city, image_url, lat, lng, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
         .single();
 
       if (updErr) throw updErr;
@@ -603,6 +659,11 @@ export default function RestaurantSettingsPage() {
       // keep location state in sync (in case row had values)
       setLat(Number.isFinite(Number(updated?.lat)) ? Number(updated.lat) : lat);
       setLng(Number.isFinite(Number(updated?.lng)) ? Number(updated.lng) : lng);
+      setOpensAtTime(updated?.opens_at_time || opensAtTime);
+      setClosesAtTime(updated?.closes_at_time || closesAtTime);
+      setTimeZone(updated?.timezone || timeZone || defaultTimeZone());
+      setManualNextOpenAt(toDateTimeInputValue(updated?.manual_next_open_at) || manualNextOpenAt);
+      setAcceptingOrders(updated?.accepting_orders !== false);
 
       // refresh restaurant list names for dropdown
       const list = await loadOwnerRestaurants(userId);
@@ -613,6 +674,83 @@ export default function RestaurantSettingsPage() {
       setErrMsg(e?.message || String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveAvailability() {
+    setSavingAvailability(true);
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      if (!restaurantId) throw new Error("Restaurant not loaded.");
+
+      const payload = {
+        opens_at_time: opensAtTime || null,
+        closes_at_time: closesAtTime || null,
+        timezone: timeZone || defaultTimeZone(),
+        manual_next_open_at: manualNextOpenAt ? new Date(manualNextOpenAt).toISOString() : null,
+      };
+
+      const { data: updated, error } = await supabase
+        .from("restaurants")
+        .update(payload)
+        .eq("id", restaurantId)
+        .select("id, name, city, image_url, lat, lng, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
+        .single();
+
+      if (error) throw error;
+
+      hydrateSelectedRestaurant(updated);
+      setInfoMsg("✅ Open and close timing saved.");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setSavingAvailability(false);
+    }
+  }
+
+  async function setRestaurantOpenState(nextOpen) {
+    setSavingAvailability(true);
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      if (!restaurantId) throw new Error("Restaurant not loaded.");
+
+      if (!nextOpen && !manualNextOpenAt) {
+        const suggested = buildNextOpeningValue(opensAtTime);
+        setManualNextOpenAt(suggested);
+        throw new Error("Set the next opening time, then click Close Until Next Open again.");
+      }
+
+      const payload = nextOpen
+        ? {
+            accepting_orders: true,
+            manual_next_open_at: null,
+            timezone: timeZone || defaultTimeZone(),
+          }
+        : {
+            accepting_orders: false,
+            manual_next_open_at: new Date(manualNextOpenAt).toISOString(),
+            timezone: timeZone || defaultTimeZone(),
+          };
+
+      const { data: updated, error } = await supabase
+        .from("restaurants")
+        .update(payload)
+        .eq("id", restaurantId)
+        .select("id, name, city, image_url, lat, lng, accepting_orders, opens_at_time, closes_at_time, timezone, manual_next_open_at")
+        .single();
+
+      if (error) throw error;
+
+      hydrateSelectedRestaurant(updated);
+      setInfoMsg(nextOpen ? "✅ Restaurant is open for customers." : "✅ Restaurant closed until the next opening time.");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setSavingAvailability(false);
     }
   }
 
@@ -705,6 +843,73 @@ export default function RestaurantSettingsPage() {
                       {switching ? "Switching…" : "Ready"}
                     </div>
                   </div>
+                </div>
+              </div>
+            ) : null}
+
+            {!isNewOwnerNoRestaurant ? (
+              <div style={{ ...cardGlass, marginTop: 12 }}>
+                <div style={cardTitle}>
+                  <div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Open / close control</div>
+                    <div style={cardHint}>Customers can browse your menu while closed, but they cannot add items to cart or place orders.</div>
+                  </div>
+                  <div style={metaRow}>
+                    <span
+                      style={
+                        availability.isOpen
+                          ? pill
+                          : { ...pill, background: "rgba(254,242,242,0.92)", border: "1px solid #fecaca", color: "#991b1b" }
+                      }
+                    >
+                      {availability.statusLabel}
+                    </span>
+                    {availability.customerMessage ? <span style={pill}>{availability.customerMessage}</span> : null}
+                  </div>
+                </div>
+
+                <div style={{ ...grid2, gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
+                  <div>
+                    <div style={label}>Daily open time</div>
+                    <input type="time" value={opensAtTime} onChange={(e) => setOpensAtTime(e.target.value)} style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={label}>Daily close time</div>
+                    <input type="time" value={closesAtTime} onChange={(e) => setClosesAtTime(e.target.value)} style={inputStyle} />
+                  </div>
+                </div>
+
+                <div style={{ ...grid2, gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
+                  <div>
+                    <div style={label}>Timezone</div>
+                    <input value={timeZone} onChange={(e) => setTimeZone(e.target.value)} style={inputStyle} placeholder="America/Los_Angeles" />
+                  </div>
+                  <div>
+                    <div style={label}>Next opening time after manual close</div>
+                    <input
+                      type="datetime-local"
+                      value={manualNextOpenAt}
+                      onChange={(e) => setManualNextOpenAt(e.target.value)}
+                      style={inputStyle}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button onClick={saveAvailability} disabled={savingAvailability || saving} style={btnLight}>
+                    {savingAvailability ? "Saving…" : "Save Hours"}
+                  </button>
+                  <button onClick={() => setRestaurantOpenState(true)} disabled={savingAvailability || saving} style={btnDark}>
+                    Open Now
+                  </button>
+                  <button onClick={() => setRestaurantOpenState(false)} disabled={savingAvailability || saving} style={btnLight}>
+                    Close Until Next Open
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 10, ...tiny }}>
+                  {availability.scheduleText ? `Daily hours: ${availability.scheduleText}. ` : ""}
+                  {availability.nextOpenText || "When you close manually, choose the next opening time so customers can see it."}
                 </div>
               </div>
             ) : null}

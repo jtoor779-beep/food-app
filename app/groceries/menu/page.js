@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 import { fetchReviewsByTarget, summarizeReviews } from "@/lib/reviews";
+import { getStoreAvailability } from "@/lib/storeAvailability";
 
 /* =========================
     Suspense Wrapper (Next.js build fix)
@@ -102,7 +103,7 @@ function GroceryMenuInner() {
       // Load store
       const { data: s, error: sErr } = await supabase
         .from("grocery_stores")
-        .select("id, name, city, image_url, accepting_orders, approval_status, is_disabled")
+        .select("id, name, city, image_url, accepting_orders, approval_status, is_disabled, opens_at_time, closes_at_time, timezone, manual_next_open_at")
         .eq("id", storeId)
         .maybeSingle();
 
@@ -200,14 +201,8 @@ function GroceryMenuInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const storeOpen = useMemo(() => {
-    if (!store) return false;
-    if (store?.is_disabled) return false;
-    const a = String(store?.approval_status || "approved").toLowerCase();
-    if (a && a !== "approved") return false;
-    if (typeof store?.accepting_orders === "boolean") return !!store.accepting_orders;
-    return true;
-  }, [store]);
+  const storeAvailability = useMemo(() => getStoreAvailability(store), [store]);
+  const storeOpen = storeAvailability.isOpen;
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -368,6 +363,10 @@ function GroceryMenuInner() {
   ]);
 
   function addToCart(item) {
+    if (!storeAvailability.canAddToCart) {
+      setErrMsg(storeAvailability.nextOpenText || storeAvailability.customerMessage || "Store is closed right now.");
+      return;
+    }
     if (!item?.id) return;
 
     const cart = readCart() || [];
@@ -893,7 +892,7 @@ function GroceryMenuInner() {
                 </span>
               </div>
 
-              {!storeOpen ? <div style={alertMini}>Store is not accepting orders right now (or pending/disabled).</div> : null}
+              {!storeOpen ? <div style={alertMini}>{storeAvailability.nextOpenText || storeAvailability.customerMessage || "Store is not accepting orders right now."}</div> : null}
             </div>
           </div>
         </div>

@@ -64,18 +64,6 @@ const heroSlides = [
     src: "/landing-media/hero-slide-1.jpg",
     fallback: "https://images.unsplash.com/photo-1498654896293-37aacf113fd9?auto=format&fit=crop&w=2000&q=80",
   },
-  {
-    src: "/landing-media/hero-slide-2.jpg",
-    fallback: "/landing-media/driver-banner-1.jpg",
-  },
-  {
-    src: "/landing-media/hero-slide-3.jpg",
-    fallback: "/landing-media/driver-banner-2.jpg",
-  },
-  {
-    src: "/landing-media/hero-slide-4.jpg",
-    fallback: "/landing-media/driver-banner-3.jpg",
-  },
 ];
 
 const upperRightSlides = [
@@ -123,8 +111,7 @@ const fallbackMediaSlides = [
 
 const initialVideoSlides = [
   { src: "/landing-media/landing-showcase.mp4", poster: "/landing-media/hero-slide-1.jpg" },
-  { src: "/landing-media/landing-showcase-2.MP4", poster: "/landing-media/hero-slide-2.jpg" },
-  { src: "/landing-media/landing-showcase-3.MP4", poster: "/landing-media/hero-slide-3.jpg" },
+
 ];
 
 export default function LandingPage() {
@@ -138,12 +125,7 @@ export default function LandingPage() {
   const [scrollY, setScrollY] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setHeroIndex((prev) => (prev + 1) % heroSlides.length);
-    }, 4200);
-    return () => window.clearInterval(timer);
-  }, []);
+  
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -172,14 +154,6 @@ export default function LandingPage() {
     }, 4800);
     return () => window.clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    if (videoSlides.length <= 1) return;
-    const timer = window.setInterval(() => {
-      setVideoIndex((prev) => (prev + 1) % videoSlides.length);
-    }, 7000);
-    return () => window.clearInterval(timer);
-  }, [videoSlides.length]);
 
   useEffect(() => {
     if (videoIndex >= videoSlides.length) setVideoIndex(0);
@@ -439,7 +413,7 @@ export default function LandingPage() {
                 autoPlay
                 muted
                 playsInline
-                preload="auto"
+                preload="none"
                 disablePictureInPicture
                 controls={false}
                 loop={videoSlides.length === 1}

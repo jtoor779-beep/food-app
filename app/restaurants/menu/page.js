@@ -189,6 +189,30 @@ const tag = {
   color: "rgba(17,24,39,0.8)",
 };
 
+const comboChip = {
+  ...tag,
+  cursor: "pointer",
+  padding: "9px 14px",
+  background: "rgba(255,255,255,0.92)",
+};
+
+const comboChipActive = {
+  ...comboChip,
+  background: "rgba(17,24,39,0.92)",
+  border: "1px solid rgba(17,24,39,0.92)",
+  color: "#fff",
+};
+
+const comboSelectedCard = {
+  ...cardGlass,
+  padding: 12,
+};
+
+const comboSavedCard = {
+  ...cardGlass,
+  padding: 14,
+};
+
 const badgeVeg = {
   fontSize: 11,
   padding: "3px 8px",
@@ -388,6 +412,39 @@ async function saveMenuItemMeta(itemId, meta) {
   return json.meta || meta;
 }
 
+async function fetchOwnerComboDeals(kind, entityId) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch(`/api/combo-deals?kind=${encodeURIComponent(kind)}&entity_id=${encodeURIComponent(entityId)}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to load combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
+
+async function saveOwnerComboDeals(kind, entityId, combos) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/combo-deals", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ kind, entityId, combos }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
+
 function buildVariantLabel(value, unit) {
   const rawValue = String(value || "").trim();
   const rawUnit = String(unit || "").trim();
@@ -432,6 +489,14 @@ export default function RestaurantManageMenuPage() {
 
   // items
   const [items, setItems] = useState([]);
+  const [comboDeals, setComboDeals] = useState([]);
+  const [comboBusy, setComboBusy] = useState(false);
+  const [comboTitle, setComboTitle] = useState("");
+  const [comboOriginalPrice, setComboOriginalPrice] = useState("");
+  const [comboDiscountPrice, setComboDiscountPrice] = useState("");
+  const [comboSearch, setComboSearch] = useState("");
+  const [comboSelectedIds, setComboSelectedIds] = useState([]);
+  const [comboVariantByItemId, setComboVariantByItemId] = useState({});
 
   // filters
   const [q, setQ] = useState("");
@@ -645,6 +710,7 @@ export default function RestaurantManageMenuPage() {
   async function loadMenu(rid) {
     if (!rid) {
       setItems([]);
+      setComboDeals([]);
       return;
     }
 
@@ -672,6 +738,9 @@ export default function RestaurantManageMenuPage() {
         };
       })
     );
+
+    const nextCombos = await fetchOwnerComboDeals("restaurant", rid).catch(() => []);
+    setComboDeals(nextCombos);
   }
 
   async function loadAll() {
@@ -740,6 +809,17 @@ export default function RestaurantManageMenuPage() {
 
     return base;
   }, [items, q, vegMode, stockMode]);
+
+  const comboPickerItems = useMemo(() => {
+    const searchTerm = text(comboSearch).toLowerCase();
+    const base = [...filtered];
+    if (!searchTerm) return base.slice(0, 30);
+    return base
+      .filter((item) =>
+        `${item?.name || ""} ${item?.cuisine || ""} ${item?.description || ""}`.toLowerCase().includes(searchTerm)
+      )
+      .slice(0, 30);
+  }, [comboSearch, filtered]);
 
   async function tryUpdateMenuItemFields(itemId, patch) {
     let anySaved = false;
@@ -951,6 +1031,90 @@ export default function RestaurantManageMenuPage() {
     ...(active ? btnDark : {}),
   });
 
+  function toggleComboItem(item) {
+    setComboSelectedIds((prev) => {
+      const id = text(item?.id);
+      const exists = prev.includes(id);
+      const next = exists ? prev.filter((row) => row !== id) : [...prev, id];
+      if (!exists) {
+        const variants = Array.isArray(item?.variants) ? item.variants : [];
+        const defaultVariant = variants.find((variant) => variant?.is_default) || variants[0] || null;
+        if (defaultVariant?.label) {
+          setComboVariantByItemId((current) => ({ ...current, [id]: String(defaultVariant.label) }));
+        }
+      }
+      return next;
+    });
+  }
+
+  async function createComboDeal() {
+    setErr("");
+    setNote("");
+
+    try {
+      if (!restaurantId) throw new Error("Restaurant missing.");
+      const title = text(comboTitle);
+      if (!title) throw new Error("Combo title required.");
+      if ((comboSelectedIds || []).length < 2) throw new Error("Select at least 2 menu items.");
+
+      const original = safeNumber(comboOriginalPrice, 0);
+      const discount = safeNumber(comboDiscountPrice, 0);
+      if (!(original > 0)) throw new Error("Original combo price must be greater than 0.");
+      if (!(discount > 0)) throw new Error("Discount combo price must be greater than 0.");
+      if (discount >= original) throw new Error("Discount combo price must be smaller than original price.");
+
+      const selectedRows = (items || []).filter((item) => comboSelectedIds.includes(item.id));
+      if (selectedRows.length < 2) throw new Error("Selected items were not found.");
+
+      setComboBusy(true);
+      const nextCombos = await saveOwnerComboDeals("restaurant", restaurantId, [
+        ...(comboDeals || []),
+        {
+          title,
+          original_price: original,
+          discount_price: discount,
+          image_url: text(selectedRows[0]?.image_url) || null,
+          items: selectedRows.map((item) => ({
+            item_id: item.id,
+            selected_variant_label: text(comboVariantByItemId[item.id]) || null,
+          })),
+        },
+      ]);
+      setComboDeals(nextCombos);
+      setComboTitle("");
+      setComboOriginalPrice("");
+      setComboDiscountPrice("");
+      setComboSearch("");
+      setComboSelectedIds([]);
+      setComboVariantByItemId({});
+      showToast("Combo deal saved ✅");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
+  async function deleteComboDeal(comboId) {
+    setErr("");
+    setNote("");
+    try {
+      if (!restaurantId) throw new Error("Restaurant missing.");
+      setComboBusy(true);
+      const nextCombos = await saveOwnerComboDeals(
+        "restaurant",
+        restaurantId,
+        (comboDeals || []).filter((combo) => text(combo?.id) !== text(comboId))
+      );
+      setComboDeals(nextCombos);
+      showToast("Combo deal removed ✅");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
   return (
     <main style={pageBg}>
       {toast ? <div style={toastBox}>{toast}</div> : null}
@@ -1105,6 +1269,188 @@ export default function RestaurantManageMenuPage() {
         </div>
 
         {loading ? <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div> : null}
+
+        <div style={{ ...panelGlass, marginTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 1000, color: "#0b1220" }}>Restaurant Combo Deals</div>
+              <div style={{ marginTop: 4, color: "rgba(17,24,39,0.7)", fontWeight: 850 }}>
+                Search your menu, select items, choose sizes if the item has variants, and show the combo on the customer home row.
+              </div>
+            </div>
+            <div style={pill}>Live: {(comboDeals || []).length}</div>
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr", gap: 10 }}>
+            <div>
+              <div style={label}>Combo title</div>
+              <input value={comboTitle} onChange={(e) => setComboTitle(e.target.value)} placeholder="Weekend Food Saver" style={inputStyle} />
+            </div>
+            <div>
+              <div style={label}>Original price</div>
+              <input value={comboOriginalPrice} onChange={(e) => setComboOriginalPrice(e.target.value)} placeholder="24.99" style={inputStyle} />
+            </div>
+            <div>
+              <div style={label}>Discount price</div>
+              <input value={comboDiscountPrice} onChange={(e) => setComboDiscountPrice(e.target.value)} placeholder="19.99" style={inputStyle} />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr", gap: 10, alignItems: "center" }}>
+            <input
+              value={comboSearch}
+              onChange={(e) => setComboSearch(e.target.value)}
+              placeholder="Search items for combo..."
+              style={inputStyle}
+            />
+            <div style={{ ...pill, justifyContent: "center" }}>Showing: {comboPickerItems.length}</div>
+            <div style={{ ...pill, justifyContent: "center" }}>Selected: {comboSelectedIds.length}</div>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <div style={label}>Select menu items</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {comboPickerItems.map((item) => {
+                const active = comboSelectedIds.includes(item.id);
+                const variants = Array.isArray(item?.variants) ? item.variants : [];
+                return (
+                  <div key={`restaurant-combo-item-${item.id}`} style={comboSavedCard}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      <div style={{ width: 68, height: 68, borderRadius: 14, overflow: "hidden", background: "#f4f4f5", flexShrink: 0 }}>
+                        {item?.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.image_url} alt={item.name || "item"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        ) : null}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 1000, color: "#0b1220" }}>{item.name}</div>
+                        <div style={{ marginTop: 4, color: "rgba(17,24,39,0.68)", fontWeight: 850, fontSize: 13 }}>
+                          {variants.length > 0 ? `${variants.length} variant(s)` : "No variants"}
+                        </div>
+                        {variants.length > 0 ? (
+                          <div style={{ marginTop: 8 }}>
+                            <select
+                              value={text(comboVariantByItemId[item.id]) || text(variants.find((variant) => variant?.is_default)?.label) || text(variants[0]?.label)}
+                              onChange={(e) =>
+                                setComboVariantByItemId((current) => ({
+                                  ...current,
+                                  [item.id]: e.target.value,
+                                }))
+                              }
+                              style={{ ...inputStyle, minWidth: 190 }}
+                            >
+                              {variants.map((variant, index) => (
+                                <option key={`${item.id}-${variant?.id || variant?.label || index}`} value={text(variant?.label)}>
+                                  {variant?.label || "Size"}{Number(variant?.price || 0) > 0 ? ` - ${money(variant.price, currency)}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <span style={active ? pill : tag}>{active ? "Added to combo" : "Not added"}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleComboItem(item)}
+                        style={active ? btnSmall : btnDark}
+                        disabled={comboBusy}
+                      >
+                        {active ? "Remove" : "Add"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!comboPickerItems.length ? (
+              <div style={{ marginTop: 10, color: "rgba(17,24,39,0.65)", fontWeight: 850 }}>
+                No menu items match this combo search/filter.
+              </div>
+            ) : null}
+          </div>
+
+          {comboSelectedIds.length > 0 ? (
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              {(items || [])
+                .filter((item) => comboSelectedIds.includes(item.id))
+                .map((item) => {
+                  const variants = Array.isArray(item?.variants) ? item.variants : [];
+                  return (
+                    <div key={`restaurant-combo-selected-${item.id}`} style={comboSelectedCard}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontWeight: 1000, color: "#0b1220" }}>{item.name}</div>
+                          <div style={{ marginTop: 4, color: "rgba(17,24,39,0.68)", fontWeight: 850, fontSize: 13 }}>
+                            {variants.length > 0 ? `Chosen variant: ${text(comboVariantByItemId[item.id]) || text(variants.find((variant) => variant?.is_default)?.label) || text(variants[0]?.label)}` : "No variants"}
+                          </div>
+                        </div>
+                        {variants.length > 0 ? (
+                          <select
+                            value={text(comboVariantByItemId[item.id])}
+                            onChange={(e) =>
+                              setComboVariantByItemId((current) => ({
+                                ...current,
+                                [item.id]: e.target.value,
+                              }))
+                            }
+                            style={{ ...inputStyle, minWidth: 180, maxWidth: 240 }}
+                          >
+                            {variants.map((variant, index) => (
+                              <option key={`${item.id}-${variant?.id || variant?.label || index}`} value={text(variant?.label)}>
+                                {variant?.label || "Size"}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span style={tag}>No sizes</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          ) : null}
+
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={pill}>Selected: {comboSelectedIds.length} item(s)</div>
+            <button type="button" onClick={createComboDeal} style={btnDark} disabled={comboBusy || !restaurantId}>
+              {comboBusy ? "Saving..." : "Create Combo Deal"}
+            </button>
+          </div>
+
+          <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+            {(comboDeals || []).length === 0 ? (
+              <div style={{ color: "rgba(17,24,39,0.65)", fontWeight: 850 }}>No combo deals yet.</div>
+            ) : (
+              (comboDeals || []).map((combo) => (
+                <div key={combo.id} style={comboSavedCard}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+                    <div style={{ flex: 1, minWidth: 260 }}>
+                      <div style={{ fontSize: 18, fontWeight: 1000, color: "#0b1220" }}>{combo.title}</div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(combo.original_price, currency)}</span>
+                        <span style={pill}>{money(combo.discount_price || combo.price, currency)}</span>
+                      </div>
+                      <div style={{ marginTop: 8, color: "rgba(17,24,39,0.7)", fontWeight: 850 }}>
+                        {Array.isArray(combo.items)
+                          ? combo.items
+                              .map((item) => `${item.name || "Item"}${text(item?.selected_variant_label) ? ` (${text(item.selected_variant_label)})` : ""}`)
+                              .join(" • ")
+                          : ""}
+                      </div>
+                    </div>
+
+                    <button type="button" onClick={() => deleteComboDeal(combo.id)} style={btnSmall} disabled={comboBusy}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
 
         {!loading ? (
           filtered.length === 0 ? (

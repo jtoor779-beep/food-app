@@ -18,6 +18,45 @@ function safeCuisine(v) {
   return String(v || "").trim().toLowerCase();
 }
 
+function clean(v) {
+  return String(v || "").trim();
+}
+
+async function fetchOwnerComboDeals(kind, entityId) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+
+  const res = await fetch(`/api/combo-deals?kind=${encodeURIComponent(kind)}&entity_id=${encodeURIComponent(entityId)}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to load combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
+
+async function saveOwnerComboDeals(kind, entityId, combos) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+
+  const res = await fetch("/api/combo-deals", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ kind, entityId, combos }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
+
 export default function OwnerManageMenuPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -27,6 +66,13 @@ export default function OwnerManageMenuPage() {
 
   const [restaurant, setRestaurant] = useState(null);
   const [items, setItems] = useState([]);
+  const [combos, setCombos] = useState([]);
+  const [comboBusy, setComboBusy] = useState(false);
+  const [comboTitle, setComboTitle] = useState("");
+  const [comboOriginalPrice, setComboOriginalPrice] = useState("");
+  const [comboDiscountPrice, setComboDiscountPrice] = useState("");
+  const [comboSelectedIds, setComboSelectedIds] = useState([]);
+  const [comboSearch, setComboSearch] = useState("");
 
   // Add form
   const [name, setName] = useState("");
@@ -71,6 +117,8 @@ export default function OwnerManageMenuPage() {
 
       if (mErr) throw mErr;
       setItems(list || []);
+      const comboList = await fetchOwnerComboDeals("restaurant", r.id).catch(() => []);
+      setCombos(comboList);
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -212,7 +260,88 @@ export default function OwnerManageMenuPage() {
     }
   }
 
+  function toggleComboItem(itemId) {
+    setComboSelectedIds((prev) => {
+      const id = clean(itemId);
+      if (!id) return prev;
+      return prev.includes(id) ? prev.filter((row) => row !== id) : [...prev, id];
+    });
+  }
+
+  async function addComboDeal() {
+    setErr("");
+    setOk("");
+
+    try {
+      if (!restaurant?.id) throw new Error("Restaurant missing.");
+      const title = clean(comboTitle);
+      if (!title) throw new Error("Combo title required.");
+      if ((comboSelectedIds || []).length < 2) throw new Error("Select at least 2 menu items for the combo.");
+
+      const original = Number(comboOriginalPrice || 0);
+      const discount = Number(comboDiscountPrice || 0);
+      if (!Number.isFinite(original) || original <= 0) throw new Error("Original combo price must be greater than 0.");
+      if (!Number.isFinite(discount) || discount <= 0) throw new Error("Discount combo price must be greater than 0.");
+      if (discount >= original) throw new Error("Discount combo price must be smaller than original price.");
+
+      const selectedItems = (items || []).filter((item) => comboSelectedIds.includes(item.id));
+      if (selectedItems.length < 2) throw new Error("Selected items could not be found. Refresh and try again.");
+
+      setComboBusy(true);
+      const nextCombos = await saveOwnerComboDeals("restaurant", restaurant.id, [
+        ...combos,
+        {
+          title,
+          original_price: original,
+          discount_price: discount,
+          image_url: clean(selectedItems[0]?.image_url) || null,
+          items: selectedItems.map((item) => ({ item_id: item.id })),
+        },
+      ]);
+
+      setCombos(nextCombos);
+      setComboTitle("");
+      setComboOriginalPrice("");
+      setComboDiscountPrice("");
+      setComboSelectedIds([]);
+      flashOk("Combo deal saved");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
+  async function deleteComboDeal(comboId) {
+    setErr("");
+    setOk("");
+
+    try {
+      if (!restaurant?.id) throw new Error("Restaurant missing.");
+      setComboBusy(true);
+      const nextCombos = await saveOwnerComboDeals(
+        "restaurant",
+        restaurant.id,
+        (combos || []).filter((combo) => clean(combo?.id) !== clean(comboId))
+      );
+      setCombos(nextCombos);
+      flashOk("Combo deal removed");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
   const title = useMemo(() => restaurant?.name || "Owner", [restaurant]);
+  const comboPickerItems = useMemo(() => {
+    const q = clean(comboSearch).toLowerCase();
+    const list = Array.isArray(items) ? items : [];
+    if (!q) return list.slice(0, 30);
+    return list
+      .filter((item) => `${item?.name || ""} ${item?.cuisine || ""}`.toLowerCase().includes(q))
+      .slice(0, 30);
+  }, [comboSearch, items]);
 
   return (
     <main style={{ maxWidth: 1100, margin: "0 auto", padding: 16 }}>
@@ -303,6 +432,108 @@ export default function OwnerManageMenuPage() {
           </div>
 
           <h2 style={{ marginTop: 20 }}>Menu items</h2>
+
+          <div style={box}>
+            <h2 style={{ marginTop: 0 }}>Restaurant combo deals</h2>
+            <div style={{ color: "#6b7280", fontWeight: 700 }}>
+              Select items from your menu, set the original price and the offer price, and this combo will show on the customer home page.
+            </div>
+
+            <div style={row}>
+              <div style={col}>
+                <label style={label}>Combo title</label>
+                <input value={comboTitle} onChange={(e) => setComboTitle(e.target.value)} style={input} placeholder="Family Combo" />
+              </div>
+
+              <div style={col}>
+                <label style={label}>Original price</label>
+                <input
+                  value={comboOriginalPrice}
+                  onChange={(e) => setComboOriginalPrice(e.target.value)}
+                  type="number"
+                  style={input}
+                  placeholder="29.99"
+                />
+              </div>
+
+              <div style={col}>
+                <label style={label}>Discount price</label>
+                <input
+                  value={comboDiscountPrice}
+                  onChange={(e) => setComboDiscountPrice(e.target.value)}
+                  type="number"
+                  style={input}
+                  placeholder="21.99"
+                />
+              </div>
+            </div>
+
+            <div style={{ marginTop: 14 }}>
+              <div style={{ marginBottom: 10, display: "grid", gridTemplateColumns: "1.3fr 0.7fr 0.7fr", gap: 10 }}>
+                <input
+                  value={comboSearch}
+                  onChange={(e) => setComboSearch(e.target.value)}
+                  style={input}
+                  placeholder="Search menu items for combo..."
+                />
+                <div style={comboInfoPill}>Showing {comboPickerItems.length}</div>
+                <div style={comboInfoPill}>Selected {comboSelectedIds.length}</div>
+              </div>
+              <div style={label}>Select menu items</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {comboPickerItems.map((item) => {
+                  const active = comboSelectedIds.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => toggleComboItem(item.id)}
+                      style={active ? comboChipActive : comboChip}
+                    >
+                      {item.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {comboPickerItems.length === 0 ? <div style={{ marginTop: 10, color: "#6b7280", fontWeight: 700 }}>No items match this search.</div> : null}
+            </div>
+
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ color: "#6b7280", fontWeight: 800 }}>Selected: {comboSelectedIds.length} items</div>
+              <button onClick={addComboDeal} style={btnPrimary} disabled={comboBusy}>
+                {comboBusy ? "Saving..." : "Create Combo Deal"}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              {(combos || []).length === 0 ? (
+                <div style={emptyBox}>No combo deals yet.</div>
+              ) : (
+                (combos || []).map((combo) => (
+                  <div key={combo.id} style={itemCard}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontWeight: 900, fontSize: 18 }}>{combo.title}</div>
+                        <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <span style={{ color: "#9ca3af", textDecoration: "line-through", fontWeight: 800 }}>
+                            {money(combo.original_price)}
+                          </span>
+                          <span style={{ fontWeight: 900 }}>{money(combo.discount_price || combo.price)}</span>
+                        </div>
+                        <div style={{ marginTop: 8, color: "#6b7280", fontWeight: 700 }}>
+                          {Array.isArray(combo.items) ? combo.items.map((item) => item.name || "Item").join(" • ") : ""}
+                        </div>
+                      </div>
+
+                      <button onClick={() => deleteComboDeal(combo.id)} style={btnDanger} disabled={comboBusy}>
+                        Delete Combo
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
 
           {items.length === 0 ? (
             <div style={emptyBox}>No items yet.</div>
@@ -551,4 +782,32 @@ const photoBox = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
+};
+
+const comboChip = {
+  padding: "9px 12px",
+  borderRadius: 999,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const comboChipActive = {
+  ...comboChip,
+  border: "1px solid #111827",
+  background: "#111827",
+  color: "#fff",
+};
+
+const comboInfoPill = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid #e5e7eb",
+  background: "#f8fafc",
+  color: "#475569",
+  fontWeight: 800,
 };

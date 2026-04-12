@@ -40,6 +40,37 @@ async function saveGroceryItemMeta(itemId, meta) {
   if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save grocery item pricing.");
   return json.meta || meta;
 }
+async function fetchOwnerComboDeals(kind, entityId) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch(`/api/combo-deals?kind=${encodeURIComponent(kind)}&entity_id=${encodeURIComponent(entityId)}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to load combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
+async function saveOwnerComboDeals(kind, entityId, combos) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch("/api/combo-deals", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ kind, entityId, combos }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Unable to save combo deals.");
+  return Array.isArray(json?.combos) ? json.combos : [];
+}
 function normalizeRole(r) {
   return String(r || "")
     .trim()
@@ -199,6 +230,15 @@ export default function GroceryOwnerItemsPage() {
   const [currency, setCurrency] = useState(DEFAULT_APP_CURRENCY);
 
   const [items, setItems] = useState([]);
+  const [comboDeals, setComboDeals] = useState([]);
+  const [comboBusy, setComboBusy] = useState(false);
+  const [comboTitle, setComboTitle] = useState("");
+  const [comboOriginalPrice, setComboOriginalPrice] = useState("");
+  const [comboDiscountPrice, setComboDiscountPrice] = useState("");
+  const [comboSelectedItemIds, setComboSelectedItemIds] = useState([]);
+  const [comboVariantByItemId, setComboVariantByItemId] = useState({});
+  const [comboMetaByItemId, setComboMetaByItemId] = useState({});
+  const [comboSearch, setComboSearch] = useState("");
   const [loadingItems, setLoadingItems] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -882,6 +922,58 @@ export default function GroceryOwnerItemsPage() {
     setSelectedItemIds([]);
   }
 
+  const comboPickerItems = useMemo(() => {
+    const q = clean(comboSearch).toLowerCase();
+    let list = Array.isArray(items) ? [...items] : [];
+
+    if (q) {
+      list = list.filter((it) => {
+        const name = clean(it?.name).toLowerCase();
+        const desc = clean(it?.description).toLowerCase();
+        const cat = getItemCategoryName(it).toLowerCase();
+        const sub = getItemSubcategoryName(it).toLowerCase();
+        const liveMeta = comboMetaByItemId?.[clean(it?.id)] || {};
+        const variantLabels = Array.isArray(liveMeta?.variants)
+          ? liveMeta.variants.map((variant) => clean(variant?.label)).join(" ").toLowerCase()
+          : "";
+        return name.includes(q) || desc.includes(q) || cat.includes(q) || sub.includes(q) || variantLabels.includes(q);
+      });
+    }
+
+    if (categoryFilter !== "all") {
+      list = list.filter((it) => getItemCategoryName(it).toLowerCase() === clean(categoryFilter).toLowerCase());
+    }
+
+    if (subcategoryFilter !== "all") {
+      list = list.filter((it) => getItemSubcategoryName(it).toLowerCase() === clean(subcategoryFilter).toLowerCase());
+    }
+
+    return list.slice(0, 36);
+  }, [items, comboSearch, categoryFilter, subcategoryFilter, categoryOptions, subcategoryOptions, comboMetaByItemId]);
+
+  useEffect(() => {
+    let active = true;
+    const ids = (comboPickerItems || []).map((item) => clean(item?.id)).filter(Boolean);
+    if (!ids.length) {
+      setComboMetaByItemId({});
+      return () => {
+        active = false;
+      };
+    }
+    fetchGroceryItemMetaMap(ids)
+      .then((map) => {
+        if (!active) return;
+        setComboMetaByItemId(map || {});
+      })
+      .catch(() => {
+        if (!active) return;
+        setComboMetaByItemId({});
+      });
+    return () => {
+      active = false;
+    };
+  }, [comboPickerItems]);
+
   function buildBulkVariantPayload() {
     const value = Number(bulkVariantValue);
     const original = Number(bulkVariantOriginalPrice);
@@ -1480,6 +1572,105 @@ export default function GroceryOwnerItemsPage() {
     }
   }
 
+  async function loadComboDeals(sid) {
+    if (!sid) {
+      setComboDeals([]);
+      return;
+    }
+    try {
+      const deals = await fetchOwnerComboDeals("grocery", sid);
+      setComboDeals(deals);
+    } catch {
+      setComboDeals([]);
+    }
+  }
+
+  function toggleComboItem(itemId) {
+    setComboSelectedItemIds((prev) => {
+      const id = clean(itemId);
+      if (!id) return prev;
+      const exists = prev.includes(id);
+      if (!exists) {
+        const row = (items || []).find((item) => clean(item?.id) === id) || null;
+        const liveMeta = comboMetaByItemId?.[id] || {};
+        const variants = Array.isArray(liveMeta?.variants) ? liveMeta.variants : Array.isArray(row?.variants) ? row.variants : [];
+        const defaultVariant = variants.find((variant) => variant?.is_default) || variants[0] || null;
+        if (defaultVariant?.label) {
+          setComboVariantByItemId((current) => ({ ...current, [id]: String(defaultVariant.label) }));
+        }
+      }
+      return exists ? prev.filter((row) => row !== id) : [...prev, id];
+    });
+  }
+
+  async function createComboDeal() {
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      if (!storeId) throw new Error("Store missing.");
+      const title = clean(comboTitle);
+      if (!title) throw new Error("Combo title is required.");
+      if ((comboSelectedItemIds || []).length < 2) throw new Error("Select at least 2 grocery items.");
+
+      const original = Number(comboOriginalPrice || 0);
+      const discount = Number(comboDiscountPrice || 0);
+      if (!Number.isFinite(original) || original <= 0) throw new Error("Original combo price must be greater than 0.");
+      if (!Number.isFinite(discount) || discount <= 0) throw new Error("Discount combo price must be greater than 0.");
+      if (discount >= original) throw new Error("Discount combo price must be smaller than original price.");
+
+      const selectedRows = (items || []).filter((item) => comboSelectedItemIds.includes(item.id));
+      if (selectedRows.length < 2) throw new Error("Selected items were not found. Refresh and try again.");
+
+      setComboBusy(true);
+      const next = await saveOwnerComboDeals("grocery", storeId, [
+        ...comboDeals,
+        {
+          title,
+          original_price: original,
+          discount_price: discount,
+          image_url: clean(selectedRows[0]?.image_url) || null,
+          items: selectedRows.map((item) => ({
+            item_id: item.id,
+            selected_variant_label: clean(comboVariantByItemId[item.id]) || null,
+          })),
+        },
+      ]);
+      setComboDeals(next);
+      setComboTitle("");
+      setComboOriginalPrice("");
+      setComboDiscountPrice("");
+      setComboSelectedItemIds([]);
+      setComboVariantByItemId({});
+      setInfoMsg("Combo deal saved.");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
+  async function deleteComboDeal(comboId) {
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      if (!storeId) throw new Error("Store missing.");
+      setComboBusy(true);
+      const next = await saveOwnerComboDeals(
+        "grocery",
+        storeId,
+        (comboDeals || []).filter((combo) => clean(combo?.id) !== clean(comboId))
+      );
+      setComboDeals(next);
+      setInfoMsg("Combo deal removed.");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setComboBusy(false);
+    }
+  }
+
   async function loadCategoriesForStore(sid, { keepSelection } = { keepSelection: true }) {
     if (!sid) {
       setCategories([]);
@@ -2031,6 +2222,7 @@ export default function GroceryOwnerItemsPage() {
   useEffect(() => {
     if (!storeId) {
       setItems([]);
+      setComboDeals([]);
       setCategories([]);
       setSubcategories([]);
       setManageCatId("");
@@ -2039,6 +2231,7 @@ export default function GroceryOwnerItemsPage() {
     }
     setSelectedItemIds([]);
     loadItems(storeId);
+    loadComboDeals(storeId);
     loadCategoriesForStore(storeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
@@ -2580,6 +2773,187 @@ export default function GroceryOwnerItemsPage() {
               <div style={statNum}>{stats.best}</div>
               <div style={statLbl}>Best Sellers</div>
             </div>
+          </div>
+        </div>
+
+        <div style={panelGlass}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={panelTitle}>Grocery Combo Deals</div>
+              <div style={panelSub}>Pick items from this store, set original and discount prices, and show the combo in its own customer home row.</div>
+            </div>
+            <span style={tagStrong}>Live: {(comboDeals || []).length}</span>
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr", gap: 10 }}>
+            <div>
+              <div style={label}>Combo title</div>
+              <input value={comboTitle} onChange={(e) => setComboTitle(e.target.value)} style={input} placeholder="Weekend Grocery Saver" />
+            </div>
+            <div>
+              <div style={label}>Original price</div>
+              <input value={comboOriginalPrice} onChange={(e) => setComboOriginalPrice(e.target.value)} style={input} type="number" placeholder="18.99" />
+            </div>
+            <div>
+              <div style={label}>Discount price</div>
+              <input value={comboDiscountPrice} onChange={(e) => setComboDiscountPrice(e.target.value)} style={input} type="number" placeholder="13.99" />
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <div style={{ marginBottom: 10, display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.8fr", gap: 10 }}>
+              <input
+                value={comboSearch}
+                onChange={(e) => setComboSearch(e.target.value)}
+                style={input}
+                placeholder="Search items for combo..."
+              />
+              <div style={{ ...tag, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                Showing {comboPickerItems.length} item(s)
+              </div>
+              <div style={{ ...tag, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                Selected {comboSelectedItemIds.length}
+              </div>
+            </div>
+            <div style={label}>Search results for combo items</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {comboPickerItems.map((item) => {
+                const active = comboSelectedItemIds.includes(item.id);
+                const liveMeta = comboMetaByItemId?.[clean(item?.id)] || {};
+                const variants = Array.isArray(liveMeta?.variants) ? liveMeta.variants : Array.isArray(item?.variants) ? item.variants : [];
+                return (
+                  <div key={`combo-item-${item.id}`} style={comboCard}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      <div style={{ width: 68, height: 68, borderRadius: 14, overflow: "hidden", background: "#f4f4f5", flexShrink: 0 }}>
+                        {item?.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.image_url} alt={item.name || "item"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        ) : null}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 900, color: "#111827" }}>{item.name}</div>
+                        <div style={{ marginTop: 4, color: "#6b7280", fontWeight: 700, fontSize: 13 }}>
+                          {variants.length > 0 ? `${variants.length} variant(s)` : "No variants"}
+                        </div>
+                        {variants.length > 0 ? (
+                          <div style={{ marginTop: 8 }}>
+                            <select
+                              value={clean(comboVariantByItemId[item.id]) || clean(variants.find((variant) => variant?.is_default)?.label) || clean(variants[0]?.label)}
+                              onChange={(e) =>
+                                setComboVariantByItemId((current) => ({
+                                  ...current,
+                                  [item.id]: e.target.value,
+                                }))
+                              }
+                              style={{ ...input, minWidth: 190 }}
+                            >
+                              {variants.map((variant, index) => (
+                                <option key={`${item.id}-variant-${variant?.id || variant?.label || index}`} value={clean(variant?.label)}>
+                                  {variant?.label || "Size"}{Number(variant?.price || 0) > 0 ? ` - ${money(variant.price, currency)}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <span style={active ? tagStrong : tag}>{active ? "Added to combo" : "Not added"}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleComboItem(item.id)}
+                        style={active ? btnTinyDanger : btnPillDark}
+                        disabled={comboBusy}
+                      >
+                        {active ? "Remove" : "Add"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!comboPickerItems.length ? <div style={{ marginTop: 10, ...hint }}>No items match this combo search/filter.</div> : null}
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={tag}>Selected: {comboSelectedItemIds.length} item(s)</span>
+            <button type="button" onClick={createComboDeal} style={btnPillDark} disabled={comboBusy || !storeId}>
+              {comboBusy ? "Saving..." : "Create Combo Deal"}
+            </button>
+          </div>
+
+          {comboSelectedItemIds.length > 0 ? (
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              {(items || [])
+                .filter((item) => comboSelectedItemIds.includes(item.id))
+                .map((item) => {
+                  const liveMeta = comboMetaByItemId?.[clean(item?.id)] || {};
+                  const variants = Array.isArray(liveMeta?.variants) ? liveMeta.variants : Array.isArray(item?.variants) ? item.variants : [];
+                  return (
+                    <div key={`combo-selected-${item.id}`} style={comboCard}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontWeight: 900 }}>{item.name}</div>
+                          <div style={{ marginTop: 4, color: "#6b7280", fontSize: 13, fontWeight: 700 }}>
+                            {variants.length > 0 ? `Chosen variant: ${clean(comboVariantByItemId[item.id]) || clean(variants.find((variant) => variant?.is_default)?.label) || clean(variants[0]?.label)}` : "No variants"}
+                          </div>
+                        </div>
+                        {variants.length > 0 ? (
+                          <select
+                            value={clean(comboVariantByItemId[item.id])}
+                            onChange={(e) =>
+                              setComboVariantByItemId((current) => ({
+                                ...current,
+                                [item.id]: e.target.value,
+                              }))
+                            }
+                            style={{ ...input, minWidth: 180, maxWidth: 240 }}
+                          >
+                            {variants.map((variant, index) => (
+                              <option key={`${item.id}-variant-${variant?.id || variant?.label || index}`} value={clean(variant?.label)}>
+                                {variant?.label || "Size"}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span style={tag}>No sizes</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          ) : null}
+
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {(comboDeals || []).length === 0 ? (
+              <div style={hint}>No combo deals yet.</div>
+            ) : (
+              (comboDeals || []).map((combo) => (
+                <div key={combo.id} style={comboCard}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+                    <div style={{ flex: 1, minWidth: 260 }}>
+                      <div style={{ fontSize: 18, fontWeight: 900 }}>{combo.title}</div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ ...tag, textDecoration: "line-through", opacity: 0.7 }}>{money(combo.original_price, currency)}</span>
+                        <span style={tagStrong}>{money(combo.discount_price || combo.price, currency)}</span>
+                      </div>
+                      <div style={{ marginTop: 8, color: "#5b6475", fontWeight: 700 }}>
+                        {Array.isArray(combo.items)
+                          ? combo.items
+                              .map((item) => `${item.name || "Item"}${clean(item?.selected_variant_label) ? ` (${clean(item.selected_variant_label)})` : ""}`)
+                              .join(" • ")
+                          : ""}
+                      </div>
+                    </div>
+
+                    <button type="button" onClick={() => deleteComboDeal(combo.id)} style={btnTinyDanger} disabled={comboBusy}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -4125,6 +4499,31 @@ const csvTd = {
   fontWeight: 800,
   color: "rgba(17,24,39,0.82)",
   borderBottom: "1px solid rgba(0,0,0,0.06)",
+};
+
+const comboChip = {
+  padding: "9px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.1)",
+  background: "rgba(255,255,255,0.92)",
+  color: "#111827",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const comboChipActive = {
+  ...comboChip,
+  background: "#111827",
+  color: "#fff",
+  border: "1px solid #111827",
+};
+
+const comboCard = {
+  borderRadius: 16,
+  border: "1px solid rgba(0,0,0,0.08)",
+  background: "rgba(255,255,255,0.82)",
+  boxShadow: "0 10px 24px rgba(0,0,0,0.05)",
+  padding: 12,
 };
 
 

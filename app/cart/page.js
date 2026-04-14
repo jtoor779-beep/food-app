@@ -324,6 +324,77 @@ function setGroceryCart(items) {
   } catch {}
 }
 
+async function healLegacyZeroPriceCartRows() {
+  const restaurantCart = readRestaurantCartRaw();
+  const brokenRestaurant = (restaurantCart || []).filter((item) => !(Number(item?.price_each) > 0) && item?.menu_item_id);
+
+  if (brokenRestaurant.length > 0) {
+    const ids = Array.from(new Set(brokenRestaurant.map((item) => String(item.menu_item_id || "").trim()).filter(Boolean)));
+    if (ids.length > 0) {
+      const { data, error } = await supabase
+        .from("menu_items")
+        .select("id, name, price, image_url")
+        .in("id", ids);
+
+      if (!error && Array.isArray(data)) {
+        const priceMap = new Map(data.map((row) => [String(row.id), row]));
+        const repaired = restaurantCart.map((item) => {
+          if (Number(item?.price_each) > 0) return item;
+          const base = priceMap.get(String(item?.menu_item_id || ""));
+          const nextPrice = Number(base?.price || 0);
+          if (!(nextPrice > 0)) return item;
+          return {
+            ...item,
+            price_each: nextPrice,
+            name: item?.name || base?.name || "Item",
+            image_url: item?.image_url || base?.image_url || null,
+          };
+        });
+        setCartCompat(repaired);
+      }
+    }
+  }
+
+  const groceryCart = readGroceryCartRaw();
+  const brokenGrocery = (groceryCart || []).filter((item) => !(Number(getGroceryUnitPrice(item)) > 0) && (item?.id || item?.grocery_item_id));
+
+  if (brokenGrocery.length > 0) {
+    const ids = Array.from(
+      new Set(
+        brokenGrocery
+          .map((item) => String(item?.grocery_item_id || item?.id || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (ids.length > 0) {
+      const { data, error } = await supabase
+        .from("grocery_items")
+        .select("id, name, price, image_url")
+        .in("id", ids);
+
+      if (!error && Array.isArray(data)) {
+        const priceMap = new Map(data.map((row) => [String(row.id), row]));
+        const repaired = groceryCart.map((item) => {
+          if (Number(getGroceryUnitPrice(item)) > 0) return item;
+          const base = priceMap.get(String(item?.grocery_item_id || item?.id || ""));
+          const nextPrice = Number(base?.price || 0);
+          if (!(nextPrice > 0)) return item;
+          return {
+            ...item,
+            price: nextPrice,
+            unit_price: nextPrice,
+            price_each: nextPrice,
+            name: item?.name || base?.name || "Item",
+            image_url: item?.image_url || base?.image_url || "",
+          };
+        });
+        setGroceryCart(repaired);
+      }
+    }
+  }
+}
+
 /* =========================
    âœ… REAL GEOCODING HELPERS
    ========================= */
@@ -751,6 +822,30 @@ async function insertGroceryOrderItemsAuto(rows) {
   throw lastErr || new Error("Failed to create grocery order items.");
 }
 
+async function persistOrderItemSnapshot(table, orderId, items) {
+  const snapshot = Array.isArray(items) ? items : [];
+  if (!orderId || !snapshot.length) return;
+
+  const payloads = [
+    { items: snapshot },
+    { order_items: snapshot },
+    { cart_items: snapshot },
+    { products: snapshot },
+    { line_items: snapshot },
+  ];
+
+  for (const payload of payloads) {
+    try {
+      const { error } = await supabase.from(table).update(payload).eq("id", orderId);
+      if (!error) return;
+      if (isMissingColumnError(error?.message || String(error))) continue;
+      return;
+    } catch {
+      return;
+    }
+  }
+}
+
 /* =========================================================
    âœ… PLATFORM SETTINGS (FROM ADMIN /system_settings key=platform)
    ========================================================= */
@@ -894,6 +989,26 @@ async function insertRestaurantOrderAuto(payload) {
   }
 
   throw lastErr || new Error("Failed to create restaurant order.");
+}
+
+async function markOrderPaidWithoutStripeWeb(orderId, orderType) {
+  const res = await fetch("/api/stripe/order-state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "mark_paid",
+      orderId: String(orderId || "").trim(),
+      orderType: String(orderType || "").trim().toLowerCase().includes("groc") ? "grocery" : "restaurant",
+      sessionId: `coupon-free-${String(orderId || "").trim()}`,
+    }),
+  });
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok || json?.ok === false) {
+    throw new Error(json?.error || "Unable to finalize the zero-payment order.");
+  }
+
+  return json;
 }
 
 /* =========================
@@ -1485,13 +1600,17 @@ export default function CartPage() {
 
         repairRestaurantCartToBothKeys(rCart);
         repairGroceryCartToBothKeys(gCart);
+        await healLegacyZeroPriceCartRows();
+
+        const healedRestaurantCart = readRestaurantCartRaw();
+        const healedGroceryCart = readGroceryCartRaw();
 
         if (!cancelled) {
-          setItemsState(Array.isArray(rCart) ? rCart : []);
-          setGItemsState(Array.isArray(gCart) ? gCart : []);
+          setItemsState(Array.isArray(healedRestaurantCart) ? healedRestaurantCart : []);
+          setGItemsState(Array.isArray(healedGroceryCart) ? healedGroceryCart : []);
 
-          if ((rCart || []).length > 0) setCartMode("restaurant");
-          else if ((gCart || []).length > 0) setCartMode("grocery");
+          if ((healedRestaurantCart || []).length > 0) setCartMode("restaurant");
+          else if ((healedGroceryCart || []).length > 0) setCartMode("grocery");
           else setCartMode("restaurant");
         }
 
@@ -2093,12 +2212,41 @@ export default function CartPage() {
           price_each: clampMoney(Number(getGroceryUnitPrice(it) || 0), 0, 100000, 0),
           name: it.name || "Item",
         }));
+        if (!rows.length) throw new Error("No grocery items found. Please re-add items.");
 
         await insertGroceryOrderItemsAuto(rows);
+        void persistOrderItemSnapshot(
+          "grocery_orders",
+          String(orderRow.id),
+          rows.map((it) => ({
+            grocery_item_id: it.item_id,
+            item_id: it.item_id,
+            item_name: it.name,
+            name: it.name,
+            qty: it.qty,
+            price_each: it.price_each,
+            image_url: gItems.find((x) => String(x.id) === String(it.item_id))?.image_url || null,
+            selected_variant_label:
+              gItems.find((x) => String(x.id) === String(it.item_id))?.variant_label || null,
+            variant_label:
+              gItems.find((x) => String(x.id) === String(it.item_id))?.variant_label || null,
+          }))
+        );
 
 
-        // âœ… Grocery = ONLY Stripe (card)
-        // Keep DB insert logic same, then redirect to Stripe checkout.
+        if (total_amount <= 0) {
+          await markOrderPaidWithoutStripeWeb(orderRow.id, "grocery");
+          setGItemsState([]);
+          setCoupon("");
+          setCouponApplied(null);
+          setCouponDiscountValue(0);
+          setTip(0);
+          setInfoMsg("Order placed successfully!");
+          router.push("/groceries/orders");
+          return;
+        }
+
+        // âœ… Grocery = ONLY Stripe (card) when payment is still due
         setInfoMsg("Redirecting to secure Stripe checkout...");
         await payWithStripe(orderRow.id);
         return;
@@ -2336,9 +2484,27 @@ export default function CartPage() {
 
       const { error: oiErr } = await supabase.from("order_items").insert(order_items_rows);
       if (oiErr) throw oiErr;
+      void persistOrderItemSnapshot(
+        "orders",
+        String(orderRow.id),
+        items.map((it) => ({
+          menu_item_id: it.menu_item_id,
+          item_id: it.menu_item_id,
+          item_name: it.name || "Item",
+          name: it.name || "Item",
+          qty: sanitizeQty(Number(it.qty || 1)),
+          price_each: clampMoney(Number(it.price_each || 0), 0, 100000, 0),
+          image_url: it.image_url || null,
+          selected_variant_label: it.selected_variant_label || null,
+          selected_spice_level: it.selected_spice_level || null,
+          special_note: it.special_note || null,
+        }))
+      );
 
-      // âœ… Card payments -> Stripe after DB order exists
-      if (paymentMethod === "card") {
+      // âœ… Zero-pay coupon orders should complete immediately without Stripe
+      if (total_amount <= 0) {
+        await markOrderPaidWithoutStripeWeb(orderRow.id, "restaurant");
+      } else if (paymentMethod === "card") {
         setInfoMsg("Redirecting to secure Stripe checkout...");
         await payWithStripe(orderRow.id);
         return;

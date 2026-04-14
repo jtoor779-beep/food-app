@@ -386,6 +386,106 @@ function text(v) {
   return String(v || "").trim();
 }
 
+function normalizeCsvHeader(v) {
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function csvBool(v, fallback = false) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return fallback;
+  if (["true", "1", "yes", "y"].includes(s)) return true;
+  if (["false", "0", "no", "n"].includes(s)) return false;
+  return fallback;
+}
+
+function parseCsvText(textValue) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let i = 0;
+  let inQuotes = false;
+
+  while (i < textValue.length) {
+    const ch = textValue[i];
+    const next = textValue[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        cell += '"';
+        i += 2;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      i += 1;
+      continue;
+    }
+
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && next === "\n") i += 1;
+      row.push(cell);
+      if (row.some((value) => String(value || "").trim() !== "")) rows.push(row);
+      row = [];
+      cell = "";
+      i += 1;
+      continue;
+    }
+
+    cell += ch;
+    i += 1;
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    if (row.some((value) => String(value || "").trim() !== "")) rows.push(row);
+  }
+
+  return rows;
+}
+
+function csvCell(v) {
+  const value = String(v ?? "");
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function parseVariantsJsonCell(value) {
+  const raw = text(value);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row, idx) => ({
+        id: text(row?.id) || `variant_${idx + 1}`,
+        label: text(row?.label),
+        unit: text(row?.unit) || null,
+        value: row?.value == null || row?.value === "" ? null : safeNumber(row?.value, 0),
+        price: safeNumber(row?.price, 0),
+        original_price: safeNumber(row?.original_price ?? row?.price, 0),
+        discount_price: safeNumber(row?.discount_price, 0) || null,
+        discount_percent: safeNumber(row?.discount_percent, 0) || 0,
+        in_stock: row?.in_stock !== false,
+        is_default: row?.is_default === true || idx === 0,
+        sort_order: safeNumber(row?.sort_order, idx),
+      }))
+      .filter((row) => row.label && row.price > 0);
+  } catch {
+    return [];
+  }
+}
+
 async function fetchMenuItemMetaMap(itemIds) {
   const ids = Array.isArray(itemIds) ? itemIds.map((id) => text(id)).filter(Boolean) : [];
   if (!ids.length) return {};
@@ -497,6 +597,12 @@ export default function RestaurantManageMenuPage() {
   const [comboSearch, setComboSearch] = useState("");
   const [comboSelectedIds, setComboSelectedIds] = useState([]);
   const [comboVariantByItemId, setComboVariantByItemId] = useState({});
+  const [showCsvPanel, setShowCsvPanel] = useState(false);
+  const [csvFileName, setCsvFileName] = useState("");
+  const [csvRows, setCsvRows] = useState([]);
+  const [csvPreview, setCsvPreview] = useState([]);
+  const [csvErrors, setCsvErrors] = useState([]);
+  const [csvImporting, setCsvImporting] = useState(false);
 
   // filters
   const [q, setQ] = useState("");
@@ -536,6 +642,7 @@ export default function RestaurantManageMenuPage() {
   const [weightOptions, setWeightOptions] = useState([]);
 
   const fileRef = useRef(null);
+  const csvFileRef = useRef(null);
 
   // ✅ Read currency preference once (NO writes)
   useEffect(() => {
@@ -630,6 +737,14 @@ export default function RestaurantManageMenuPage() {
     setModalOpen(false);
     setSaving(false);
     setNote("");
+  }
+
+  function resetCsvUI() {
+    setCsvFileName("");
+    setCsvRows([]);
+    setCsvPreview([]);
+    setCsvErrors([]);
+    if (csvFileRef.current) csvFileRef.current.value = "";
   }
 
   function addWeightOption() {
@@ -1115,6 +1230,250 @@ export default function RestaurantManageMenuPage() {
     }
   }
 
+  function downloadSampleCsv() {
+    const sample =
+      "name,description,price,original_price,discount_price,image_url,category,is_veg,in_stock,is_best_seller,is_taxable,spice_level,allergens,calories,prep_mins,variants_json\n" +
+      'Chicken Biryani,Slow-cooked rice and chicken,12.99,14.99,12.99,https://example.com/biryani.jpg,Indian,false,true,true,true,medium,milk,650,20,"[{""label"":""Half plate"",""unit"":""pcs"",""value"":0.5,""price"":8.99,""original_price"":9.99,""discount_price"":8.99,""in_stock"":true,""is_default"":true}]"\n' +
+      'Paneer Tikka,Grilled paneer with spices,10.99,10.99,,https://example.com/paneer.jpg,Punjabi,true,true,false,true,mild,milk,420,15,[]\n';
+
+    const blob = new Blob([sample], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "restaurant_menu_sample.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleCsvFile(file) {
+    if (!file) return;
+
+    setErr("");
+    setNote("");
+    setCsvFileName(file.name || "");
+    setCsvRows([]);
+    setCsvPreview([]);
+    setCsvErrors([]);
+
+    try {
+      const fileText = await file.text();
+      const parsed = parseCsvText(fileText);
+      if (!parsed.length) {
+        setCsvErrors(["CSV file is empty."]);
+        return;
+      }
+
+      const rawHeaders = parsed[0] || [];
+      const headers = rawHeaders.map((header) => normalizeCsvHeader(header));
+      const bodyRows = parsed.slice(1);
+      const requiredHeaders = ["name", "price", "category"];
+      const missingHeaders = requiredHeaders.filter((header) => !headers.includes(header));
+      if (missingHeaders.length) {
+        setCsvErrors([`Missing required header(s): ${missingHeaders.join(", ")}`]);
+        return;
+      }
+
+      const mappedRows = bodyRows.map((cells, idx) => {
+        const obj = {};
+        headers.forEach((header, index) => {
+          obj[header] = text(cells?.[index] ?? "");
+        });
+
+        const rowNum = idx + 2;
+        const rowErrors = [];
+        if (!text(obj.name)) rowErrors.push("Missing name");
+        if (!text(obj.category)) rowErrors.push("Missing category");
+        const price = Number(obj.price);
+        if (!text(obj.price)) rowErrors.push("Missing price");
+        else if (!Number.isFinite(price) || price <= 0) rowErrors.push("Invalid price");
+        if (text(obj.variants_json)) {
+          try {
+            JSON.parse(text(obj.variants_json));
+          } catch {
+            rowErrors.push("Invalid variants_json");
+          }
+        }
+
+        return {
+          rowNum,
+          ...obj,
+          __errors: rowErrors,
+        };
+      });
+
+      const validRows = mappedRows.filter((row) => {
+        const keys = Object.keys(row).filter((key) => !key.startsWith("__") && key !== "rowNum");
+        return keys.some((key) => text(row[key]));
+      });
+      const errors = mappedRows
+        .filter((row) => row.__errors.length > 0)
+        .map((row) => `Row ${row.rowNum}: ${row.__errors.join(", ")}`);
+
+      setCsvRows(validRows);
+      setCsvPreview(validRows.slice(0, 20));
+      setCsvErrors(errors);
+      if (validRows.length) {
+        setNote(`CSV loaded: ${validRows.length} row(s) ready for preview.`);
+      }
+    } catch (e) {
+      setCsvErrors([e?.message || String(e)]);
+    }
+  }
+
+  async function importCsvRows() {
+    setErr("");
+    setNote("");
+
+    if (!restaurantId) return setErr("Select a restaurant first.");
+    if (!csvRows.length) return setErr("Load a CSV file first.");
+
+    setCsvImporting(true);
+    try {
+      const validRows = csvRows.filter((row) => !row.__errors?.length);
+      if (!validRows.length) {
+        setErr("No valid rows found in CSV.");
+        return;
+      }
+
+      let imported = 0;
+      let failed = 0;
+      const failList = [];
+
+      for (const row of validRows) {
+        try {
+          const originalPrice = safeNumber(row.original_price, safeNumber(row.price, 0));
+          const discountPrice = safeNumber(row.discount_price, 0);
+          const effectivePrice = discountPrice > 0 && discountPrice < originalPrice ? discountPrice : safeNumber(row.price, 0);
+          const variants = parseVariantsJsonCell(row.variants_json);
+
+          const { data: inserted, error: insErr } = await supabase
+            .from("menu_items")
+            .insert([
+              {
+                restaurant_id: restaurantId,
+                name: text(row.name),
+                price: effectivePrice,
+                cuisine: text(row.category) || null,
+                image_url: text(row.image_url) || null,
+                is_veg: csvBool(row.is_veg, false),
+                in_stock: csvBool(row.in_stock, true),
+                is_best_seller: csvBool(row.is_best_seller, false),
+              },
+            ])
+            .select("id")
+            .maybeSingle();
+
+          if (insErr) throw insErr;
+          const newId = inserted?.id;
+          if (!newId) throw new Error("Insert succeeded but item id could not be read.");
+
+          const compareAt = originalPrice > effectivePrice ? originalPrice : effectivePrice;
+          await tryUpdateMenuItemFields(newId, {
+            description: text(row.description) || null,
+            spice_level: text(row.spice_level) || null,
+            allergens: text(row.allergens) || null,
+            calories: text(row.calories) ? safeNumber(row.calories, null) : null,
+            prep_mins: text(row.prep_mins) ? safeNumber(row.prep_mins, null) : null,
+            is_taxable: csvBool(row.is_taxable, true),
+            original_price: compareAt > effectivePrice ? compareAt : null,
+            discount_price: discountPrice > 0 && discountPrice < compareAt ? discountPrice : null,
+            discount_percent:
+              compareAt > effectivePrice
+                ? Math.max(1, Math.round(((compareAt - effectivePrice) / compareAt) * 100))
+                : null,
+          });
+          await saveMenuItemMeta(newId, {
+            original_price: compareAt,
+            discount_price: discountPrice > 0 && discountPrice < compareAt ? discountPrice : null,
+            discount_percent:
+              compareAt > effectivePrice
+                ? Math.max(1, Math.round(((compareAt - effectivePrice) / compareAt) * 100))
+                : 0,
+            variants,
+          });
+          imported += 1;
+        } catch (e) {
+          failed += 1;
+          failList.push(`Row ${row.rowNum}: ${e?.message || String(e)}`);
+        }
+      }
+
+      setCsvErrors(failList);
+      await loadMenu(restaurantId);
+      setNote(`CSV import finished. Imported: ${imported}, Failed: ${failed}.`);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setCsvImporting(false);
+    }
+  }
+
+  async function downloadMenuCsv() {
+    try {
+      setErr("");
+      setNote("");
+      if (!restaurantId) throw new Error("Select a restaurant first.");
+
+      const header = [
+        "name",
+        "description",
+        "price",
+        "original_price",
+        "discount_price",
+        "image_url",
+        "category",
+        "is_veg",
+        "in_stock",
+        "is_best_seller",
+        "is_taxable",
+        "spice_level",
+        "allergens",
+        "calories",
+        "prep_mins",
+        "variants_json",
+      ];
+
+      const lines = [
+        header.join(","),
+        ...(items || []).map((item) =>
+          [
+            csvCell(item?.name),
+            csvCell(item?.description),
+            csvCell(item?.price),
+            csvCell(item?.original_price),
+            csvCell(item?.discount_price),
+            csvCell(item?.image_url),
+            csvCell(item?.cuisine),
+            csvCell(item?.is_veg === true ? "true" : "false"),
+            csvCell(item?.in_stock === false ? "false" : "true"),
+            csvCell(item?.is_best_seller === true ? "true" : "false"),
+            csvCell(item?.is_taxable === false ? "false" : "true"),
+            csvCell(item?.spice_level),
+            csvCell(item?.allergens),
+            csvCell(item?.calories),
+            csvCell(item?.prep_mins),
+            csvCell(JSON.stringify(Array.isArray(item?.variants) ? item.variants : [])),
+          ].join(",")
+        ),
+      ];
+
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${text(restaurantName || "restaurant_menu").replace(/[^\w-]+/g, "_")}_items_export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setNote(`CSV exported: ${(items || []).length} item(s).`);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    }
+  }
+
   return (
     <main style={pageBg}>
       {toast ? <div style={toastBox}>{toast}</div> : null}
@@ -1138,6 +1497,9 @@ export default function RestaurantManageMenuPage() {
             <Link href="/restaurants/settings" style={btnLight}>
               Restaurant Settings
             </Link>
+            <button onClick={() => setShowCsvPanel((value) => !value)} style={btnLight} disabled={!restaurantId || csvImporting}>
+              {showCsvPanel ? "Hide CSV Tools" : "CSV Import / Export"}
+            </button>
             <button onClick={openAddModal} style={btnDark}>
               + Add Item
             </button>
@@ -1267,6 +1629,99 @@ export default function RestaurantManageMenuPage() {
             </div>
           </div>
         </div>
+
+        {showCsvPanel ? (
+          <div style={{ ...panelGlass, marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 1000, color: "#0b1220" }}>CSV Import / Export</div>
+                <div style={{ marginTop: 4, color: "rgba(17,24,39,0.7)", fontWeight: 850 }}>
+                  Export your full menu to CSV, then upload that same file into another restaurant you own.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <button type="button" onClick={downloadSampleCsv} style={btnSmall}>
+                  Download Sample CSV
+                </button>
+                <button type="button" onClick={downloadMenuCsv} style={btnSmall} disabled={!restaurantId || csvImporting}>
+                  Export My Menu CSV
+                </button>
+                <input
+                  ref={csvFileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => handleCsvFile(e.target.files?.[0])}
+                />
+                <button type="button" onClick={() => csvFileRef.current?.click?.()} style={btnDark} disabled={!restaurantId || csvImporting}>
+                  Choose CSV
+                </button>
+                <button type="button" onClick={resetCsvUI} style={btnSmall} disabled={csvImporting}>
+                  Clear CSV
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={pill}>Required: name, price, category</span>
+              <span style={pill}>Optional: description, image_url, pricing fields, tax, spice, allergens, calories, prep, variants_json</span>
+              <span style={pill}>File: {csvFileName || "No file selected"}</span>
+            </div>
+
+            {csvErrors.length ? (
+              <div style={{ ...alertErr, marginTop: 12 }}>
+                <div style={{ fontWeight: 1000, marginBottom: 6 }}>CSV Issues</div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {csvErrors.slice(0, 20).map((msg, idx) => (
+                    <div key={`${msg}_${idx}`}>{msg}</div>
+                  ))}
+                  {csvErrors.length > 20 ? <div>+ {csvErrors.length - 20} more</div> : null}
+                </div>
+              </div>
+            ) : null}
+
+            {csvRows.length ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ fontWeight: 950, color: "#0b1220" }}>Preview Rows: {csvRows.length}</div>
+                  <button type="button" onClick={importCsvRows} style={btnDark} disabled={!restaurantId || csvImporting}>
+                    {csvImporting ? "Importing..." : "Import CSV"}
+                  </button>
+                </div>
+
+                <div style={{ overflowX: "auto", marginTop: 12 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+                    <thead>
+                      <tr>
+                        {["Row", "Name", "Price", "Category", "Veg", "Status"].map((cell) => (
+                          <th key={cell} style={{ textAlign: "left", padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.08)", fontSize: 12, color: "rgba(17,24,39,0.72)" }}>
+                            {cell}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csvPreview.map((row) => (
+                        <tr key={`restaurant_csv_row_${row.rowNum}`}>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>{row.rowNum}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>{row.name || "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>{row.price || "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>{row.category || "-"}</td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>
+                            {csvBool(row.is_veg, false) ? "Veg" : "Non-veg"}
+                          </td>
+                          <td style={{ padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontWeight: 850 }}>
+                            {row.__errors?.length ? "Invalid" : "Ready"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {loading ? <div style={{ marginTop: 12, color: "rgba(17,24,39,0.7)", fontWeight: 900 }}>Loading…</div> : null}
 

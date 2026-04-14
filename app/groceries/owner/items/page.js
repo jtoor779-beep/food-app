@@ -162,6 +162,14 @@ function parseCsvText(text) {
   return rows;
 }
 
+function csvCell(v) {
+  const value = String(v ?? "");
+  if (/[",\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
 // Try insert/update with different optional columns safely (because your DB may not have them)
 async function trySaveWithVariants({ table, mode, matchEq, basePayload, variants }) {
   // mode: "insert" | "update"
@@ -627,6 +635,72 @@ export default function GroceryOwnerItemsPage() {
     setCsvPreview([]);
     setCsvErrors([]);
     if (csvFileRef.current) csvFileRef.current.value = "";
+  }
+
+  async function downloadItemsCsv() {
+    try {
+      setErrMsg("");
+      setInfoMsg("");
+
+      if (!storeId) throw new Error("Select a store first.");
+
+      const categoryMap = new Map((categories || []).map((row) => [String(row?.id), clean(row?.name)]));
+      const { data: subRows, error: subErr } = await supabase
+        .from("grocery_subcategories")
+        .select("id, name")
+        .eq("store_id", storeId);
+
+      if (subErr) throw subErr;
+
+      const subMap = new Map((subRows || []).map((row) => [String(row?.id), clean(row?.name)]));
+      const header = [
+        "name",
+        "description",
+        "price",
+        "image_url",
+        "category",
+        "subcategory",
+        "is_veg",
+        "is_available",
+        "in_stock",
+        "is_best_seller",
+        "is_recommended",
+        "is_taxable",
+      ];
+
+      const lines = [
+        header.join(","),
+        ...(items || []).map((item) =>
+          [
+            csvCell(item?.name),
+            csvCell(item?.description),
+            csvCell(item?.price),
+            csvCell(item?.image_url),
+            csvCell(item?.category || categoryMap.get(String(item?.category_id)) || ""),
+            csvCell(subMap.get(String(item?.subcategory_id)) || item?.subcategory || ""),
+            csvCell(item?.is_veg === true ? "true" : "false"),
+            csvCell(item?.is_available === false ? "false" : "true"),
+            csvCell(item?.in_stock === false ? "false" : "true"),
+            csvCell(item?.is_best_seller === true ? "true" : "false"),
+            csvCell(item?.is_recommended === true ? "true" : "false"),
+            csvCell(item?.is_taxable === false ? "false" : "true"),
+          ].join(",")
+        ),
+      ];
+
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeIdPart(activeStore?.name || "grocery_store")}_items_export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setInfoMsg(`CSV exported: ${(items || []).length} item(s).`);
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    }
   }
 
   function resetForm() {
@@ -2456,6 +2530,15 @@ export default function GroceryOwnerItemsPage() {
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <button type="button" onClick={downloadSampleCsv} style={btnSmallOutline}>
                   Download Sample CSV
+                </button>
+
+                <button
+                  type="button"
+                  onClick={downloadItemsCsv}
+                  style={btnSmallOutline}
+                  disabled={!storeId || csvImporting || busy}
+                >
+                  Export My Items CSV
                 </button>
 
                 <input

@@ -372,6 +372,10 @@ function GroceryMenuInner() {
     const cart = readCart() || [];
     const idx = cart.findIndex((x) => x?.id === item.id);
     const chosenPrice = getItemPrice(item, currency);
+    if (!Number.isFinite(Number(chosenPrice)) || Number(chosenPrice) <= 0) {
+      setErrMsg("Invalid item price. Please fix this product price before adding to cart.");
+      return;
+    }
 
     if (idx >= 0) {
       cart[idx].qty = (Number(cart[idx].qty || 0) || 0) + 1;

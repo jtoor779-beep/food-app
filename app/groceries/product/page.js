@@ -432,6 +432,10 @@ function GroceryProductInner() {
     const idx = cart.findIndex((x) => String(x?.cart_key || x?.id) === String(cartKey));
 
     const unitPrice = effectivePrice;
+    if (!Number.isFinite(Number(unitPrice)) || Number(unitPrice) <= 0) {
+      setErrMsg("Invalid item price. Please fix this product price before adding to cart.");
+      return;
+    }
 
     if (idx >= 0) {
       cart[idx].qty = (Number(cart[idx].qty || 0) || 0) + 1;
@@ -948,6 +952,10 @@ function GroceryProductInner() {
                             onClick={() => {
                               // When adding from "similar", we use base price because variants are on product page.
                               // Customer can open Details to pick weight option.
+                              if (!Number.isFinite(num(p.price)) || num(p.price) <= 0) {
+                                setErrMsg("Invalid item price. Please fix this product price before adding to cart.");
+                                return;
+                              }
                               const cart = readCart() || [];
                               const idx = cart.findIndex((x) => String(x?.cart_key || x?.id) === String(p.id));
                               if (idx >= 0) cart[idx].qty = (Number(cart[idx].qty || 0) || 0) + 1;

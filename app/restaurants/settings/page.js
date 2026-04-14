@@ -133,6 +133,16 @@ const btnSmall = {
   fontWeight: 950,
 };
 
+const btnDanger = {
+  border: "1px solid rgba(220,38,38,0.22)",
+  background: "rgba(254,242,242,0.96)",
+  color: "#991b1b",
+  fontWeight: 950,
+  padding: "10px 14px",
+  borderRadius: 12,
+  cursor: "pointer",
+};
+
 const inputStyle = {
   width: "100%",
   padding: "10px 12px",
@@ -268,7 +278,7 @@ const LocationPickerMap = dynamic(
       value,
       onChange,
       height = 260,
-      defaultCenter = { lat: 35.3733, lng: -119.0187 }, // Bakersfield-ish default
+      defaultCenter = { lat: 35.3733, lng: -119.0187 },
       defaultZoom = 12,
     }) {
       const center = value?.lat && value?.lng ? { lat: value.lat, lng: value.lng } : defaultCenter;
@@ -292,6 +302,7 @@ export default function RestaurantSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [errMsg, setErrMsg] = useState("");
   const [infoMsg, setInfoMsg] = useState("");
@@ -299,17 +310,14 @@ export default function RestaurantSettingsPage() {
   const [ownerEmail, setOwnerEmail] = useState("");
   const [userId, setUserId] = useState("");
 
-  // all restaurants for this owner
   const [restaurants, setRestaurants] = useState([]);
 
-  // currently selected/active restaurant
   const [restaurantId, setRestaurantId] = useState("");
   const [name, setName] = useState("");
   const [city, setCity] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [file, setFile] = useState(null);
 
-  // ✅ Location for selected restaurant
   const [lat, setLat] = useState(null);
   const [lng, setLng] = useState(null);
   const [opensAtTime, setOpensAtTime] = useState("");
@@ -321,13 +329,10 @@ export default function RestaurantSettingsPage() {
 
   const [isNewOwnerNoRestaurant, setIsNewOwnerNoRestaurant] = useState(false);
 
-  // Add new restaurant UI
   const [showAddNew, setShowAddNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCity, setNewCity] = useState("");
   const [newFile, setNewFile] = useState(null);
-
-  // ✅ Location for new restaurant
   const [newLat, setNewLat] = useState(null);
   const [newLng, setNewLng] = useState(null);
 
@@ -362,7 +367,6 @@ export default function RestaurantSettingsPage() {
     const path = `${uid}/${Date.now()}-${safeName}`;
 
     const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, fileToUpload, { upsert: true });
-
     if (upErr) throw upErr;
 
     const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
@@ -370,8 +374,8 @@ export default function RestaurantSettingsPage() {
   }
 
   async function setActiveRestaurantOnProfile(restId, uid) {
-    if (!restId || !uid) return;
-    const { error } = await supabase.from("profiles").update({ active_restaurant_id: restId }).eq("user_id", uid);
+    if (!uid) return;
+    const { error } = await supabase.from("profiles").update({ active_restaurant_id: restId || null }).eq("user_id", uid);
     if (error) throw error;
   }
 
@@ -438,16 +442,21 @@ export default function RestaurantSettingsPage() {
       const list = await loadOwnerRestaurants(user.id);
       setRestaurants(list);
 
-      // ✅ New owner: no restaurants
       if (!list.length) {
         setIsNewOwnerNoRestaurant(true);
         setRestaurantId("");
         setName("");
         setCity("");
         setImageUrl("");
+        setFile(null);
+        setLat(null);
+        setLng(null);
+        setOpensAtTime("");
+        setClosesAtTime("");
+        setTimeZone(defaultTimeZone());
+        setManualNextOpenAt("");
+        setAcceptingOrders(true);
         setShowAddNew(true);
-
-        // reset new form
         setNewName("");
         setNewCity("");
         setNewFile(null);
@@ -458,14 +467,12 @@ export default function RestaurantSettingsPage() {
 
       setIsNewOwnerNoRestaurant(false);
 
-      // pick active from profile if exists, else first
       const activeId = prof?.active_restaurant_id || null;
       const chosen = activeId ? list.find((r) => r.id === activeId) : null;
       const selected = chosen || list[0];
 
       hydrateSelectedRestaurant(selected);
 
-      // ensure profile active is set
       if (!activeId || activeId !== selected.id) {
         await setActiveRestaurantOnProfile(selected.id, user.id);
       }
@@ -493,6 +500,62 @@ export default function RestaurantSettingsPage() {
       setErrMsg(e?.message || String(e));
     } finally {
       setSwitching(false);
+    }
+  }
+
+  async function deleteSelectedRestaurant() {
+    if (!restaurantId) return;
+
+    const selected = restaurants.find((r) => r.id === restaurantId);
+    const selectedName = selected?.name || "this restaurant";
+
+    const confirmed = window.confirm(`Delete "${selectedName}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setErrMsg("");
+    setInfoMsg("");
+
+    try {
+      const { error: deleteErr } = await supabase
+        .from("restaurants")
+        .delete()
+        .eq("id", restaurantId)
+        .eq("owner_user_id", userId);
+
+      if (deleteErr) throw deleteErr;
+
+      const list = await loadOwnerRestaurants(userId);
+      setRestaurants(list);
+
+      if (!list.length) {
+        await setActiveRestaurantOnProfile(null, userId);
+        setIsNewOwnerNoRestaurant(true);
+        setRestaurantId("");
+        setName("");
+        setCity("");
+        setImageUrl("");
+        setFile(null);
+        setLat(null);
+        setLng(null);
+        setOpensAtTime("");
+        setClosesAtTime("");
+        setTimeZone(defaultTimeZone());
+        setManualNextOpenAt("");
+        setAcceptingOrders(true);
+        setShowAddNew(true);
+        setInfoMsg("✅ Restaurant deleted. You can create a new restaurant now.");
+        return;
+      }
+
+      const fallback = list[0];
+      hydrateSelectedRestaurant(fallback);
+      await setActiveRestaurantOnProfile(fallback.id, userId);
+      setInfoMsg("✅ Restaurant deleted successfully.");
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -544,7 +607,6 @@ export default function RestaurantSettingsPage() {
       setLat(Number(updated?.lat));
       setLng(Number(updated?.lng));
 
-      // refresh list (so future switches have lat/lng)
       const list = await loadOwnerRestaurants(userId);
       setRestaurants(list);
 
@@ -565,8 +627,6 @@ export default function RestaurantSettingsPage() {
       if (!userId) throw new Error("Not logged in.");
       if (!newName.trim()) throw new Error("Please enter restaurant name.");
       if (!newCity.trim()) throw new Error("Please enter city.");
-
-      // ✅ Require location for new restaurants
       if (!Number.isFinite(Number(newLat)) || !Number.isFinite(Number(newLng))) {
         throw new Error("Please set restaurant location (pick on map or use GPS).");
       }
@@ -596,16 +656,13 @@ export default function RestaurantSettingsPage() {
 
       if (insErr) throw insErr;
 
-      // update profile active restaurant to the new one
       await setActiveRestaurantOnProfile(created.id, userId);
 
-      // reload list and select the new one
       const list = await loadOwnerRestaurants(userId);
       setRestaurants(list);
 
       hydrateSelectedRestaurant(created);
 
-      // reset "add new"
       setNewName("");
       setNewCity("");
       setNewFile(null);
@@ -655,8 +712,6 @@ export default function RestaurantSettingsPage() {
       setCity(updated?.city || "");
       setImageUrl(updated?.image_url || "");
       setFile(null);
-
-      // keep location state in sync (in case row had values)
       setLat(Number.isFinite(Number(updated?.lat)) ? Number(updated.lat) : lat);
       setLng(Number.isFinite(Number(updated?.lng)) ? Number(updated.lng) : lng);
       setOpensAtTime(updated?.opens_at_time || opensAtTime);
@@ -665,7 +720,6 @@ export default function RestaurantSettingsPage() {
       setManualNextOpenAt(toDateTimeInputValue(updated?.manual_next_open_at) || manualNextOpenAt);
       setAcceptingOrders(updated?.accepting_orders !== false);
 
-      // refresh restaurant list names for dropdown
       const list = await loadOwnerRestaurants(userId);
       setRestaurants(list);
 
@@ -756,13 +810,11 @@ export default function RestaurantSettingsPage() {
 
   useEffect(() => {
     loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <main style={pageBg}>
       <div style={shell}>
-        {/* HERO */}
         <div style={heroGlass}>
           <div style={{ minWidth: 260 }}>
             <div style={pill}>{isNewOwnerNoRestaurant ? "Owner • Setup" : "Owner • Restaurant Settings"}</div>
@@ -777,12 +829,7 @@ export default function RestaurantSettingsPage() {
           <div style={metaRow}>
             <span style={pill}>Owner: {ownerEmail || "-"}</span>
             <span style={pill}>Active: {restaurantId ? String(restaurantId).slice(0, 8) + "…" : "-"}</span>
-            <button
-              onClick={loadAll}
-              style={btnLight}
-              disabled={loading || saving || switching}
-              title="Reload everything"
-            >
+            <button onClick={loadAll} style={btnLight} disabled={loading || saving || switching || deleting} title="Reload everything">
               Reload
             </button>
           </div>
@@ -794,7 +841,6 @@ export default function RestaurantSettingsPage() {
 
         {!loading ? (
           <>
-            {/* Switch + Add New controls (only when owner already has restaurants) */}
             {!isNewOwnerNoRestaurant ? (
               <div style={{ ...cardGlass, marginTop: 12 }}>
                 <div style={cardTitle}>
@@ -810,7 +856,7 @@ export default function RestaurantSettingsPage() {
                       setInfoMsg("");
                     }}
                     style={btnLight}
-                    disabled={saving || switching}
+                    disabled={saving || switching || deleting}
                   >
                     {showAddNew ? "Close Add New" : "+ Add New Restaurant"}
                   </button>
@@ -821,12 +867,7 @@ export default function RestaurantSettingsPage() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
                   <div>
                     <div style={label}>Select Restaurant</div>
-                    <select
-                      value={restaurantId || ""}
-                      onChange={(e) => switchRestaurant(e.target.value)}
-                      disabled={switching}
-                      style={inputStyle}
-                    >
+                    <select value={restaurantId || ""} onChange={(e) => switchRestaurant(e.target.value)} disabled={switching || deleting} style={inputStyle}>
                       {restaurants.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name || "Restaurant"} {r.city ? `(${r.city})` : ""}
@@ -839,8 +880,17 @@ export default function RestaurantSettingsPage() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button
+                      onClick={deleteSelectedRestaurant}
+                      style={btnDanger}
+                      disabled={!restaurantId || deleting || saving || switching}
+                      title={!restaurantId ? "Select a restaurant first" : "Delete selected restaurant"}
+                    >
+                      {deleting ? "Deleting…" : "Delete Restaurant"}
+                    </button>
+
                     <div style={{ ...pill, background: "rgba(255,255,255,0.9)" }}>
-                      {switching ? "Switching…" : "Ready"}
+                      {deleting ? "Deleting…" : switching ? "Switching…" : "Ready"}
                     </div>
                   </div>
                 </div>
@@ -886,12 +936,7 @@ export default function RestaurantSettingsPage() {
                   </div>
                   <div>
                     <div style={label}>Next opening time after manual close</div>
-                    <input
-                      type="datetime-local"
-                      value={manualNextOpenAt}
-                      onChange={(e) => setManualNextOpenAt(e.target.value)}
-                      style={inputStyle}
-                    />
+                    <input type="datetime-local" value={manualNextOpenAt} onChange={(e) => setManualNextOpenAt(e.target.value)} style={inputStyle} />
                   </div>
                 </div>
 
@@ -914,7 +959,6 @@ export default function RestaurantSettingsPage() {
               </div>
             ) : null}
 
-            {/* ADD NEW Restaurant (new owner or add another) */}
             {(isNewOwnerNoRestaurant || showAddNew) ? (
               <div style={{ ...cardGlass, marginTop: 12 }}>
                 <div style={cardTitle}>
@@ -930,27 +974,16 @@ export default function RestaurantSettingsPage() {
                 <div style={divider} />
 
                 <div style={grid2}>
-                  {/* LEFT (form) */}
                   <div style={{ ...cardGlass, boxShadow: "none" }}>
                     <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant details</div>
                     <div style={{ marginTop: 12 }}>
                       <div style={label}>Restaurant Name</div>
-                      <input
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        placeholder="e.g. Toor Kitchen"
-                        style={inputStyle}
-                      />
+                      <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Toor Kitchen" style={inputStyle} />
                     </div>
 
                     <div style={{ marginTop: 12 }}>
                       <div style={label}>City</div>
-                      <input
-                        value={newCity}
-                        onChange={(e) => setNewCity(e.target.value)}
-                        placeholder="e.g. Bakersfield"
-                        style={inputStyle}
-                      />
+                      <input value={newCity} onChange={(e) => setNewCity(e.target.value)} placeholder="e.g. Bakersfield" style={inputStyle} />
                     </div>
 
                     <div style={{ marginTop: 12 }}>
@@ -1003,7 +1036,6 @@ export default function RestaurantSettingsPage() {
                     </div>
                   </div>
 
-                  {/* RIGHT (map) */}
                   <div style={{ ...cardGlass, boxShadow: "none" }}>
                     <div style={{ fontWeight: 1000, color: "#0b1220" }}>Restaurant location (Required)</div>
                     <div style={{ marginTop: 8, ...tiny }}>Click on map to drop/adjust the pin.</div>
@@ -1022,10 +1054,8 @@ export default function RestaurantSettingsPage() {
               </div>
             ) : null}
 
-            {/* EDIT Selected Restaurant */}
             {!isNewOwnerNoRestaurant ? (
               <div style={{ marginTop: 12, ...grid2 }}>
-                {/* LEFT: Account/Restaurant card (customer-like) */}
                 <div style={cardGlass}>
                   <div style={cardTitle}>
                     <div>
@@ -1038,7 +1068,6 @@ export default function RestaurantSettingsPage() {
                   <div style={{ marginTop: 12 }}>
                     <div style={imgWrap}>
                       {imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={imageUrl} alt="Restaurant" style={img} />
                       ) : (
                         <div style={{ fontWeight: 950, color: "rgba(17,24,39,0.55)" }}>No image uploaded yet</div>
@@ -1048,12 +1077,7 @@ export default function RestaurantSettingsPage() {
                     <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                       <label style={{ ...btnLight, display: "inline-flex", gap: 8, alignItems: "center" }}>
                         <span style={{ fontWeight: 950 }}>Choose Image</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => setFile(e.target.files?.[0] || null)}
-                          style={{ display: "none" }}
-                        />
+                        <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} style={{ display: "none" }} />
                       </label>
 
                       <div style={tiny}>{file ? `Selected: ${file?.name || "image"}` : "Tip: Use wide image for best look."}</div>
@@ -1087,7 +1111,6 @@ export default function RestaurantSettingsPage() {
                   </div>
                 </div>
 
-                {/* RIGHT: Location card (customer-like) */}
                 <div style={cardGlass}>
                   <div style={cardTitle}>
                     <div>
@@ -1161,7 +1184,6 @@ export default function RestaurantSettingsPage() {
         ) : null}
       </div>
 
-      {/* responsive fix */}
       <style jsx>{`
         @media (max-width: 980px) {
           div[style*="grid-template-columns: 1fr 1.25fr"] {

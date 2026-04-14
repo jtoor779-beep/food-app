@@ -57,6 +57,7 @@ type GroceryItem = {
   name: string | null;
   price: number | null;
   image_url?: string | null;
+  category?: string | null;
 
   // optional
   in_stock?: boolean | null;
@@ -72,11 +73,119 @@ type HomeFilterCategory = {
   is_enabled?: boolean | null;
 };
 
+type HomepageCategoryRule = {
+  id: string;
+  key: string;
+  label: string;
+  kind: "restaurant" | "grocery";
+  match_type: "cuisine" | "category";
+  match_value: string;
+  item_limit: number;
+  sort_order: number;
+  is_enabled: boolean;
+};
+
+type HomepageCategorySection = {
+  id: string;
+  key: string;
+  label: string;
+  kind: "restaurant" | "grocery";
+  sort_order: number;
+  items: Array<MenuItem | GroceryItem>;
+};
+
 function normalizeRole(r: unknown) {
   return String(r || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
+}
+
+function cleanText(v: unknown) {
+  return String(v || "").trim();
+}
+
+function normalizeHomepageRuleKey(value: unknown) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeHomepageCategoryAdminRules(value: unknown): HomepageCategoryRule[] {
+  if (!value || typeof value !== "object") return [];
+
+  const sections = Array.isArray((value as any)?.sections) ? (value as any).sections : [];
+
+  return sections
+    .map((row: any) => {
+      const kind = cleanText(row?.kind).toLowerCase() === "grocery" ? "grocery" : "restaurant";
+      const matchType = kind === "grocery" ? "category" : "cuisine";
+      const label = cleanText(row?.label);
+      const matchValue = cleanText(row?.match_value);
+      const itemLimit = Math.max(1, Number(row?.item_limit || 8) || 8);
+      const sortOrder = Number.isFinite(Number(row?.sort_order)) ? Number(row.sort_order) : 0;
+      const isEnabled = row?.is_enabled !== false;
+
+      if (!label || !matchValue || !isEnabled) return null;
+
+      return {
+        id: cleanText(row?.id) || `${kind}_${normalizeHomepageRuleKey(label)}`,
+        key: cleanText(row?.key) || normalizeHomepageRuleKey(label),
+        label,
+        kind,
+        match_type: matchType as "cuisine" | "category",
+        match_value: matchValue,
+        item_limit: itemLimit,
+        sort_order: sortOrder,
+        is_enabled: isEnabled,
+      };
+    })
+    .filter(Boolean)
+    .sort(
+      (a: any, b: any) =>
+        Number(a?.sort_order || 0) - Number(b?.sort_order || 0) ||
+        String(a?.label || "").localeCompare(String(b?.label || ""))
+    ) as HomepageCategoryRule[];
+}
+
+function buildHomepageCategorySectionsFromRules(
+  items: Array<MenuItem | GroceryItem>,
+  kind: "restaurant" | "grocery",
+  rules: HomepageCategoryRule[]
+): HomepageCategorySection[] {
+  const filteredRules = (rules || []).filter((rule) => rule.kind === kind && rule.is_enabled !== false);
+  if (!filteredRules.length) return [];
+
+  return filteredRules
+    .map((rule) => {
+      const ruleValue = cleanText(rule.match_value).toLowerCase();
+      const matchedItems = (items || [])
+        .filter((item) => {
+          const rawValue =
+            kind === "restaurant"
+              ? cleanText((item as MenuItem)?.cuisine).toLowerCase()
+              : cleanText((item as GroceryItem)?.category).toLowerCase();
+          if (!rawValue || !ruleValue) return false;
+          return rawValue === ruleValue || rawValue.includes(ruleValue) || ruleValue.includes(rawValue);
+        })
+        .filter((item, index, arr) => arr.findIndex((row) => String((row as any)?.id) === String((item as any)?.id)) === index)
+        .slice(0, Math.max(1, Number(rule.item_limit || 8) || 8));
+
+      if (!matchedItems.length) return null;
+
+      return {
+        id: rule.id,
+        key: rule.key,
+        label: rule.label,
+        kind,
+        sort_order: Number(rule.sort_order || 0),
+        items: matchedItems,
+      };
+    })
+    .filter(Boolean) as HomepageCategorySection[];
 }
 
 /* =========================================================
@@ -558,6 +667,7 @@ function normalizeHomeBannerFx(v: any): HomeBannerFx {
 
 export default function CustomerHomeDashboard() {
   const router = useRouter();
+  const showLegacyHomeBanner = false;
 
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string>("");
@@ -580,6 +690,7 @@ export default function CustomerHomeDashboard() {
 
   // ✅ NEW: admin-controlled filter categories
   const [homeCategories, setHomeCategories] = useState<{ key: string; label: string }[]>(DEFAULT_CATEGORIES);
+  const [homepageCategoryRules, setHomepageCategoryRules] = useState<HomepageCategoryRule[]>([]);
 
   const [q, setQ] = useState("");
   const [activeCat, setActiveCat] = useState<string>("recommended");
@@ -1164,6 +1275,25 @@ export default function CustomerHomeDashboard() {
       }
     }
 
+    async function loadHomepageCategoryRules() {
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("key, value_json, updated_at")
+          .eq("key", "app_homepage_categories")
+          .order("updated_at", { ascending: false })
+          .limit(1);
+
+        if (error) throw error;
+
+        const latest = Array.isArray(data) ? data[0] : null;
+        return normalizeHomepageCategoryAdminRules(latest?.value_json || {});
+      } catch (rulesErr: any) {
+        console.warn("Homepage category rules load warning:", rulesErr?.message || String(rulesErr));
+        return [];
+      }
+    }
+
     async function loadHomeFeaturedData(safeItems: MenuItem[], gItems: GroceryItem[]) {
       try {
         const homeFeaturedRes = await quietSelectFromTables([
@@ -1246,20 +1376,26 @@ export default function CustomerHomeDashboard() {
         const r = normalizeRole((prof as any)?.role);
         setRole(r);
 
-        if (r === "restaurant_owner") {
-          router.push("/restaurants/orders");
+        if (r === "owner" || r === "restaurant_owner") {
+          router.push("/restaurants/dashboard");
+          return;
+        }
+
+        if (r === "grocery_owner") {
+          router.push("/groceries/owner/dashboard");
           return;
         }
       } else {
         setRole("");
       }
 
-      const [restaurantData, groceryData, nextCategories, nextBannerData, nextBannerFx] = await Promise.all([
+      const [restaurantData, groceryData, nextCategories, nextBannerData, nextBannerFx, nextHomepageCategoryRules] = await Promise.all([
         loadRestaurantsAndItems(),
         loadGroceries(),
         loadHomeCategories(),
         loadHomeBannerData(),
         loadHomeBannerFxSettings(),
+        loadHomepageCategoryRules(),
       ]);
 
       setRestaurants(restaurantData.restList);
@@ -1272,6 +1408,7 @@ export default function CustomerHomeDashboard() {
       setBannerIndex(nextBannerData.bannerIndex);
       setBannerReady(true);
       setHomeBannerFx(nextBannerFx);
+      setHomepageCategoryRules(nextHomepageCategoryRules);
       refreshCartState();
       setLoading(false);
 
@@ -1309,6 +1446,7 @@ export default function CustomerHomeDashboard() {
         setBannerIndex(0);
         setBannerReady(true);
         setHomeBannerFx(DEFAULT_HOME_BANNER_FX);
+        setHomepageCategoryRules([]);
       }
     } finally {
       setLoading(false);
@@ -1585,6 +1723,38 @@ export default function CustomerHomeDashboard() {
     return next.slice(0, 8);
   }, [groceryItems, q, groceryStoreMap, featuredGroceryIds, homeFeaturedReady]);
 
+  const isDefaultHomepageView =
+    activeCat === "recommended" && !q.trim() && !vegOnly && !bestsellerOnly && !under199 && !inStockOnly;
+
+  const homepageCategorySections = useMemo(() => {
+    if (!isDefaultHomepageView || homepageCategoryRules.length === 0) return [];
+
+    const baseMenuItems =
+      homeFeaturedReady && featuredMenuIds.length > 0
+        ? (featuredMenuIds.map((id) => items.find((it) => it.id === id)).filter(Boolean) as MenuItem[])
+        : items;
+
+    const baseGroceryItems =
+      homeFeaturedReady && featuredGroceryIds.length > 0
+        ? (featuredGroceryIds.map((id) => groceryItems.find((it) => it.id === id)).filter(Boolean) as GroceryItem[])
+        : groceryItems;
+
+    const restaurantSections = buildHomepageCategorySectionsFromRules(baseMenuItems, "restaurant", homepageCategoryRules);
+    const grocerySections = buildHomepageCategorySectionsFromRules(baseGroceryItems, "grocery", homepageCategoryRules);
+
+    return [...restaurantSections, ...grocerySections].sort(
+      (a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || a.label.localeCompare(b.label)
+    );
+  }, [
+    isDefaultHomepageView,
+    homepageCategoryRules,
+    homeFeaturedReady,
+    featuredMenuIds,
+    featuredGroceryIds,
+    items,
+    groceryItems,
+  ]);
+
   // kept for old logic safety; not rendered (rows removed)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const filteredGroceryStores = useMemo(() => {
@@ -1697,6 +1867,189 @@ export default function CustomerHomeDashboard() {
   const heroThumbs = useMemo(() => {
     return (heroSlides || []).slice(0, 8);
   }, [heroSlides]);
+
+  function renderRestaurantCard(it: MenuItem) {
+    const c = normCuisine(it.cuisine);
+    const tags = c ? [c] : tagsFromName(it.name || "");
+    const out = it.in_stock === false;
+    const qty = cartMap[it.id] || 0;
+
+    return (
+      <div key={it.id} className="premiumCard" style={cardGlass}>
+        <div style={{ ...imgWrap, cursor: "pointer" }} onClick={() => setSelected(it)} title="Click to view details">
+          {it.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={it.image_url} alt={it.name || "item"} style={img} />
+          ) : (
+            <div style={imgPlaceholder}>No image</div>
+          )}
+
+          <div style={cardTopBadges}>
+            <span style={badgeDark}>⭐ {demoRating(it.restaurant_id)}</span>
+            <span style={badgeLight}>{demoEta(it.restaurant_id)} mins</span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={() => setSelected(it)} style={titleBtn} title="Open details">
+            {it.name || "Item"}
+          </button>
+          <div style={{ fontWeight: 950, color: "#111827" }}>{money(it.price, currency)}</div>
+        </div>
+
+        <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
+          {getRestaurantName(it.restaurant_id)}
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {it.is_veg === true ? <span style={badgeVeg}>VEG</span> : null}
+          {it.is_veg === false ? <span style={badgeNonVeg}>NON-VEG</span> : null}
+          {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
+          {out ? <span style={badgeOut}>OUT</span> : null}
+          {tags.slice(0, 2).map((t) => (
+            <span key={t} style={tag}>
+              {t}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {qty <= 0 ? (
+            <button
+              onClick={() => inc(it)}
+              style={{
+                ...btnSmallPrimaryBtn,
+                opacity: out ? 0.55 : 1,
+                cursor: out ? "not-allowed" : "pointer",
+              }}
+              disabled={out}
+            >
+              + Add to cart
+            </button>
+          ) : (
+            <div style={stepper}>
+              <button onClick={() => dec(it)} style={stepBtn}>
+                –
+              </button>
+              <div style={stepQty}>{qty}</div>
+              <button onClick={() => inc(it)} style={stepBtn} disabled={out}>
+                +
+              </button>
+            </div>
+          )}
+
+          <button onClick={() => setSelected(it)} style={btnSmallOutlineBtn}>
+            Details
+          </button>
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Link href="/menu" style={btnSmallOutline}>
+            View in Menu
+          </Link>
+          <Link href="/restaurants" style={btnSmallOutline}>
+            Restaurant
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  function renderGroceryCard(it: GroceryItem) {
+    const out = it.in_stock === false;
+    const qty = groceryCartMap[it.id] || 0;
+
+    return (
+      <div key={it.id} className="premiumCard" style={cardGlass}>
+        <div style={{ ...imgWrap, cursor: "pointer" }} onClick={() => setSelectedGrocery(it)} title="Click to view details">
+          {it.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={it.image_url} alt={it.name || "item"} style={img} />
+          ) : (
+            <div style={imgPlaceholder}>No image</div>
+          )}
+
+          <div style={cardTopBadges}>
+            <span style={badgeDark}>⭐ {demoRating(it.store_id)}</span>
+            <span style={badgeLight}>{demoEta(it.store_id)} mins</span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={() => setSelectedGrocery(it)} style={titleBtn} title="Open details">
+            {it.name || "Item"}
+          </button>
+          <div style={{ fontWeight: 950, color: "#111827" }}>{money(it.price, currency)}</div>
+        </div>
+
+        <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
+          {getGroceryStoreName(it.store_id)}
+        </div>
+
+        <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
+          {out ? <span style={badgeOut}>OUT</span> : null}
+          <span style={tag}>{cleanText(it.category) || "grocery"}</span>
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {qty <= 0 ? (
+            <button
+              onClick={() => incGrocery(it)}
+              style={{
+                ...btnSmallPrimaryBtn,
+                opacity: out ? 0.55 : 1,
+                cursor: out ? "not-allowed" : "pointer",
+              }}
+              disabled={out}
+            >
+              + Add to cart
+            </button>
+          ) : (
+            <div style={stepper}>
+              <button onClick={() => decGrocery(it)} style={stepBtn}>
+                –
+              </button>
+              <div style={stepQty}>{qty}</div>
+              <button onClick={() => incGrocery(it)} style={stepBtn} disabled={out}>
+                +
+              </button>
+            </div>
+          )}
+
+          <button onClick={() => setSelectedGrocery(it)} style={btnSmallOutlineBtn}>
+            Details
+          </button>
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Link href="/groceries" style={btnSmallOutline}>
+            Open Groceries
+          </Link>
+          <Link href={`/groceries?store=${encodeURIComponent(it.store_id)}`} style={btnSmallOutline}>
+            Open Store
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  function renderHomepageCategorySection(section: HomepageCategorySection) {
+    return (
+      <section key={`${section.kind}-${section.key}`}>
+        <div style={rowTitle}>
+          <h2 style={sectionTitle}>{section.label}</h2>
+          <span style={subtle}>{section.kind === "grocery" ? "Fresh picks" : "Top picks"}</span>
+        </div>
+
+        <div className="hfScrollRow" style={scrollRow}>
+          {section.kind === "grocery"
+            ? section.items.map((item) => renderGroceryCard(item as GroceryItem))
+            : section.items.map((item) => renderRestaurantCard(item as MenuItem))}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <main style={pageBg}>
@@ -2003,44 +2356,45 @@ export default function CustomerHomeDashboard() {
           width: "100%",
         }}
       >
-        {/* ✅ HOME BANNER */}
-        <div style={heroBanner} aria-label="Home banner">
-          <div style={heroSplashMedia}>
-            {!bannerReady ? (
-              <div style={heroImgPlaceholder}>Loading banner…</div>
-            ) : activeBanner?.url ? (
-              <>
-                {leavingBanner?.url ? (
+        {showLegacyHomeBanner ? (
+          <div style={heroBanner} aria-label="Home banner">
+            <div style={heroSplashMedia}>
+              {!bannerReady ? (
+                <div style={heroImgPlaceholder}>Loading banner…</div>
+              ) : activeBanner?.url ? (
+                <>
+                  {leavingBanner?.url ? (
+                    <div
+                      key={`banner-leaving-${leavingBannerKey}-${leavingBanner.url}`}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        zIndex: 1,
+                        ...getHomeBannerAnimOutStyle(),
+                      }}
+                    >
+                      {renderBannerMedia(leavingBanner, `banner-leaving-${leavingBannerKey}`)}
+                    </div>
+                  ) : null}
+
                   <div
-                    key={`banner-leaving-${leavingBannerKey}-${leavingBanner.url}`}
+                    key={bannerFrameKey}
                     style={{
                       position: "absolute",
                       inset: 0,
-                      zIndex: 1,
-                      ...getHomeBannerAnimOutStyle(),
+                      zIndex: 2,
+                      ...getHomeBannerAnimStyle(),
                     }}
                   >
-                    {renderBannerMedia(leavingBanner, `banner-leaving-${leavingBannerKey}`)}
+                    {renderBannerMedia(activeBanner, `banner-${bannerIndex}`)}
                   </div>
-                ) : null}
-
-                <div
-                  key={bannerFrameKey}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    zIndex: 2,
-                    ...getHomeBannerAnimStyle(),
-                  }}
-                >
-                  {renderBannerMedia(activeBanner, `banner-${bannerIndex}`)}
-                </div>
-              </>
-            ) : (
-              <div style={heroImgPlaceholder}>Banner not set (add in admin)</div>
-            )}
+                </>
+              ) : (
+                <div style={heroImgPlaceholder}>Banner not set (add in admin)</div>
+              )}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {/* ✅ Sticky Search + Filters Bar */}
         <div style={{ ...stickyWrap, ...(stickyOn ? stickyWrapOn : null) }}>
@@ -2148,202 +2502,46 @@ export default function CustomerHomeDashboard() {
           </>
         ) : (
           <>
-            <div style={rowTitle}>
-              <h2 style={sectionTitle}>
-                {activeCat === "recommended" ? "Recommended for you" : `Top ${homeCategories.find((x) => x.key === activeCat)?.label || ""}`}
-              </h2>
-              <span style={subtle}>
-                {vegOnly || bestsellerOnly || under199 || inStockOnly
-                    ? "Filters applied"
-                    : q.trim()
-                      ? "Search results"
-                      : "Top picks"}
-              </span>
-            </div>
-
-            {featuredItems.length === 0 ? (
-              <div style={emptyBox}>No items found. Try clearing filters or ask admin to add Home featured items.</div>
+            {homepageCategorySections.length > 0 ? (
+              <>{homepageCategorySections.map((section) => renderHomepageCategorySection(section))}</>
             ) : (
-              <div className="hfScrollRow" style={scrollRow}>
-                {featuredItems.map((it) => {
-                  const c = normCuisine(it.cuisine);
-                  const tags = c ? [c] : tagsFromName(it.name || "");
-                  const out = it.in_stock === false;
-                  const qty = cartMap[it.id] || 0;
+              <>
+                <div style={rowTitle}>
+                  <h2 style={sectionTitle}>
+                    {activeCat === "recommended" ? "Recommended for you" : `Top ${homeCategories.find((x) => x.key === activeCat)?.label || ""}`}
+                  </h2>
+                  <span style={subtle}>
+                    {vegOnly || bestsellerOnly || under199 || inStockOnly
+                      ? "Filters applied"
+                      : q.trim()
+                        ? "Search results"
+                        : "Top picks"}
+                  </span>
+                </div>
 
-                  return (
-                    <div key={it.id} className="premiumCard" style={cardGlass}>
-                      <div style={{ ...imgWrap, cursor: "pointer" }} onClick={() => setSelected(it)} title="Click to view details">
-                        {it.image_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={it.image_url} alt={it.name || "item"} style={img} />
-                        ) : (
-                          <div style={imgPlaceholder}>No image</div>
-                        )}
+                {featuredItems.length === 0 ? (
+                  <div style={emptyBox}>No items found. Try clearing filters or ask admin to add Home featured items.</div>
+                ) : (
+                  <div className="hfScrollRow" style={scrollRow}>
+                    {featuredItems.map((it) => renderRestaurantCard(it))}
+                  </div>
+                )}
 
-                        <div style={cardTopBadges}>
-                          <span style={badgeDark}>⭐ {demoRating(it.restaurant_id)}</span>
-                          <span style={badgeLight}>{demoEta(it.restaurant_id)} mins</span>
-                        </div>
-                      </div>
+                <div style={rowTitle}>
+                  <h2 style={sectionTitle}>Groceries for you</h2>
+                  <span style={subtle}>
+                    {featuredGroceryItems.length > 0 ? (q.trim() ? "Matching grocery picks" : "Fresh picks") : "No grocery items yet"}
+                  </span>
+                </div>
 
-                      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <button onClick={() => setSelected(it)} style={titleBtn} title="Open details">
-                          {it.name || "Item"}
-                        </button>
-                        <div style={{ fontWeight: 950, color: "#111827" }}>{money(it.price, currency)}</div>
-                      </div>
-
-                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
-                        {getRestaurantName(it.restaurant_id)}
-                      </div>
-
-                      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {it.is_veg === true ? <span style={badgeVeg}>VEG</span> : null}
-                        {it.is_veg === false ? <span style={badgeNonVeg}>NON-VEG</span> : null}
-                        {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
-                        {out ? <span style={badgeOut}>OUT</span> : null}
-                        {tags.slice(0, 2).map((t) => (
-                          <span key={t} style={tag}>
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-
-                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                        {qty <= 0 ? (
-                          <button
-                            onClick={() => inc(it)}
-                            style={{
-                              ...btnSmallPrimaryBtn,
-                              opacity: out ? 0.55 : 1,
-                              cursor: out ? "not-allowed" : "pointer",
-                            }}
-                            disabled={out}
-                          >
-                            + Add to cart
-                          </button>
-                        ) : (
-                          <div style={stepper}>
-                            <button onClick={() => dec(it)} style={stepBtn}>
-                              –
-                            </button>
-                            <div style={stepQty}>{qty}</div>
-                            <button onClick={() => inc(it)} style={stepBtn} disabled={out}>
-                              +
-                            </button>
-                          </div>
-                        )}
-
-                        <button onClick={() => setSelected(it)} style={btnSmallOutlineBtn}>
-                          Details
-                        </button>
-                      </div>
-
-                      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <Link href="/menu" style={btnSmallOutline}>
-                          View in Menu
-                        </Link>
-                        <Link href="/restaurants" style={btnSmallOutline}>
-                          Restaurant
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div style={rowTitle}>
-              <h2 style={sectionTitle}>Groceries for you</h2>
-              <span style={subtle}>
-                {featuredGroceryItems.length > 0 ? (q.trim() ? "Matching grocery picks" : "Fresh picks") : "No grocery items yet"}
-              </span>
-            </div>
-
-            {featuredGroceryItems.length === 0 ? (
-              <div style={emptyBox}>No grocery items found. Once admin adds Home featured grocery items, they will show here.</div>
-            ) : (
-              <div className="hfScrollRow" style={scrollRow}>
-                {featuredGroceryItems.map((it) => {
-                  const out = it.in_stock === false;
-                  const qty = groceryCartMap[it.id] || 0;
-
-                  return (
-                    <div key={it.id} className="premiumCard" style={cardGlass}>
-                      <div style={{ ...imgWrap, cursor: "pointer" }} onClick={() => setSelectedGrocery(it)} title="Click to view details">
-                        {it.image_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={it.image_url} alt={it.name || "item"} style={img} />
-                        ) : (
-                          <div style={imgPlaceholder}>No image</div>
-                        )}
-
-                        <div style={cardTopBadges}>
-                          <span style={badgeDark}>⭐ {demoRating(it.store_id)}</span>
-                          <span style={badgeLight}>{demoEta(it.store_id)} mins</span>
-                        </div>
-                      </div>
-
-                      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <button onClick={() => setSelectedGrocery(it)} style={titleBtn} title="Open details">
-                          {it.name || "Item"}
-                        </button>
-                        <div style={{ fontWeight: 950, color: "#111827" }}>{money(it.price, currency)}</div>
-                      </div>
-
-                      <div style={{ marginTop: 6, color: "rgba(17,24,39,0.65)", fontSize: 13, fontWeight: 700 }}>
-                        {getGroceryStoreName(it.store_id)}
-                      </div>
-
-                      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {it.is_best_seller ? <span style={badgeBest}>BEST</span> : null}
-                        {out ? <span style={badgeOut}>OUT</span> : null}
-                        <span style={tag}>grocery</span>
-                      </div>
-
-                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                        {qty <= 0 ? (
-                          <button
-                            onClick={() => incGrocery(it)}
-                            style={{
-                              ...btnSmallPrimaryBtn,
-                              opacity: out ? 0.55 : 1,
-                              cursor: out ? "not-allowed" : "pointer",
-                            }}
-                            disabled={out}
-                          >
-                            + Add to cart
-                          </button>
-                        ) : (
-                          <div style={stepper}>
-                            <button onClick={() => decGrocery(it)} style={stepBtn}>
-                              –
-                            </button>
-                            <div style={stepQty}>{qty}</div>
-                            <button onClick={() => incGrocery(it)} style={stepBtn} disabled={out}>
-                              +
-                            </button>
-                          </div>
-                        )}
-
-                        <button onClick={() => setSelectedGrocery(it)} style={btnSmallOutlineBtn}>
-                          Details
-                        </button>
-                      </div>
-
-                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <Link href="/groceries" style={btnSmallOutline}>
-                          Open Groceries
-                        </Link>
-                        <Link href={`/groceries?store=${encodeURIComponent(it.store_id)}`} style={btnSmallOutline}>
-                          Open Store
-                        </Link>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                {featuredGroceryItems.length === 0 ? (
+                  <div style={emptyBox}>No grocery items found. Once admin adds Home featured grocery items, they will show here.</div>
+                ) : (
+                  <div className="hfScrollRow" style={scrollRow}>
+                    {featuredGroceryItems.map((it) => renderGroceryCard(it))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

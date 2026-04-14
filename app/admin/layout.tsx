@@ -46,28 +46,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { key: "restaurants", href: "/admin/restaurants", label: "Restaurants" },
       { key: "orders", href: "/admin/orders", label: "Orders" },
 
-      // âœ… NEW: Revenue management (reports / filters / analytics)
       { key: "revenue", href: "/admin/revenue", label: "Revenue" },
       { key: "payouts", href: "/admin/payouts", label: "Payouts" },
       { key: "driver_bank_accounts", href: "/admin/driver-bank-accounts", label: "Driver Bank Accounts" },
 
-      // âœ… NEW: Groceries management (approve/disable/accepting orders)
       { key: "groceries", href: "/admin/groceries", label: "Groceries" },
 
-      // âœ… NEW: Delivery partners management (approve/reject/edit/disable)
       { key: "delivery_partners", href: "/admin/delivery-partners", label: "Delivery Partners" },
 
       { key: "users", href: "/admin/users", label: "Users" },
 
-      // âœ… NEW: Support / Help inbox
       { key: "support", href: "/admin/support", label: "Support" },
 
-      // âœ… NEW: CMS / homepage feature pages in left navigation
       { key: "cms_pages", href: "/admin/pages", label: "CMS Pages" },
       { key: "home_banner", href: "/admin/home-banner", label: "Home Banner" },
       { key: "home_banner_settings", href: "/admin/home-banner-settings", label: "Home Banner Settings" },
       { key: "home_featured", href: "/admin/home-featured", label: "Home Featured" },
       { key: "home_filters", href: "/admin/home-filters", label: "Home Filters" },
+
+      // ✅ NEW: App homepage categories control page
+      { key: "app_homepage_categories", href: "/admin/app-homepage-categories", label: "App Homepage Categories" },
+
       { key: "mobile_home", href: "/admin/mobile-home", label: "Mobile Home" },
       { key: "mobile_popular", href: "/admin/mobile-popular", label: "Mobile Popular" },
       { key: "mobile_recommended", href: "/admin/mobile-recommended", label: "Mobile Recommended" },
@@ -102,22 +101,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           return;
         }
 
-        // âœ… IMPORTANT: your schema uses profiles.user_id (not id) so check that FIRST
         let profile: any = null;
 
-        // 0) Best: use a security-definer RPC (works even if RLS is tricky)
-        // You must create the SQL function `public.get_my_profile()` once in Supabase SQL Editor.
         const viaRpc = await supabase.rpc("get_my_profile");
         if (viaRpc?.error) {
           console.log("Admin guard RPC error (get_my_profile):", viaRpc.error);
         } else if (Array.isArray(viaRpc?.data)) {
           profile = viaRpc.data?.[0] || null;
         } else if (viaRpc?.data) {
-          // some setups return a single object
           profile = viaRpc.data;
         }
 
-        // 1) Fallback: normal select using RLS policy (user_id = auth.uid())
         if (!profile) {
           const byUserId = await supabase
             .from("profiles")
@@ -137,7 +131,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           profile = byUserId.data;
         }
 
-        // 2) Last fallback (only if your table sometimes stores auth uid in id)
         if (!profile) {
           const byId = await supabase
             .from("profiles")
@@ -254,11 +247,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     return nav.filter((item) => allowedNavKeys.includes(item.key));
   }, [allowedNavKeys, nav]);
 
-  // âœ… Modern app font stack (Inter-like). We don't use next/font here because this is a client component.
   const appFont =
     'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"';
 
-  // âœ… LIGHT THEME
   const pageWrap: React.CSSProperties = {
     minHeight: "100vh",
     fontFamily: appFont,
@@ -429,7 +420,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <div style={brand}>
             <div style={brandDot}>
               {adminAvatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={adminAvatarUrl}
                   alt="Admin avatar"
@@ -479,7 +469,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div style={{ fontSize: 12, opacity: 0.75, fontWeight: 800 }}>Logged in as</div>
             <div style={{ fontWeight: 950, marginTop: 4, fontSize: 14 }}>{adminName}</div>
             {adminAvatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={adminAvatarUrl}
                 alt="Admin profile"

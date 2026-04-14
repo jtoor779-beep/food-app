@@ -669,7 +669,17 @@ const isLoggedIn = !loading && !!userEmail;
 
   const roleUnknown = isLoggedIn && !isCustomer && !isOwner && !isGroceryOwner && !isDelivery && !isAdmin;
 
-  const homeHref = isLoggedIn ? "/home" : "/";
+  const homeHref = !isLoggedIn
+    ? "/"
+    : isAdmin
+    ? "/admin"
+    : isDelivery
+    ? "/delivery"
+    : isGroceryOwner
+    ? "/groceries/owner/dashboard"
+    : isOwner
+    ? "/restaurants/dashboard"
+    : "/home";
 
   //  login button on right
   const rightLoginHref = "/login";
@@ -1206,7 +1216,19 @@ const isLoggedIn = !loading && !!userEmail;
 
   const supportHref = SUPPORT_HREF || SUPPORT_MAILTO;
 
-  const renderSideGlyph = (kind: "home" | "restaurant" | "groceries" | "cart" | "orders" | "about" | "policies") => {
+  const renderSideGlyph = (
+    kind:
+      | "home"
+      | "restaurant"
+      | "groceries"
+      | "cart"
+      | "orders"
+      | "about"
+      | "policies"
+      | "profile"
+      | "settings"
+      | "wallet"
+  ) => {
     if (kind === "home") {
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={sideSvgIcon}>
@@ -1264,6 +1286,31 @@ const isLoggedIn = !loading && !!userEmail;
         </svg>
       );
     }
+    if (kind === "profile") {
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={sideSvgIcon}>
+          <path d="M20 21a8 8 0 0 0-16 0" />
+          <circle cx="12" cy="8" r="4" />
+        </svg>
+      );
+    }
+    if (kind === "settings") {
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={sideSvgIcon}>
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.53V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.53 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.62 15a1.7 1.7 0 0 0-1.53-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.53-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.62a1.7 1.7 0 0 0 1-1.53V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.53 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.38 9c.63.2 1.1.79 1.1 1.46V11a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1 .6z" />
+        </svg>
+      );
+    }
+    if (kind === "wallet") {
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={sideSvgIcon}>
+          <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h11A2.5 2.5 0 0 1 19 7.5V9h1.5A1.5 1.5 0 0 1 22 10.5v6a1.5 1.5 0 0 1-1.5 1.5H19v1.5A2.5 2.5 0 0 1 16.5 22h-11A2.5 2.5 0 0 1 3 19.5z" />
+          <path d="M19 9H6.5A2.5 2.5 0 0 1 4 6.5" />
+          <circle cx="18" cy="13.5" r="1" />
+        </svg>
+      );
+    }
     return (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={sideSvgIcon}>
         <path d="M6 4h12v16H6z" />
@@ -1292,6 +1339,29 @@ const isLoggedIn = !loading && !!userEmail;
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, supportHref]);
+
+  function navGlyphKind(item: NavItem) {
+    const label = String(item.label || "").trim().toLowerCase();
+    const href = String(item.href || "").trim().toLowerCase();
+
+    if (label === "home") return "home" as const;
+    if (label.includes("sign up")) return "profile" as const;
+    if (label.includes("cart")) return "cart" as const;
+    if (label.includes("restaurant")) {
+      if (label.includes("order")) return "orders" as const;
+      if (label.includes("setting")) return "settings" as const;
+      return "restaurant" as const;
+    }
+    if (label.includes("grocer")) {
+      if (label.includes("order")) return "orders" as const;
+      if (label.includes("setting")) return "settings" as const;
+      return "groceries" as const;
+    }
+    if (label.includes("menu")) return href.includes("/groceries/") ? ("groceries" as const) : ("restaurant" as const);
+    if (label.includes("earn") || label.includes("payout")) return "wallet" as const;
+    if (label.includes("active") || label.includes("completed") || label.includes("canceled")) return "orders" as const;
+    return "home" as const;
+  }
 
   if (isAdminPath || isLandingPath) return null;
 
@@ -1332,17 +1402,7 @@ const isLoggedIn = !loading && !!userEmail;
               style={{ ...sideItemBase, ...(isActive(it.href) ? sideItemActive : {}) }}
               onClick={() => setMenuOpen(false)}
             >
-              <span style={sideIcon}>
-                {it.label === "Home"
-                  ? renderSideGlyph("home")
-                  : it.label === "Restaurant"
-                  ? renderSideGlyph("restaurant")
-                  : it.label === "Groceries"
-                  ? renderSideGlyph("groceries")
-                  : it.label === "Cart"
-                  ? renderSideGlyph("cart")
-                  : null}
-              </span>
+              <span style={sideIcon}>{renderSideGlyph(navGlyphKind(it))}</span>
               <span>{it.label}</span>
             </Link>
           ))}
@@ -1448,17 +1508,7 @@ const isLoggedIn = !loading && !!userEmail;
                   onClick={closeMobileSide}
                   style={{ ...mobileDrawerItem, ...(isActive(it.href) ? sideItemActive : {}) }}
                 >
-                  <span style={sideIcon}>
-                    {it.label === "Home"
-                  ? renderSideGlyph("home")
-                  : it.label === "Restaurant"
-                  ? renderSideGlyph("restaurant")
-                  : it.label === "Groceries"
-                  ? renderSideGlyph("groceries")
-                  : it.label === "Cart"
-                  ? renderSideGlyph("cart")
-                  : null}
-                  </span>
+                  <span style={sideIcon}>{renderSideGlyph(navGlyphKind(it))}</span>
                   <span>{it.label}</span>
                 </Link>
               ))}

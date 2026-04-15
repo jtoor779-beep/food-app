@@ -100,19 +100,17 @@ export async function POST(req: Request) {
     const authUser = await getAuthUserWithRetry(userId);
     const authEmail = clean(authUser?.email).toLowerCase();
     const authRole = clean(authUser?.user_metadata?.role).toLowerCase();
-    const authAccountType = clean(authUser?.user_metadata?.account_type).toLowerCase();
+    
 
     if (authUser && authEmail && authEmail !== email) {
       return NextResponse.json({ ok: false, error: "Signup email does not match auth user" }, { status: 400 });
     }
 
     if (
-      authUser &&
-      authRole &&
-      authAccountType &&
-      authRole !== "delivery_partner" &&
-      authAccountType !== "delivery partner"
-    ) {
+  authUser &&
+  authRole &&
+  authRole !== "delivery_partner"
+) {
       return NextResponse.json({ ok: false, error: "User is not a driver signup" }, { status: 400 });
     }
 

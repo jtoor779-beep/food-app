@@ -24,7 +24,7 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function getAuthUserWithRetry(userId: string, attempts = 8, delayMs = 750) {
+async function getAuthUserWithRetry(userId: string, attempts = 12, delayMs = 1000) {
   if (!supabaseAdmin) return null;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -106,11 +106,17 @@ export async function POST(req: Request) {
     const authRole = clean(authUser?.user_metadata?.role).toLowerCase();
     const authAccountType = clean(authUser?.user_metadata?.account_type).toLowerCase();
 
-    if (!authUser || authEmail !== email) {
-      return NextResponse.json({ ok: false, error: "Signup user not found" }, { status: 404 });
+    if (authUser && authEmail && authEmail !== email) {
+      return NextResponse.json({ ok: false, error: "Signup email does not match auth user" }, { status: 400 });
     }
 
-    if (authRole !== "delivery_partner" && authAccountType !== "delivery partner") {
+    if (
+      authUser &&
+      authRole &&
+      authAccountType &&
+      authRole !== "delivery_partner" &&
+      authAccountType !== "delivery partner"
+    ) {
       return NextResponse.json({ ok: false, error: "User is not a driver signup" }, { status: 400 });
     }
 

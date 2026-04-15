@@ -14,6 +14,36 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    clean(value)
+  );
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getAuthUserWithRetry(userId: string, attempts = 8, delayMs = 750) {
+  if (!supabaseAdmin) return null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const authRes = await supabaseAdmin.auth.admin.getUserById(userId);
+      const authUser = authRes?.data?.user || null;
+      if (authUser) return authUser;
+    } catch {
+      // retry on eventual consistency or transient auth lookup failure
+    }
+
+    if (attempt < attempts - 1) {
+      await wait(delayMs);
+    }
+  }
+
+  return null;
+}
+
 function pendingProfilePayload(userId: string, body: any) {
   return {
     user_id: userId,
@@ -67,8 +97,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Missing user id or email" }, { status: 400 });
     }
 
-    const authRes = await supabaseAdmin.auth.admin.getUserById(userId);
-    const authUser = authRes?.data?.user || null;
+    if (!isUuid(userId)) {
+      return NextResponse.json({ ok: false, error: "Invalid user id" }, { status: 400 });
+    }
+
+    const authUser = await getAuthUserWithRetry(userId);
     const authEmail = clean(authUser?.email).toLowerCase();
     const authRole = clean(authUser?.user_metadata?.role).toLowerCase();
     const authAccountType = clean(authUser?.user_metadata?.account_type).toLowerCase();

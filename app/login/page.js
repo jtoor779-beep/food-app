@@ -4,11 +4,45 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
+const OWNER_SIGNUP_INTENT_KEY = "homyfod_owner_signup_intent";
+
 function normalizeRole(r) {
   return String(r || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
+}
+
+function readPendingOwnerIntent(email) {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(OWNER_SIGNUP_INTENT_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    const intentEmail = String(parsed?.email || "").trim().toLowerCase();
+    const targetEmail = String(email || "").trim().toLowerCase();
+    const role = normalizeRole(parsed?.role);
+
+    if (!intentEmail || !targetEmail || intentEmail !== targetEmail) return null;
+    if (role !== "restaurant_owner" && role !== "grocery_owner") return null;
+
+    return {
+      ...parsed,
+      role,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingOwnerIntent(email) {
+  if (typeof window === "undefined") return;
+
+  const intent = readPendingOwnerIntent(email);
+  if (!intent) return;
+  window.localStorage.removeItem(OWNER_SIGNUP_INTENT_KEY);
 }
 
 async function inferOwnedRole(userId) {
@@ -75,24 +109,61 @@ async function ensureProfileForUser(user) {
 
   const { data: prof, error: profErr } = await supabase
     .from("profiles")
-    .select("user_id, role")
+    .select("user_id, role, full_name, phone, country, address_line1, address_line2, city, state, postal_code")
     .eq("user_id", user.id)
     .maybeSingle();
 
   if (profErr) throw profErr;
 
   const metadataRole = normalizeRole(user?.user_metadata?.role);
+  const pendingIntent = readPendingOwnerIntent(user?.email);
+  const pendingIntentRole = normalizeRole(pendingIntent?.role);
   const inferredRole = await inferOwnedRole(user.id);
-  const resolvedRole = metadataRole || inferredRole || normalizeRole(prof?.role) || "customer";
+  const resolvedRole = metadataRole || pendingIntentRole || inferredRole || normalizeRole(prof?.role) || "customer";
 
   if (prof?.user_id) {
     if (normalizeRole(prof?.role) !== resolvedRole) {
       const { error: updateErr } = await supabase
         .from("profiles")
-        .update({ role: resolvedRole })
+        .update({
+          role: resolvedRole,
+          full_name: String(prof?.full_name || pendingIntent?.full_name || "").trim() || prof?.full_name || null,
+          phone: String(prof?.phone || pendingIntent?.phone || "").trim() || prof?.phone || null,
+          country: String(prof?.country || pendingIntent?.country || "").trim() || prof?.country || null,
+          address_line1:
+            String(prof?.address_line1 || pendingIntent?.address_line1 || "").trim() || prof?.address_line1 || null,
+          address_line2:
+            String(prof?.address_line2 || pendingIntent?.address_line2 || "").trim() || prof?.address_line2 || null,
+          city: String(prof?.city || pendingIntent?.city || "").trim() || prof?.city || null,
+          state: String(prof?.state || pendingIntent?.state || "").trim() || prof?.state || null,
+          postal_code:
+            String(prof?.postal_code || pendingIntent?.postal_code || "").trim() || prof?.postal_code || null,
+        })
         .eq("user_id", user.id);
 
       if (updateErr) throw updateErr;
+    }
+
+    if (!metadataRole && pendingIntentRole && pendingIntentRole === resolvedRole) {
+      try {
+        await supabase.auth.updateUser({
+          data: {
+            role: pendingIntentRole,
+            full_name: pendingIntent?.full_name || null,
+            phone: pendingIntent?.phone || null,
+            country: pendingIntent?.country || null,
+            address_line1: pendingIntent?.address_line1 || null,
+            address_line2: pendingIntent?.address_line2 || null,
+            city: pendingIntent?.city || null,
+            state: pendingIntent?.state || null,
+            postal_code: pendingIntent?.postal_code || null,
+          },
+        });
+      } catch {}
+    }
+
+    if (resolvedRole === pendingIntentRole && pendingIntentRole) {
+      clearPendingOwnerIntent(user?.email);
     }
 
     return { ...prof, role: resolvedRole };
@@ -105,13 +176,40 @@ async function ensureProfileForUser(user) {
   const payload = {
     user_id: user.id,
     role: resolvedRole,
-    full_name: fallbackName || "User",
-    phone: String(user?.user_metadata?.phone || "").trim() || null,
-    country: String(user?.user_metadata?.country || "").trim() || null,
+    full_name: String(user?.user_metadata?.full_name || pendingIntent?.full_name || fallbackName || "User").trim(),
+    phone: String(user?.user_metadata?.phone || pendingIntent?.phone || "").trim() || null,
+    country: String(user?.user_metadata?.country || pendingIntent?.country || "").trim() || null,
+    address_line1: String(user?.user_metadata?.address_line1 || pendingIntent?.address_line1 || "").trim() || null,
+    address_line2: String(user?.user_metadata?.address_line2 || pendingIntent?.address_line2 || "").trim() || null,
+    city: String(user?.user_metadata?.city || pendingIntent?.city || "").trim() || null,
+    state: String(user?.user_metadata?.state || pendingIntent?.state || "").trim() || null,
+    postal_code: String(user?.user_metadata?.postal_code || pendingIntent?.postal_code || "").trim() || null,
   };
 
   const { error: upsertErr } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
   if (upsertErr) throw upsertErr;
+
+  if (!metadataRole && pendingIntentRole && pendingIntentRole === resolvedRole) {
+    try {
+      await supabase.auth.updateUser({
+        data: {
+          role: pendingIntentRole,
+          full_name: pendingIntent?.full_name || null,
+          phone: pendingIntent?.phone || null,
+          country: pendingIntent?.country || null,
+          address_line1: pendingIntent?.address_line1 || null,
+          address_line2: pendingIntent?.address_line2 || null,
+          city: pendingIntent?.city || null,
+          state: pendingIntent?.state || null,
+          postal_code: pendingIntent?.postal_code || null,
+        },
+      });
+    } catch {}
+  }
+
+  if (resolvedRole === pendingIntentRole && pendingIntentRole) {
+    clearPendingOwnerIntent(user?.email);
+  }
 
   return { user_id: user.id, role: resolvedRole };
 }

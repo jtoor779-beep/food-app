@@ -10,7 +10,7 @@ async function resolveRole(userId: string) {
   const { data: prof } = await supabase
     .from("profiles")
     .select("role")
-    .eq("id", userId)
+    .eq("user_id", userId)
     .maybeSingle();
 
   if (prof?.role) return prof.role;

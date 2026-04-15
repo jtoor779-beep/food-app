@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
+const OWNER_SIGNUP_INTENT_KEY = "homyfod_owner_signup_intent";
+
 function normalizeRole(r) {
   return String(r || "")
     .trim()
@@ -129,6 +131,31 @@ export default function SignupPage() {
           : undefined;
 
       // âœ… A) Signup that requires email confirmation (if enabled in Supabase)
+      if (typeof window !== "undefined") {
+        const normalizedRole = normalizeRole(role);
+
+        if (normalizedRole === "restaurant_owner" || normalizedRole === "grocery_owner") {
+          window.localStorage.setItem(
+            OWNER_SIGNUP_INTENT_KEY,
+            JSON.stringify({
+              email: email.trim().toLowerCase(),
+              role: normalizedRole,
+              full_name: fullName.trim(),
+              phone: phone.trim(),
+              country: country.trim(),
+              address_line1: address1.trim(),
+              address_line2: address2.trim(),
+              city: city.trim(),
+              state: stateProv.trim(),
+              postal_code: postal.trim(),
+              saved_at: new Date().toISOString(),
+            })
+          );
+        } else {
+          window.localStorage.removeItem(OWNER_SIGNUP_INTENT_KEY);
+        }
+      }
+
       const signupOptions = {
         data: {
           role,

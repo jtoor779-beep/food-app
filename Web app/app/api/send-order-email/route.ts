@@ -1,0 +1,623 @@
+﻿import { createClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
+
+type OrderEmailEvent =
+  | "customer_order_placed"
+  | "owner_new_order_received"
+  | "customer_order_delivered";
+
+type OrderType = "restaurant" | "grocery";
+
+type EmailItem = {
+  name: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+  imageUrl?: string;
+  embeddedImageUrl?: string;
+};
+
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const brevoApiKey = process.env.BREVO_API_KEY || "";
+const brevoSenderEmail = process.env.BREVO_SENDER_EMAIL || "";
+const brevoSenderName = process.env.BREVO_SENDER_NAME || "Homyfod";
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
+  auth: { persistSession: false },
+});
+
+function shortId(id: string) {
+  return String(id || "").slice(0, 8);
+}
+
+function toNumber(value: any, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function firstNonEmpty(...values: any[]) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+  }
+  return "";
+}
+
+function safeImg(url: any) {
+  const str = String(url || "").trim();
+  if (!str) return "";
+  if (/^https?:\/\//i.test(str)) return str;
+  if (str.startsWith("/")) return str;
+  return str.startsWith("uploads/") ? `/${str}` : str;
+}
+
+function emailImgSrc(url: any, origin?: string) {
+  const str = String(url || "").trim();
+  if (!str) return "";
+  if (/^https?:\/\//i.test(str)) return str;
+
+  const base = String(origin || "").trim().replace(/\/$/, "");
+  if (!base) return "";
+  if (str.startsWith("/")) return `${base}${str}`;
+
+  const cleaned = str.replace(/^\.\//, "").replace(/^\/+/, "");
+  return cleaned ? `${base}/${cleaned}` : "";
+}
+async function inlineEmailImage(url: string) {
+  const src = String(url || "").trim();
+  if (!/^https?:\/\//i.test(src)) return "";
+
+  try {
+    const res = await fetch(src, { cache: "no-store" });
+    if (!res.ok) return "";
+
+    const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("image/")) return "";
+
+    const contentLength = Number(res.headers.get("content-length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 750000) return "";
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > 750000) return "";
+
+    return `data:${contentType};base64,${buffer.toString("base64")}`;
+  } catch {
+    return "";
+  }
+}
+
+async function inlineEmailItems(items: EmailItem[], origin?: string): Promise<EmailItem[]> {
+  if (!Array.isArray(items) || !items.length) return [];
+
+  const settled = await Promise.all(
+    items.map(async (item) => {
+      const resolvedImg = emailImgSrc(item?.imageUrl, origin);
+      const embeddedImageUrl = resolvedImg ? await inlineEmailImage(resolvedImg) : "";
+      return embeddedImageUrl ? { ...item, embeddedImageUrl } : item;
+    })
+  );
+
+  return settled;
+}
+
+async function getUserEmail(userId: string) {
+  if (!userId) return null;
+
+  try {
+    const authRes = await supabaseAdmin.auth.admin.getUserById(userId);
+    const authEmail = authRes?.data?.user?.email || null;
+    if (authEmail) return authEmail;
+  } catch {
+    // ignore auth lookup failures
+  }
+
+  try {
+    const { data: profileRow } = await supabaseAdmin
+      .from("profiles")
+      .select("email")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    return profileRow?.email || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getRestaurantItems(orderId: string): Promise<EmailItem[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("order_items")
+      .select(`
+        id,
+        qty,
+        quantity,
+        price_each,
+        price,
+        menu_item_id,
+        menu_items ( id, name, image_url, image, photo_url, photo, item_image, product_image, thumbnail_url, price )
+      `)
+      .eq("order_id", orderId);
+
+    if (error) throw error;
+
+    return (data || []).map((row: any) => {
+      const qty = toNumber(firstNonEmpty(row?.qty, row?.quantity), 1);
+      const unitPrice = toNumber(firstNonEmpty(row?.price_each, row?.price, row?.menu_items?.price), 0);
+      return {
+        name: firstNonEmpty(row?.menu_items?.name, row?.name, "Item") || "Item",
+        qty,
+        unitPrice,
+        lineTotal: unitPrice * qty,
+        imageUrl: safeImg(firstNonEmpty(row?.menu_items?.image_url, row?.menu_items?.image, row?.menu_items?.photo_url, row?.menu_items?.photo, row?.menu_items?.item_image, row?.menu_items?.product_image, row?.menu_items?.thumbnail_url, row?.image_url, row?.image, row?.photo_url, row?.photo, row?.item_image, row?.product_image, row?.thumbnail_url)),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function getGroceryItems(orderId: string): Promise<EmailItem[]> {
+  const itemsTableCandidates = ["grocery_order_items", "order_items_grocery", "grocery_items_order"];
+  const orderIdCols = ["order_id", "grocery_order_id"];
+  const itemIdCols = ["grocery_item_id", "item_id", "product_id"];
+  const qtyCols = ["qty", "quantity", "count"];
+
+  for (const itemsTable of itemsTableCandidates) {
+    for (const orderIdCol of orderIdCols) {
+      for (const itemIdCol of itemIdCols) {
+        for (const qtyCol of qtyCols) {
+          try {
+            const { data, error } = await supabaseAdmin.from(itemsTable).select("*").eq(orderIdCol, orderId);
+            if (error) throw error;
+            const rows = data || [];
+            const itemIds = rows.map((row: any) => row?.[itemIdCol]).filter(Boolean);
+
+            let groceryItems = new Map<string, any>();
+            if (itemIds.length) {
+              const { data: itemRows } = await supabaseAdmin
+                .from("grocery_items")
+                .select("id, name, image_url, image, photo_url, photo, item_image, product_image, thumbnail_url, price")
+                .in("id", itemIds);
+              groceryItems = new Map((itemRows || []).map((r: any) => [String(r.id), r]));
+            }
+
+            return rows.map((row: any) => {
+              const itemId = row?.[itemIdCol];
+              const meta = itemId ? groceryItems.get(String(itemId)) : null;
+              const qty = toNumber(row?.[qtyCol], 1);
+              const unitPrice = toNumber(firstNonEmpty(row?.price_each, row?.price, meta?.price), 0);
+              return {
+                name: firstNonEmpty(row?.name, row?.item_name, meta?.name, "Item") || "Item",
+                qty,
+                unitPrice,
+                lineTotal: unitPrice * qty,
+                imageUrl: safeImg(firstNonEmpty(row?.image_url, row?.img, row?.photo_url, row?.image, row?.photo, row?.item_image, row?.product_image, row?.thumbnail_url, meta?.image_url, meta?.image, meta?.photo_url, meta?.photo, meta?.item_image, meta?.product_image, meta?.thumbnail_url)),
+              };
+            });
+          } catch {
+            // continue trying fallbacks
+          }
+        }
+      }
+    }
+  }
+
+  return [];
+}
+
+async function getRestaurantContext(orderId: string) {
+  const { data: orderRow, error: orderErr } = await supabaseAdmin
+    .from("orders")
+    .select("id, user_id, customer_name, total, restaurant_id, delivered_at")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderErr) throw orderErr;
+  if (!orderRow) return null;
+
+  let restaurantRow: any = null;
+  if (orderRow.restaurant_id) {
+    const { data } = await supabaseAdmin
+      .from("restaurants")
+      .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+      .eq("id", orderRow.restaurant_id)
+      .maybeSingle();
+    restaurantRow = data || null;
+  }
+
+  const ownerUserId =
+    restaurantRow?.owner_user_id ||
+    restaurantRow?.owner_id ||
+    restaurantRow?.user_id ||
+    restaurantRow?.created_by ||
+    restaurantRow?.owner ||
+    null;
+
+  return {
+    orderId: orderRow.id,
+    customerUserId: orderRow.user_id || null,
+    ownerUserId,
+    customerName: orderRow.customer_name || "Customer",
+    venueName: restaurantRow?.name || "Restaurant",
+    totalAmount: Number(orderRow.total || 0),
+    deliveredAt: orderRow.delivered_at || null,
+    label: "order",
+    items: await getRestaurantItems(orderId),
+  };
+}
+
+async function getGroceryContext(orderId: string) {
+  const { data: orderRow, error: orderErr } = await supabaseAdmin
+    .from("grocery_orders")
+    .select("id, customer_user_id, customer_name, total_amount, store_id, delivered_at")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderErr) throw orderErr;
+  if (!orderRow) return null;
+
+  let storeRow: any = null;
+  if (orderRow.store_id) {
+    const { data } = await supabaseAdmin
+      .from("grocery_stores")
+      .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+      .eq("id", orderRow.store_id)
+      .maybeSingle();
+    storeRow = data || null;
+  }
+
+  const ownerUserId =
+    storeRow?.owner_user_id ||
+    storeRow?.owner_id ||
+    storeRow?.user_id ||
+    storeRow?.created_by ||
+    storeRow?.owner ||
+    null;
+
+  return {
+    orderId: orderRow.id,
+    customerUserId: orderRow.customer_user_id || null,
+    ownerUserId,
+    customerName: orderRow.customer_name || "Customer",
+    venueName: storeRow?.name || "Store",
+    totalAmount: Number(orderRow.total_amount || 0),
+    deliveredAt: orderRow.delivered_at || null,
+    label: "grocery order",
+    items: await getGroceryItems(orderId),
+  };
+}
+
+function escapeHtml(value: any) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatMoney(amount: any) {
+  const n = Number(amount || 0);
+  return Number.isFinite(n)
+    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n)
+    : "$0.00";
+}
+
+function formatDeliveredAt(value: any) {
+  if (!value) return "Just now";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "Just now";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function shouldUseLogo(url?: string) {
+  if (!url) return false;
+  return !/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(url);
+}
+
+function buildEmailShell(opts: {
+  eyebrow: string;
+  title: string;
+  intro: string;
+  detailRows: Array<{ label: string; value: string }>;
+  items?: EmailItem[];
+  highlightLabel?: string;
+  highlightValue?: string;
+  note?: string;
+  logoUrl?: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+  assetOrigin?: string;
+}) {
+  const rowsHtml = opts.detailRows
+    .map(
+      (row) =>
+        "<tr>" +
+        "<td style=\"padding:12px 0;border-bottom:1px solid #eef2f7;color:#64748b;font-size:14px;\">" + escapeHtml(row.label) + "</td>" +
+        "<td align=\"right\" style=\"padding:12px 0;border-bottom:1px solid #eef2f7;color:#0f172a;font-size:14px;font-weight:700;\">" + escapeHtml(row.value) + "</td>" +
+        "</tr>"
+    )
+    .join("");
+
+  const itemsHtml = (opts.items || []).length
+    ? "<div style=\"margin-top:24px;\">" +
+        "<div style=\"font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#15803d;font-weight:800;margin-bottom:14px;\">Items</div>" +
+        (opts.items || [])
+          .map((item) => {
+            const resolvedImg = item.embeddedImageUrl || emailImgSrc(item.imageUrl, opts.assetOrigin);
+            const img = resolvedImg
+              ? "<img src=\"" + escapeHtml(resolvedImg) + "\" alt=\"" + escapeHtml(item.name) + "\" style=\"width:56px;height:56px;border-radius:14px;object-fit:cover;border:1px solid #e2e8f0;background:#f8fafc;\" />"
+              : "<div style=\"width:56px;height:56px;border-radius:14px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;font-size:12px;font-weight:800;line-height:56px;text-align:center;\">Item</div>";
+            return "<div style=\"display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid #eef2f7;\">" +
+              img +
+              "<div style=\"flex:1;min-width:0;\">" +
+                "<div style=\"font-size:15px;font-weight:800;color:#0f172a;line-height:1.35;\">" + escapeHtml(item.name) + "</div>" +
+                "<div style=\"margin-top:4px;font-size:13px;color:#64748b;\">Qty " + escapeHtml(item.qty) + " • " + escapeHtml(formatMoney(item.unitPrice)) + " each</div>" +
+              "</div>" +
+              "<div style=\"font-size:14px;font-weight:900;color:#0f172a;white-space:nowrap;\">" + escapeHtml(formatMoney(item.lineTotal)) + "</div>" +
+            "</div>";
+          })
+          .join("") +
+      "</div>"
+    : "";
+
+  const highlightHtml = opts.highlightValue
+    ? "<div style=\"margin:24px 0 22px;padding:20px 22px;border-radius:18px;background:#f0fdf4;border:1px solid #bbf7d0;\">" +
+        "<div style=\"font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#15803d;font-weight:800;\">" +
+          escapeHtml(opts.highlightLabel || "Update") +
+        "</div>" +
+        "<div style=\"margin-top:8px;font-size:32px;line-height:1.1;font-weight:900;color:#052e16;\">" +
+          escapeHtml(opts.highlightValue) +
+        "</div>" +
+      "</div>"
+    : "";
+
+  const noteHtml = opts.note
+    ? "<div style=\"margin-top:20px;padding:16px 18px;border-radius:16px;background:#f8fafc;border:1px solid #e2e8f0;color:#334155;font-size:14px;line-height:1.75;\">" + escapeHtml(opts.note) + "</div>"
+    : "";
+
+  const logoHtml = shouldUseLogo(opts.logoUrl)
+    ? "<img src=\"" + escapeHtml(opts.logoUrl) + "\" alt=\"HomyFod\" style=\"display:block;width:140px;max-width:100%;height:auto;\" />"
+    : "<div style=\"font-size:28px;font-weight:900;color:#0f172a;letter-spacing:-0.03em;\">HomyFod</div>";
+
+  const ctaHtml = opts.ctaLabel && opts.ctaUrl
+    ? "<div style=\"margin-top:24px;\">" +
+        "<a href=\"" + escapeHtml(opts.ctaUrl) + "\" style=\"display:inline-block;padding:14px 22px;border-radius:14px;background:#16a34a;color:#ffffff;text-decoration:none;font-size:14px;font-weight:900;\">" +
+          escapeHtml(opts.ctaLabel) +
+        "</a>" +
+      "</div>"
+    : "";
+
+  return "<!DOCTYPE html>" +
+    "<html><body style=\"margin:0;padding:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a;\">" +
+      "<div style=\"padding:28px 12px;\">" +
+        "<div style=\"max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:28px;overflow:hidden;box-shadow:0 18px 50px rgba(15,23,42,0.08);\">" +
+          "<div style=\"padding:28px 32px 18px;background:#ffffff;border-bottom:1px solid #eef2f7;\">" +
+            logoHtml +
+            "<div style=\"margin-top:18px;display:inline-block;padding:8px 14px;border-radius:999px;background:#ecfdf5;color:#15803d;font-size:12px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;\">" + escapeHtml(opts.eyebrow) + "</div>" +
+            "<div style=\"margin-top:16px;font-size:34px;line-height:1.1;font-weight:900;color:#0f172a;\">" + escapeHtml(opts.title) + "</div>" +
+            "<div style=\"margin-top:12px;font-size:16px;line-height:1.75;color:#475569;\">" + escapeHtml(opts.intro) + "</div>" +
+          "</div>" +
+          "<div style=\"padding:28px 32px 34px;\">" +
+            highlightHtml +
+            "<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">" + rowsHtml + "</table>" +
+            itemsHtml +
+            noteHtml +
+            ctaHtml +
+            "<div style=\"margin-top:26px;padding-top:18px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;line-height:1.8;\">" +
+              "Need help? Contact HomyFod customer care for support with orders, delivery, or account questions." +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</body></html>";
+}
+
+function buildEmailPayload(
+  eventType: OrderEmailEvent,
+  ctx: any,
+  meta: { logoUrl?: string; ordersUrl?: string; ownerOrdersUrl?: string; origin?: string }
+) {
+  const idPart = shortId(ctx.orderId);
+  const amount = formatMoney(ctx.totalAmount || 0);
+  const customerName = ctx.customerName || "Customer";
+  const venueName = ctx.venueName || (ctx.label === "grocery order" ? "Store" : "Restaurant");
+  const items = Array.isArray(ctx.items) ? ctx.items.slice(0, 6) : [];
+
+  if (eventType === "customer_order_placed") {
+    const subject = `Order placed successfully #${idPart}`;
+    return {
+      toName: customerName,
+      subject,
+      text: `Hi ${customerName}, your ${ctx.label} #${idPart} for ${venueName} has been placed successfully. Total: ${amount}.`,
+      html: buildEmailShell({
+        eyebrow: "Order Confirmed",
+        title: "Your order is in",
+        intro: `Hi ${customerName}, thanks for ordering with HomyFod. Your ${ctx.label} has been received and sent straight to ${venueName}.`,
+        highlightLabel: "Total charged",
+        highlightValue: amount,
+        detailRows: [
+          { label: "Order ID", value: `#${idPart}` },
+          { label: ctx.label === "grocery order" ? "Store" : "Restaurant", value: venueName },
+          { label: "Customer", value: customerName },
+          { label: "Status", value: "Placed successfully" },
+        ],
+        items,
+        note: "We will keep you posted at every major step, from confirmation to delivery. If anything changes, you will hear from us right away.",
+        logoUrl: meta.logoUrl,
+        ctaLabel: "Track order",
+        ctaUrl: meta.ordersUrl,
+        assetOrigin: meta.origin,
+      }),
+    };
+  }
+
+  if (eventType === "owner_new_order_received") {
+    const subject = `New order received #${idPart}`;
+    return {
+      toName: venueName,
+      subject,
+      text: `A new ${ctx.label} #${idPart} has been received for ${venueName}. Customer: ${customerName}. Total: ${amount}.`,
+      html: buildEmailShell({
+        eyebrow: "New Order Alert",
+        title: "A new order just came in",
+        intro: `A fresh ${ctx.label} is waiting for ${venueName}. Open your dashboard, review the details, and move it into prep quickly.`,
+        highlightLabel: "Order total",
+        highlightValue: amount,
+        detailRows: [
+          { label: "Order ID", value: `#${idPart}` },
+          { label: "Customer", value: customerName },
+          { label: ctx.label === "grocery order" ? "Store" : "Restaurant", value: venueName },
+          { label: "Status", value: "New order received" },
+        ],
+        items,
+        note: "Fast updates keep customers confident. Accept the order, move it through prep, and hand it off smoothly for delivery.",
+        logoUrl: meta.logoUrl,
+        ctaLabel: "Open dashboard",
+        ctaUrl: meta.ownerOrdersUrl,
+        assetOrigin: meta.origin,
+      }),
+    };
+  }
+
+  const deliveredAt = formatDeliveredAt(ctx.deliveredAt);
+  const subject = `Order delivered #${idPart}`;
+  return {
+    toName: customerName,
+    subject,
+    text: `Hi ${customerName}, your ${ctx.label} #${idPart} from ${venueName} has been delivered. Delivered at: ${deliveredAt}.`,
+    html: buildEmailShell({
+      eyebrow: "Delivered",
+      title: "Your order was delivered",
+      intro: `Hi ${customerName}, your ${ctx.label} from ${venueName} has been completed successfully and marked as delivered.`,
+      highlightLabel: "Delivered at",
+      highlightValue: deliveredAt,
+      detailRows: [
+        { label: "Order ID", value: `#${idPart}` },
+        { label: ctx.label === "grocery order" ? "Store" : "Restaurant", value: venueName },
+        { label: "Customer", value: customerName },
+        { label: "Total", value: amount },
+      ],
+      items,
+      note: "Thanks for choosing HomyFod. We hope everything arrived fresh, complete, and right on time.",
+      logoUrl: meta.logoUrl,
+      ctaLabel: "Open orders",
+      ctaUrl: meta.ordersUrl,
+      assetOrigin: meta.origin,
+    }),
+  };
+}
+
+async function sendBrevoEmail(toEmail: string, toName: string, subject: string, text: string, html: string) {
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "api-key": brevoApiKey,
+    },
+    body: JSON.stringify({
+      sender: {
+        email: brevoSenderEmail,
+        name: brevoSenderName,
+      },
+      to: [{ email: toEmail, name: toName }],
+      subject,
+      textContent: text,
+      htmlContent: html,
+    }),
+  });
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(json?.message || "Brevo request failed");
+  }
+
+  return json;
+}
+
+export async function POST(req: Request) {
+  try {
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json({ success: false, message: "Missing Supabase envs" }, { status: 500 });
+    }
+
+    if (!brevoApiKey || !brevoSenderEmail) {
+      return NextResponse.json({ success: false, skipped: true, reason: "missing_brevo_env" });
+    }
+
+    const body = await req.json();
+    const eventType = String(body?.eventType || "") as OrderEmailEvent;
+    const orderType = String(body?.orderType || "") as OrderType;
+    const orderId = String(body?.orderId || "").trim();
+
+    if (!eventType || !orderType || !orderId) {
+      return NextResponse.json({ success: false, message: "Missing eventType, orderType, or orderId" }, { status: 400 });
+    }
+
+    const ctx = orderType === "grocery"
+      ? await getGroceryContext(orderId)
+      : await getRestaurantContext(orderId);
+
+    if (!ctx) {
+      return NextResponse.json({ success: false, message: "Order not found" }, { status: 404 });
+    }
+
+    const recipientUserId = eventType === "owner_new_order_received"
+      ? ctx.ownerUserId
+      : ctx.customerUserId;
+
+    if (!recipientUserId) {
+      return NextResponse.json({ success: true, skipped: true, reason: "missing_recipient_user" });
+    }
+
+    const recipientEmail = await getUserEmail(recipientUserId);
+    if (!recipientEmail) {
+      return NextResponse.json({ success: true, skipped: true, reason: "missing_recipient_email" });
+    }
+
+    const reqUrl = new URL(req.url);
+    const origin = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || reqUrl.origin).replace(/\/$/, "");
+    ctx.items = await inlineEmailItems(Array.isArray(ctx.items) ? ctx.items : [], origin);
+    const payload = buildEmailPayload(eventType, ctx, {
+      origin,
+      logoUrl: `${origin}/logo.png`,
+      ordersUrl: `${origin}/${orderType === "grocery" ? "groceries/orders" : "orders"}`,
+      ownerOrdersUrl: `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`,
+    });
+
+    const brevo = await sendBrevoEmail(
+      recipientEmail,
+      payload.toName,
+      payload.subject,
+      payload.text,
+      payload.html
+    );
+
+    return NextResponse.json({ success: true, recipientEmail, brevo });
+  } catch (error: any) {
+    console.error("send-order-email error:", error);
+    return NextResponse.json(
+      { success: false, message: error?.message || "Failed to send order email" },
+      { status: 500 }
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+
+

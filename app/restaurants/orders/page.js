@@ -393,9 +393,15 @@ export default function RestaurantOrdersPage() {
 
   // âœ… keep one realtime channel only
   const channelRef = useRef(null);
+  const knownOrderIdsRef = useRef(new Set());
+  const audioReadyRef = useRef(false);
+  const audioCtxRef = useRef(null);
+  const warnedSoundRef = useRef(false);
+  const popupTimerRef = useRef(null);
 
   // âœ… NEW: customer-like behavior (list view + one open detail)
   const [openOrderId, setOpenOrderId] = useState(null);
+  const [liveOrderPopup, setLiveOrderPopup] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -414,6 +420,108 @@ export default function RestaurantOrdersPage() {
       cancelled = true;
     };
   }, []);
+
+  function unlockAudioIfNeeded() {
+    if (audioReadyRef.current) return true;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return false;
+      const ctx = audioCtxRef.current || new AudioCtx();
+      audioCtxRef.current = ctx;
+      if (ctx.state === "suspended" && typeof ctx.resume === "function") {
+        ctx.resume().catch(() => {});
+      }
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(0);
+      osc.stop(0.01);
+      audioReadyRef.current = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function playNewOrderBeep() {
+    if (typeof window === "undefined") return;
+    if (!unlockAudioIfNeeded()) return;
+
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.2);
+    } catch {
+      // ignore audio errors
+    }
+  }
+
+  useEffect(() => {
+    function onFirstGesture() {
+      unlockAudioIfNeeded();
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    }
+
+    window.addEventListener("pointerdown", onFirstGesture, { passive: true });
+    window.addEventListener("touchstart", onFirstGesture, { passive: true });
+    window.addEventListener("mousedown", onFirstGesture, { passive: true });
+    window.addEventListener("keydown", onFirstGesture);
+
+    return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+      if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+      if (audioCtxRef.current?.close) {
+        audioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  function announceNewOrders(nextOrders) {
+    const prevIds = knownOrderIdsRef.current;
+    const nextIds = new Set((nextOrders || []).map((o) => String(o?.id || "")).filter(Boolean));
+    const freshOrders = (nextOrders || []).filter((o) => {
+      const id = String(o?.id || "").trim();
+      return id && !prevIds.has(id);
+    });
+
+    knownOrderIdsRef.current = nextIds;
+    if (prevIds.size === 0 || freshOrders.length === 0) return;
+
+    const latest = freshOrders[0];
+    const short = String(latest?.id || "").slice(0, 8);
+    setLiveOrderPopup({
+      id: latest?.id || "",
+      title: "New order received",
+      body: `Order ${short ? "#" + short : ""} just came in for ${restaurantName || "your restaurant"}.`,
+    });
+    if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+    popupTimerRef.current = setTimeout(() => setLiveOrderPopup(null), 12000);
+    playNewOrderBeep();
+
+    if (!audioReadyRef.current && !warnedSoundRef.current) {
+      warnedSoundRef.current = true;
+      setInfo("New order received. Tap once anywhere to enable sound alerts.");
+      setTimeout(() => setInfo(""), 2600);
+    }
+  }
 
   async function initOwner() {
     setErr("");
@@ -568,6 +676,7 @@ export default function RestaurantOrdersPage() {
       items: itemsByOrder[ord.id] || [],
     }));
 
+    announceNewOrders(merged);
     setOrders(merged);
 
     // âœ… if open order no longer exists, close it safely
@@ -608,6 +717,8 @@ export default function RestaurantOrdersPage() {
 
   useEffect(() => {
     if (!restaurantId) return;
+    knownOrderIdsRef.current = new Set();
+    setLiveOrderPopup(null);
     loadOrdersForRestaurant(restaurantId);
     setupRealtime(restaurantId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1235,6 +1346,44 @@ export default function RestaurantOrdersPage() {
           </div>
         ) : null}
       </div>
+      {liveOrderPopup ? (
+        <div
+          style={{
+            position: "fixed",
+            right: 20,
+            bottom: 20,
+            width: "min(360px, calc(100vw - 32px))",
+            zIndex: 1200,
+            borderRadius: 20,
+            border: "1px solid rgba(16,185,129,0.24)",
+            background: "rgba(255,255,255,0.96)",
+            boxShadow: "0 24px 60px rgba(15,23,42,0.2)",
+            padding: 16,
+            backdropFilter: "blur(12px)",
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 1000, color: "#15803d", letterSpacing: "0.08em" }}>LIVE ORDER ALERT</div>
+          <div style={{ marginTop: 8, fontSize: 20, fontWeight: 1000, color: "#0b1220" }}>{liveOrderPopup.title}</div>
+          <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850, lineHeight: 1.5 }}>{liveOrderPopup.body}</div>
+          <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={btnDark}
+              onClick={() => {
+                setStatusFilter("all");
+                setSearchText("");
+                setOpenOrderId(liveOrderPopup.id);
+                setLiveOrderPopup(null);
+              }}
+            >
+              Open order
+            </button>
+            <button type="button" style={btnGhost} onClick={() => setLiveOrderPopup(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

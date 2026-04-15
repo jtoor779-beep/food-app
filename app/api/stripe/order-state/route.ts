@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import webpush from "web-push";
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
@@ -102,6 +103,55 @@ async function deleteNotificationsForOrder(orderId: string) {
   }
 }
 
+function configureWebPush() {
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
+  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || "";
+  if (!vapidPublicKey || !vapidPrivateKey) return false;
+
+  webpush.setVapidDetails("mailto:admin@homyfod.com", vapidPublicKey, vapidPrivateKey);
+  return true;
+}
+
+async function sendOwnerWebPush(userId: string | null, payload: { title: string; body: string; url: string }) {
+  if (!supabaseAdmin || !userId || !configureWebPush()) return 0;
+
+  try {
+    const { data: subs, error } = await supabaseAdmin
+      .from("push_subscriptions")
+      .select("endpoint,p256dh,auth")
+      .eq("user_id", userId);
+
+    if (error || !subs?.length) return 0;
+
+    let sent = 0;
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: String(sub?.endpoint || ""),
+            keys: {
+              p256dh: String(sub?.p256dh || ""),
+              auth: String(sub?.auth || ""),
+            },
+          },
+          JSON.stringify({
+            title: payload.title,
+            body: payload.body,
+            url: payload.url,
+          })
+        );
+        sent += 1;
+      } catch {
+        // best effort only
+      }
+    }
+
+    return sent;
+  } catch {
+    return 0;
+  }
+}
+
 async function insertPaidNotifications(orderType: string, orderId: string) {
   const names = tableNames(orderType);
 
@@ -132,14 +182,17 @@ async function insertPaidNotifications(orderType: string, orderId: string) {
     const sid = shortId(orderId);
 
     if (ownerUserId) {
+      const title = "New grocery order received";
+      const body = `New grocery order ${sid ? "#" + sid : ""} received for ${storeName}. Tap to view.`;
       await supabaseAdmin!.from("notifications").insert({
         user_id: ownerUserId,
-        title: "New grocery order received",
-        body: `New grocery order ${sid ? "#" + sid : ""} received for ${storeName}. Tap to view.`,
+        title,
+        body,
         type: "order",
         link: names.ownerOrdersLink,
         is_read: false,
       });
+      await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
     }
 
     if (orderRow.customer_user_id) {
@@ -182,14 +235,17 @@ async function insertPaidNotifications(orderType: string, orderId: string) {
   const sid = shortId(orderId);
 
   if (ownerUserId) {
+    const title = "New order received";
+    const body = `New order ${sid ? "#" + sid : ""} received for ${restName}. Tap to view.`;
     await supabaseAdmin!.from("notifications").insert({
       user_id: ownerUserId,
-      title: "New order received",
-      body: `New order ${sid ? "#" + sid : ""} received for ${restName}. Tap to view.`,
+      title,
+      body,
       type: "order",
       link: names.ownerOrdersLink,
       is_read: false,
     });
+    await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
   }
 
   if (orderRow.user_id) {

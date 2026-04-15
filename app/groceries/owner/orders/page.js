@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
@@ -555,6 +555,13 @@ export default function GroceryOwnerOrdersPage() {
 
   // expand/collapse order details
   const [openOrderId, setOpenOrderId] = useState(null);
+  const [liveOrderPopup, setLiveOrderPopup] = useState(null);
+  const channelRef = useRef(null);
+  const knownOrderIdsRef = useRef(new Set());
+  const audioReadyRef = useRef(false);
+  const audioCtxRef = useRef(null);
+  const warnedSoundRef = useRef(false);
+  const popupTimerRef = useRef(null);
 
   const canAccess = useMemo(() => role === "grocery_owner" || role === "admin", [role]);
 
@@ -575,6 +582,133 @@ export default function GroceryOwnerOrdersPage() {
       cancelled = true;
     };
   }, []);
+
+  function unlockAudioIfNeeded() {
+    if (audioReadyRef.current) return true;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return false;
+      const ctx = audioCtxRef.current || new AudioCtx();
+      audioCtxRef.current = ctx;
+      if (ctx.state === "suspended" && typeof ctx.resume === "function") {
+        ctx.resume().catch(() => {});
+      }
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(0);
+      osc.stop(0.01);
+      audioReadyRef.current = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function playNewOrderBeep() {
+    if (typeof window === "undefined") return;
+    if (!unlockAudioIfNeeded()) return;
+
+    try {
+      const ctx = audioCtxRef.current;
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.14, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.2);
+    } catch {
+      // ignore audio errors
+    }
+  }
+
+  useEffect(() => {
+    function onFirstGesture() {
+      unlockAudioIfNeeded();
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+    }
+
+    window.addEventListener("pointerdown", onFirstGesture, { passive: true });
+    window.addEventListener("touchstart", onFirstGesture, { passive: true });
+    window.addEventListener("mousedown", onFirstGesture, { passive: true });
+    window.addEventListener("keydown", onFirstGesture);
+
+    return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("touchstart", onFirstGesture);
+      window.removeEventListener("mousedown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
+      if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      if (audioCtxRef.current?.close) {
+        audioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  function announceNewOrders(nextOrders) {
+    const prevIds = knownOrderIdsRef.current;
+    const nextIds = new Set((nextOrders || []).map((o) => String(o?.id || "")).filter(Boolean));
+    const freshOrders = (nextOrders || []).filter((o) => {
+      const id = String(o?.id || "").trim();
+      return id && !prevIds.has(id);
+    });
+
+    knownOrderIdsRef.current = nextIds;
+    if (prevIds.size === 0 || freshOrders.length === 0) return;
+
+    const latest = freshOrders[0];
+    const short = String(latest?.id || "").slice(0, 8);
+    setLiveOrderPopup({
+      id: latest?.id || "",
+      title: "New grocery order received",
+      body: `Order ${short ? "#" + short : ""} just came in for ${activeStore?.name || "your store"}.`,
+    });
+    if (popupTimerRef.current) clearTimeout(popupTimerRef.current);
+    popupTimerRef.current = setTimeout(() => setLiveOrderPopup(null), 12000);
+    playNewOrderBeep();
+
+    if (!audioReadyRef.current && !warnedSoundRef.current) {
+      warnedSoundRef.current = true;
+      setInfoMsg("New order received. Tap once anywhere to enable sound alerts.");
+    }
+  }
+
+  function setupRealtime(sid, table, storeIdCol) {
+    if (!sid || !table || !storeIdCol) return;
+
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+
+    const ch = supabase
+      .channel(`grocery_owner_orders_${table}_${sid}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table, filter: `${storeIdCol}=eq.${sid}` },
+        () => {
+          loadOrders(sid);
+        }
+      )
+      .subscribe();
+
+    channelRef.current = ch;
+  }
 
   async function loadSessionAndRole() {
     setChecking(true);
@@ -696,6 +830,7 @@ export default function GroceryOwnerOrdersPage() {
       // âœ… 3) Enrich customer details from profiles if order row is empty
       merged = await enrichCustomersFromProfiles(merged);
 
+      announceNewOrders(merged);
       setOrders(merged);
     } catch (e) {
       const msg = e?.message || String(e);
@@ -847,10 +982,25 @@ export default function GroceryOwnerOrdersPage() {
   }, []);
 
   useEffect(() => {
+    knownOrderIdsRef.current = new Set();
+    setLiveOrderPopup(null);
     if (storeId) loadOrders(storeId);
     else setOrders([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
+
+  useEffect(() => {
+    if (!storeId || !ordersSource.table || !ordersSource.storeIdCol) return;
+    setupRealtime(storeId, ordersSource.table, ordersSource.storeIdCol);
+
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeId, ordersSource.table, ordersSource.storeIdCol]);
 
   useEffect(() => {
     if (stores.length > 0 && storeId) {
@@ -1258,6 +1408,44 @@ export default function GroceryOwnerOrdersPage() {
         <div style={{ marginTop: 12, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.6)" }}>
           If customer still shows blank, it means grocery_orders does not store customer id/name or the owner cannot read profiles due to RLS. Then send a screenshot of one row in <b>grocery_orders</b> (columns) and one row in <b>profiles</b>.
         </div>
+        {liveOrderPopup ? (
+          <div
+            style={{
+              position: "fixed",
+              right: 20,
+              bottom: 20,
+              width: "min(360px, calc(100vw - 32px))",
+              zIndex: 1200,
+              borderRadius: 20,
+              border: "1px solid rgba(16,185,129,0.24)",
+              background: "rgba(255,255,255,0.96)",
+              boxShadow: "0 24px 60px rgba(15,23,42,0.2)",
+              padding: 16,
+              backdropFilter: "blur(12px)",
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 1000, color: "#15803d", letterSpacing: "0.08em" }}>LIVE ORDER ALERT</div>
+            <div style={{ marginTop: 8, fontSize: 20, fontWeight: 1000, color: "#0b1220" }}>{liveOrderPopup.title}</div>
+            <div style={{ marginTop: 8, color: "rgba(17,24,39,0.72)", fontWeight: 850, lineHeight: 1.5 }}>{liveOrderPopup.body}</div>
+            <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={btnPillDark}
+                onClick={() => {
+                  setActiveTab("all");
+                  setSearch("");
+                  setOpenOrderId(liveOrderPopup.id);
+                  setLiveOrderPopup(null);
+                }}
+              >
+                Open order
+              </button>
+              <button type="button" style={btnPillLight} onClick={() => setLiveOrderPopup(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <style jsx global>{`

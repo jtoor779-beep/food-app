@@ -470,6 +470,70 @@ export default function NavBar() {
       cancelled = true;
       window.removeEventListener("storage", onStorage);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+
+    let active = true;
+    let channel: any = null;
+
+    async function loadDbNotifs(userId: string) {
+      const { data: rows, error } = await supabase
+        .from("notifications")
+        .select("id,title,body,created_at,is_read,link")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (!active || error) return;
+
+      const mapped: SimpleNotif[] = (rows || []).map((r: any) => ({
+        id: String(r?.id || ""),
+        title: String(r?.title || ""),
+        body: r?.body ? String(r.body) : "",
+        ts: r?.created_at ? new Date(r.created_at).getTime() : Date.now(),
+        read: !!r?.is_read,
+        href: r?.link ? String(r.link) : "",
+      }));
+
+      setNotifs(mapped);
+    }
+
+    async function attachLiveNotifications() {
+      try {
+        const { data } = await getSessionWithRetry(1);
+        const user = data?.session?.user;
+        if (!user?.id) return;
+        if (useLocalNotifsRef.current) return;
+
+        await loadDbNotifs(user.id);
+
+        channel = supabase
+          .channel(`navbar_notifications_${user.id}`)
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
+            () => {
+              void loadDbNotifs(user.id);
+            }
+          )
+          .subscribe();
+      } catch {
+        // keep silent fallback behavior
+      }
+    }
+
+    void attachLiveNotifications();
+
+    return () => {
+      active = false;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
 const unreadCount = useMemo(() => notifs.filter((n) => !n.read).length, [notifs]);

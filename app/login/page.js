@@ -11,6 +11,65 @@ function normalizeRole(r) {
     .replace(/\s+/g, "_");
 }
 
+async function inferOwnedRole(userId) {
+  if (!userId) return null;
+
+  const [{ data: ownedRestaurant, error: restaurantErr }, { data: ownedGrocery, error: groceryErr }] =
+    await Promise.all([
+      supabase.from("restaurants").select("id").eq("owner_user_id", userId).limit(1).maybeSingle(),
+      supabase.from("grocery_stores").select("id").eq("owner_user_id", userId).limit(1).maybeSingle(),
+    ]);
+
+  if (restaurantErr) throw restaurantErr;
+  if (groceryErr) throw groceryErr;
+
+  if (ownedRestaurant?.id) return "restaurant_owner";
+  if (ownedGrocery?.id) return "grocery_owner";
+  return null;
+}
+
+async function getOwnerHomePath(userId, role) {
+  const normalizedRole = normalizeRole(role);
+
+  if (normalizedRole === "restaurant_owner") {
+    const { data, error } = await supabase
+      .from("restaurants")
+      .select("id, approval_status")
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    const restaurants = Array.isArray(data) ? data : [];
+    if (!restaurants.length) return "/restaurants/settings";
+
+    const hasApprovedRestaurant = restaurants.some(
+      (restaurant) => normalizeRole(restaurant?.approval_status) === "approved"
+    );
+
+    return hasApprovedRestaurant ? "/restaurants/orders" : "/restaurants/settings";
+  }
+
+  if (normalizedRole === "grocery_owner") {
+    const { data, error } = await supabase
+      .from("grocery_stores")
+      .select("id, approval_status")
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    const stores = Array.isArray(data) ? data : [];
+    if (!stores.length) return "/groceries/owner/settings";
+
+    const hasApprovedStore = stores.some((store) => normalizeRole(store?.approval_status) === "approved");
+
+    return hasApprovedStore ? "/groceries/owner/dashboard" : "/groceries/owner/settings";
+  }
+
+  return null;
+}
+
 async function ensureProfileForUser(user) {
   if (!user?.id) return null;
 
@@ -21,16 +80,31 @@ async function ensureProfileForUser(user) {
     .maybeSingle();
 
   if (profErr) throw profErr;
-  if (prof?.user_id) return prof;
+
+  const metadataRole = normalizeRole(user?.user_metadata?.role);
+  const inferredRole = await inferOwnedRole(user.id);
+  const resolvedRole = metadataRole || inferredRole || normalizeRole(prof?.role) || "customer";
+
+  if (prof?.user_id) {
+    if (normalizeRole(prof?.role) !== resolvedRole) {
+      const { error: updateErr } = await supabase
+        .from("profiles")
+        .update({ role: resolvedRole })
+        .eq("user_id", user.id);
+
+      if (updateErr) throw updateErr;
+    }
+
+    return { ...prof, role: resolvedRole };
+  }
 
   const fallbackName = String(user?.user_metadata?.full_name || user?.email || "")
     .split("@")[0]
     .trim();
-  const fallbackRole = normalizeRole(user?.user_metadata?.role || "customer") || "customer";
 
   const payload = {
     user_id: user.id,
-    role: fallbackRole,
+    role: resolvedRole,
     full_name: fallbackName || "User",
     phone: String(user?.user_metadata?.phone || "").trim() || null,
     country: String(user?.user_metadata?.country || "").trim() || null,
@@ -39,7 +113,7 @@ async function ensureProfileForUser(user) {
   const { error: upsertErr } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
   if (upsertErr) throw upsertErr;
 
-  return { user_id: user.id, role: fallbackRole };
+  return { user_id: user.id, role: resolvedRole };
 }
 
 async function getRoleAndRedirect(router) {
@@ -54,7 +128,7 @@ async function getRoleAndRedirect(router) {
   const role = normalizeRole(prof?.role);
 
   if (role === "restaurant_owner") {
-    router.push("/restaurants/orders");
+    router.push(await getOwnerHomePath(user.id, role));
     return;
   }
   if (role === "admin") {
@@ -62,7 +136,7 @@ async function getRoleAndRedirect(router) {
     return;
   }
   if (role === "grocery_owner") {
-    router.push("/groceries/owner/dashboard");
+    router.push(await getOwnerHomePath(user.id, role));
     return;
   }
   if (role === "delivery_partner") {

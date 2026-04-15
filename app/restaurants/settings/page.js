@@ -644,6 +644,7 @@ export default function RestaurantSettingsPage() {
         image_url: newImageUrl,
         lat: Number(newLat),
         lng: Number(newLng),
+        approval_status: "pending",
         accepting_orders: true,
         timezone: defaultTimeZone(),
       };

@@ -129,10 +129,26 @@ export default function SignupPage() {
           : undefined;
 
       // âœ… A) Signup that requires email confirmation (if enabled in Supabase)
+      const signupOptions = {
+        data: {
+          role,
+          full_name: fullName.trim(),
+          phone: phone.trim(),
+          country: country.trim(),
+          address_line1: address1.trim(),
+          address_line2: address2.trim(),
+          city: city.trim(),
+          state: stateProv.trim(),
+          postal_code: postal.trim(),
+        },
+      };
+
+      if (emailRedirectTo) signupOptions.emailRedirectTo = emailRedirectTo;
+
       const { data: signData, error: signErr } = await supabase.auth.signUp({
         email: email.trim(),
         password: password.trim(),
-        options: emailRedirectTo ? { emailRedirectTo } : undefined,
+        options: signupOptions,
       });
       if (signErr) throw signErr;
 

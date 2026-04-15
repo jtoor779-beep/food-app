@@ -48,8 +48,6 @@ function pendingProfilePayload(userId: string, body: any) {
   return {
     user_id: userId,
     role: "delivery_partner",
-    account_type: "Delivery Partner",
-    email: clean(body?.email).toLowerCase() || null,
     full_name: clean(body?.full_name) || null,
     phone: clean(body?.phone) || null,
     country: clean(body?.country) || null,
@@ -69,8 +67,6 @@ function fallbackPayload(full: ReturnType<typeof pendingProfilePayload>) {
   return {
     user_id: full.user_id,
     role: full.role,
-    account_type: full.account_type,
-    email: full.email,
     full_name: full.full_name,
     phone: full.phone,
     address_line1: full.address_line1,
@@ -104,19 +100,17 @@ export async function POST(req: Request) {
     const authUser = await getAuthUserWithRetry(userId);
     const authEmail = clean(authUser?.email).toLowerCase();
     const authRole = clean(authUser?.user_metadata?.role).toLowerCase();
-    const authAccountType = clean(authUser?.user_metadata?.account_type).toLowerCase();
+    
 
     if (authUser && authEmail && authEmail !== email) {
       return NextResponse.json({ ok: false, error: "Signup email does not match auth user" }, { status: 400 });
     }
 
     if (
-      authUser &&
-      authRole &&
-      authAccountType &&
-      authRole !== "delivery_partner" &&
-      authAccountType !== "delivery partner"
-    ) {
+  authUser &&
+  authRole &&
+  authRole !== "delivery_partner"
+) {
       return NextResponse.json({ ok: false, error: "User is not a driver signup" }, { status: 400 });
     }
 

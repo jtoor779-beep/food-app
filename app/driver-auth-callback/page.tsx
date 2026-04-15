@@ -5,9 +5,50 @@ import { useEffect, useMemo } from "react";
 export default function DriverAuthCallbackPage() {
   const deepLink = useMemo(() => {
     if (typeof window === "undefined") return "homyfoddriver://auth/callback";
-    const search = window.location.search || "";
-    const hash = window.location.hash || "";
-    return `homyfoddriver://auth/callback${search}${hash}`;
+
+    const allowedQueryKeys = new Set([
+      "code",
+      "type",
+      "error",
+      "error_code",
+      "error_description",
+    ]);
+    const allowedHashKeys = new Set([
+      "access_token",
+      "refresh_token",
+      "expires_at",
+      "expires_in",
+      "token_type",
+      "type",
+      "provider_token",
+      "provider_refresh_token",
+      "error",
+      "error_code",
+      "error_description",
+    ]);
+
+    const url = new URL(window.location.href);
+    const nextQuery = new URLSearchParams();
+    const nextHash = new URLSearchParams();
+    const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    const hashParams = new URLSearchParams(rawHash);
+
+    url.searchParams.forEach((value, key) => {
+      if (allowedQueryKeys.has(key) && value) {
+        nextQuery.set(key, value);
+      }
+    });
+
+    hashParams.forEach((value, key) => {
+      if (allowedHashKeys.has(key) && value) {
+        nextHash.set(key, value);
+      }
+    });
+
+    const query = nextQuery.toString();
+    const hash = nextHash.toString();
+
+    return `homyfoddriver://auth/callback${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`;
   }, []);
 
   useEffect(() => {

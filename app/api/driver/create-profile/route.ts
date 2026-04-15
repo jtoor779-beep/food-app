@@ -125,7 +125,9 @@ export async function POST(req: Request) {
 
     if (
       result.error &&
-      /column|schema cache|country|address_line2|postal_code/i.test(result.error.message || "")
+      /column|schema cache|account_type|country|address_line2|postal_code/i.test(
+        result.error.message || ""
+      )
     ) {
       result = await supabaseAdmin
         .from("profiles")

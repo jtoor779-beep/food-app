@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import NavBar from "../components/NavBar";
+import AuthUrlHandler from "../components/AuthUrlHandler";
 import RouteContainer from "../components/RouteContainer";
 import { Inter } from "next/font/google";
 import { ToastProvider } from "../components/ToastProvider";
@@ -56,6 +57,7 @@ export default function RootLayout({
         }}
       >
         <ToastProvider>
+          <AuthUrlHandler />
           <NavBar />
           {/* This will keep normal pages in maxWidth, but /admin will go full width */}
           <RouteContainer>{children}</RouteContainer>

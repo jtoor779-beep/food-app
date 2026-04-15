@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { EmailOtpType, MobileOtpType } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
@@ -13,6 +14,22 @@ function hasAuthUrlParams(url: URL) {
     (url.searchParams.has("token_hash") && url.searchParams.has("type")) ||
     (hashParams.has("access_token") && hashParams.has("refresh_token"))
   );
+}
+
+function getOtpType(type: string | null): EmailOtpType | MobileOtpType | null {
+  switch (type) {
+    case "signup":
+    case "invite":
+    case "magiclink":
+    case "recovery":
+    case "email_change":
+    case "email":
+    case "sms":
+    case "phone_change":
+      return type;
+    default:
+      return null;
+  }
 }
 
 export default function AuthUrlHandler() {
@@ -32,6 +49,7 @@ export default function AuthUrlHandler() {
         const code = url.searchParams.get("code");
         const tokenHash = url.searchParams.get("token_hash");
         const type = url.searchParams.get("type");
+        const otpType = getOtpType(type);
         const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
         const hashParams = new URLSearchParams(rawHash);
         const accessToken = hashParams.get("access_token");
@@ -40,9 +58,9 @@ export default function AuthUrlHandler() {
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) throw error;
-        } else if (tokenHash && type) {
+        } else if (tokenHash && otpType) {
           const { error } = await supabase.auth.verifyOtp({
-            type,
+            type: otpType,
             token_hash: tokenHash,
           });
           if (error) throw error;

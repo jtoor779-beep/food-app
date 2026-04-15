@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { EmailOtpType, MobileOtpType } from "@supabase/supabase-js";
+import type { EmailOtpType } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import supabase from "@/lib/supabase";
 
@@ -16,16 +16,13 @@ function hasAuthUrlParams(url: URL) {
   );
 }
 
-function getOtpType(type: string | null): EmailOtpType | MobileOtpType | null {
+function getOtpType(type: string | null): EmailOtpType | null {
   switch (type) {
     case "signup":
     case "invite":
     case "magiclink":
     case "recovery":
     case "email_change":
-    case "email":
-    case "sms":
-    case "phone_change":
       return type;
     default:
       return null;

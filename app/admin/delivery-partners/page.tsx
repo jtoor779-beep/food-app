@@ -214,6 +214,17 @@ export default function AdminDeliveryPartnersPage() {
       delivery_approved: true,
       delivery_disabled: false,
     });
+    if (ok) {
+      try {
+        await fetch("/api/send-driver-approval-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: r.user_id }),
+        });
+      } catch {
+        // Do not block approval if email sending fails.
+      }
+    }
     return ok;
   }
 

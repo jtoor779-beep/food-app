@@ -238,6 +238,24 @@ function safeNum(v, fb = 0) {
   return Number.isFinite(n) ? n : fb;
 }
 
+function ownerOrderSubtotal(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const calcSubtotal = items.reduce((sum, it) => sum + safeNum(it?.line_total, 0), 0);
+  const stored = safeNum(
+    pick(order, ["subtotal_amount", "subtotal", "item_total", "items_total"], Number.NaN),
+    Number.NaN
+  );
+  return Number.isFinite(stored) && stored > 0 ? stored : calcSubtotal;
+}
+
+function ownerOrderTax(order) {
+  return safeNum(pick(order, ["tax_amount", "tax", "gst_amount", "gst", "tax_total"], 0), 0);
+}
+
+function ownerOrderEarnings(order) {
+  return ownerOrderSubtotal(order) + ownerOrderTax(order);
+}
+
 async function copyText(txt) {
   try {
     await navigator.clipboard.writeText(String(txt || ""));
@@ -1020,9 +1038,8 @@ export default function RestaurantOrdersPage() {
             {visibleOrders.map((o) => {
               const items = o.items || [];
 
-              const calcTotal = items.reduce((sum, it) => sum + safeNum(it.line_total, 0), 0);
-              const total = safeNum(pick(o, ["total", "amount", "grand_total"], NaN), NaN);
-              const finalTotal = Number.isFinite(total) ? total : calcTotal;
+              const ownerEarnings = ownerOrderEarnings(o);
+              const ownerTax = ownerOrderTax(o);
 
               const badge = statusColor(o.status);
 
@@ -1055,7 +1072,10 @@ export default function RestaurantOrdersPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(finalTotal || 0, currency)}</div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(ownerEarnings || 0, currency)}</div>
+                        <div style={{ color: "rgba(17,24,39,0.55)", fontWeight: 850, fontSize: 12 }}>Tax {money(ownerTax || 0, currency)}</div>
+                      </div>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1098,9 +1118,9 @@ export default function RestaurantOrdersPage() {
               const o = openOrder;
 
               const items = o.items || [];
-              const calcTotal = items.reduce((sum, it) => sum + safeNum(it.line_total, 0), 0);
-              const total = safeNum(pick(o, ["total", "amount", "grand_total"], NaN), NaN);
-              const finalTotal = Number.isFinite(total) ? total : calcTotal;
+              const ownerSubtotal = ownerOrderSubtotal(o);
+              const ownerTax = ownerOrderTax(o);
+              const ownerEarnings = ownerOrderEarnings(o);
 
               const badge = statusColor(o.status);
 
@@ -1142,7 +1162,12 @@ export default function RestaurantOrdersPage() {
                       </div>
                     </div>
 
-                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Total: {money(finalTotal || 0, currency)}</div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: 1000, color: "#0b1220" }}>Owner earnings: {money(ownerEarnings || 0, currency)}</div>
+                      <div style={{ marginTop: 4, color: "rgba(17,24,39,0.65)", fontWeight: 850, fontSize: 12 }}>
+                        Items subtotal: {money(ownerSubtotal || 0, currency)} • Tax: {money(ownerTax || 0, currency)}
+                      </div>
+                    </div>
                   </div>
 
                   <div style={{ marginTop: 10 }}>

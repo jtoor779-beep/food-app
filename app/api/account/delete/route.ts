@@ -48,12 +48,19 @@ async function scrubCustomerData(userId: string) {
     deleteRowsBestEffort("profiles", [{ column: "user_id", value: userId }]),
     deleteRowsBestEffort("notifications", [{ column: "user_id", value: userId }]),
     deleteRowsBestEffort("customer_push_tokens", [{ column: "user_id", value: userId }]),
+    deleteRowsBestEffort("owner_push_tokens", [{ column: "user_id", value: userId }]),
     deleteRowsBestEffort("push_tokens", [
       { column: "user_id", value: userId },
       { column: "owner_user_id", value: userId },
     ]),
+    deleteRowsBestEffort("owner_payout_bank_accounts", [{ column: "owner_user_id", value: userId }]),
+    deleteRowsBestEffort("owner_payout_requests", [{ column: "owner_user_id", value: userId }]),
     deleteRowsBestEffort("support_tickets", [{ column: "user_id", value: userId }]),
     deleteRowsBestEffort("support_ticket_messages", [{ column: "user_id", value: userId }]),
+    deleteRowsBestEffort("menu_items", [{ column: "owner_user_id", value: userId }]),
+    deleteRowsBestEffort("restaurants", [{ column: "owner_user_id", value: userId }]),
+    deleteRowsBestEffort("grocery_items", [{ column: "owner_user_id", value: userId }]),
+    deleteRowsBestEffort("grocery_stores", [{ column: "owner_user_id", value: userId }]),
   ]);
 }
 

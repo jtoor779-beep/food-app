@@ -17,6 +17,17 @@ type EmailItem = {
   embeddedImageUrl?: string;
 };
 
+type OwnerInvoiceBreakdown = {
+  subtotal: number;
+  tax: number;
+  earnings: number;
+};
+
+type EmailAttachment = {
+  name: string;
+  content: string;
+};
+
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -210,7 +221,7 @@ async function getGroceryItems(orderId: string): Promise<EmailItem[]> {
 async function getRestaurantContext(orderId: string) {
   const { data: orderRow, error: orderErr } = await supabaseAdmin
     .from("orders")
-    .select("id, user_id, customer_name, total, restaurant_id, delivered_at")
+    .select("*")
     .eq("id", orderId)
     .maybeSingle();
 
@@ -242,6 +253,8 @@ async function getRestaurantContext(orderId: string) {
     customerName: orderRow.customer_name || "Customer",
     venueName: restaurantRow?.name || "Restaurant",
     totalAmount: Number(orderRow.total || 0),
+    subtotalAmount: toNumber(firstNonEmpty(orderRow.subtotal_amount, orderRow.subtotal, orderRow.item_total), 0),
+    taxAmount: toNumber(firstNonEmpty(orderRow.tax_amount, orderRow.gst_amount, orderRow.tax, orderRow.gst), 0),
     deliveredAt: orderRow.delivered_at || null,
     label: "order",
     items: await getRestaurantItems(orderId),
@@ -251,7 +264,7 @@ async function getRestaurantContext(orderId: string) {
 async function getGroceryContext(orderId: string) {
   const { data: orderRow, error: orderErr } = await supabaseAdmin
     .from("grocery_orders")
-    .select("id, customer_user_id, customer_name, total_amount, store_id, delivered_at")
+    .select("*")
     .eq("id", orderId)
     .maybeSingle();
 
@@ -283,6 +296,8 @@ async function getGroceryContext(orderId: string) {
     customerName: orderRow.customer_name || "Customer",
     venueName: storeRow?.name || "Store",
     totalAmount: Number(orderRow.total_amount || 0),
+    subtotalAmount: toNumber(firstNonEmpty(orderRow.subtotal_amount, orderRow.subtotal, orderRow.item_total), 0),
+    taxAmount: toNumber(firstNonEmpty(orderRow.tax_amount, orderRow.gst_amount, orderRow.tax, orderRow.gst), 0),
     deliveredAt: orderRow.delivered_at || null,
     label: "grocery order",
     items: await getGroceryItems(orderId),
@@ -295,6 +310,13 @@ function escapeHtml(value: any) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function escapePdfText(value: any) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
 }
 
 function formatMoney(amount: any) {
@@ -315,6 +337,22 @@ function formatDeliveredAt(value: any) {
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
+}
+
+function ownerInvoiceBreakdown(ctx: any): OwnerInvoiceBreakdown {
+  const items = Array.isArray(ctx?.items) ? ctx.items : [];
+  const itemSubtotal = items.reduce((sum: number, item: EmailItem) => sum + toNumber(item?.lineTotal, 0), 0);
+  const storedSubtotal = toNumber(
+    firstNonEmpty(ctx?.subtotalAmount, ctx?.subtotal, ctx?.itemTotal, ctx?.itemsTotal),
+    NaN
+  );
+  const subtotal = Number.isFinite(storedSubtotal) && storedSubtotal > 0 ? storedSubtotal : itemSubtotal;
+  const tax = toNumber(firstNonEmpty(ctx?.taxAmount, ctx?.gstAmount, ctx?.tax, ctx?.gst), 0);
+  return {
+    subtotal,
+    tax,
+    earnings: subtotal + tax,
+  };
 }
 
 function shouldUseLogo(url?: string) {
@@ -460,25 +498,28 @@ function buildEmailPayload(
   }
 
   if (eventType === "owner_new_order_received") {
+    const ownerBreakdown = ownerInvoiceBreakdown(ctx);
     const subject = `New order received #${idPart}`;
     return {
       toName: venueName,
       subject,
-      text: `A new ${ctx.label} #${idPart} has been received for ${venueName}. Customer: ${customerName}. Total: ${amount}.`,
+      text: `A new ${ctx.label} #${idPart} has been received for ${venueName}. Customer: ${customerName}. Owner earnings (items + tax): ${formatMoney(ownerBreakdown.earnings)}.`,
       html: buildEmailShell({
         eyebrow: "New Order Alert",
         title: "A new order just came in",
         intro: `A fresh ${ctx.label} is waiting for ${venueName}. Open your dashboard, review the details, and move it into prep quickly.`,
-        highlightLabel: "Order total",
-        highlightValue: amount,
+        highlightLabel: "Owner earnings",
+        highlightValue: formatMoney(ownerBreakdown.earnings),
         detailRows: [
           { label: "Order ID", value: `#${idPart}` },
           { label: "Customer", value: customerName },
           { label: ctx.label === "grocery order" ? "Store" : "Restaurant", value: venueName },
+          { label: "Items subtotal", value: formatMoney(ownerBreakdown.subtotal) },
+          { label: "Tax", value: formatMoney(ownerBreakdown.tax) },
           { label: "Status", value: "New order received" },
         ],
         items,
-        note: "Fast updates keep customers confident. Accept the order, move it through prep, and hand it off smoothly for delivery.",
+        note: "Owner earnings shown here include item price plus tax only. Delivery fee, platform fee, commission, and other platform-side fees are not included.",
         logoUrl: meta.logoUrl,
         ctaLabel: "Open dashboard",
         ctaUrl: meta.ownerOrdersUrl,
@@ -515,7 +556,67 @@ function buildEmailPayload(
   };
 }
 
-async function sendBrevoEmail(toEmail: string, toName: string, subject: string, text: string, html: string) {
+function buildInvoicePdfAttachment(ctx: any) {
+  const ownerBreakdown = ownerInvoiceBreakdown(ctx);
+  const lines = [
+    "HomyFod Invoice",
+    "",
+    `Order ID: #${shortId(ctx.orderId)}`,
+    `Type: ${ctx.label === "grocery order" ? "Grocery Order" : "Restaurant Order"}`,
+    `Store: ${ctx.venueName || "-"}`,
+    `Customer: ${ctx.customerName || "-"}`,
+    `Items subtotal: ${formatMoney(ownerBreakdown.subtotal)}`,
+    `Tax: ${formatMoney(ownerBreakdown.tax)}`,
+    `Owner earnings: ${formatMoney(ownerBreakdown.earnings)}`,
+    "",
+    "Items:",
+    ...((ctx.items || []).map((item: EmailItem) =>
+      `${item.name} | Qty ${item.qty} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`
+    )),
+  ];
+
+  const textCommands = lines
+    .map((line, index) => `1 0 0 1 48 ${760 - index * 22} Tm (${escapePdfText(line)}) Tj`)
+    .join("\n");
+  const stream = `BT\n/F1 20 Tf\n${textCommands}\nET`;
+  const length = stream.length;
+
+  const objects = [
+    "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+    "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj",
+    "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
+    `5 0 obj << /Length ${length} >> stream\n${stream}\nendstream endobj`,
+  ];
+
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [0];
+  objects.forEach((obj) => {
+    offsets.push(pdf.length);
+    pdf += `${obj}\n`;
+  });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  return {
+    name: `invoice-${shortId(ctx.orderId)}.pdf`,
+    content: Buffer.from(pdf, "binary").toString("base64"),
+  } satisfies EmailAttachment;
+}
+
+async function sendBrevoEmail(
+  toEmail: string,
+  toName: string,
+  subject: string,
+  text: string,
+  html: string,
+  attachments?: EmailAttachment[]
+) {
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
@@ -532,6 +633,7 @@ async function sendBrevoEmail(toEmail: string, toName: string, subject: string, 
       subject,
       textContent: text,
       htmlContent: html,
+      attachment: Array.isArray(attachments) && attachments.length ? attachments : undefined,
     }),
   });
 
@@ -592,13 +694,15 @@ export async function POST(req: Request) {
       ordersUrl: `${origin}/${orderType === "grocery" ? "groceries/orders" : "orders"}`,
       ownerOrdersUrl: `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`,
     });
+    const attachments = eventType === "owner_new_order_received" ? [buildInvoicePdfAttachment(ctx)] : [];
 
     const brevo = await sendBrevoEmail(
       recipientEmail,
       payload.toName,
       payload.subject,
       payload.text,
-      payload.html
+      payload.html,
+      attachments
     );
 
     return NextResponse.json({ success: true, recipientEmail, brevo });

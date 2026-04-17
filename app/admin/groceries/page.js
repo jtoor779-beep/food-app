@@ -92,8 +92,10 @@ export default function AdminGroceriesPage() {
 
       setInfo("✅ Grocery store deleted");
       await load();
+      return true;
     } catch (e) {
       setErr(e?.message || String(e));
+      return false;
     } finally {
       setBusyId("");
     }
@@ -137,6 +139,24 @@ export default function AdminGroceriesPage() {
       setErr(e?.message || String(e));
     } finally {
       setBusyId("");
+    }
+  }
+
+  async function sendOwnerApprovalEmail(row) {
+    try {
+      const ownerUserId = clean(row?.owner_user_id);
+      if (!ownerUserId) return;
+      await fetch("/api/send-owner-approval-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: ownerUserId,
+          ownerRole: "grocery_owner",
+          storeName: clean(row?.name) || "Your grocery store",
+        }),
+      });
+    } catch {
+      // best effort only
     }
   }
 
@@ -271,7 +291,10 @@ export default function AdminGroceriesPage() {
                         <button
                           style={btnPrimary}
                           disabled={busyId === id || loading}
-                          onClick={() => patch(id, { approval_status: "approved" }, "✅ Store approved")}
+                          onClick={async () => {
+                            await patch(id, { approval_status: "approved" }, "✅ Store approved");
+                            await sendOwnerApprovalEmail(r);
+                          }}
                         >
                           {busyId === id ? "Working…" : "Approve"}
                         </button>

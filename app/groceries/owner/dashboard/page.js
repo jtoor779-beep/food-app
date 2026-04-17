@@ -348,6 +348,26 @@ function cleanStr(v) {
   return String(v || "").trim();
 }
 
+function ownerOrderSubtotal(order) {
+  const stored = safeNum(order?.subtotal_amount ?? order?.subtotal ?? order?.item_total ?? order?.items_total ?? 0);
+  if (stored > 0) return stored;
+  const items = Array.isArray(order?.order_items || order?.items) ? order.order_items || order.items : [];
+  return items.reduce((sum, item) => {
+    const qty = safeNum(item?.qty ?? item?.quantity ?? 1) || 1;
+    const unit = safeNum(item?.price ?? item?.unit_price ?? item?.item_price ?? 0);
+    const line = Number(item?.line_total ?? qty * unit);
+    return sum + (Number.isFinite(line) ? line : qty * unit);
+  }, 0);
+}
+
+function ownerOrderTax(order) {
+  return safeNum(order?.tax_amount ?? order?.tax ?? order?.gst_amount ?? order?.gst ?? order?.tax_total ?? 0);
+}
+
+function ownerOrderEarnings(order) {
+  return ownerOrderSubtotal(order) + ownerOrderTax(order);
+}
+
 /* =========================
    ✅ FIX: auto-detect grocery orders table + store id column
    (dashboard was using only store_id before)
@@ -493,7 +513,7 @@ export default function GroceryOwnerDashboardPage() {
   const [savingControls, setSavingControls] = useState(false);
   const [controlsMsg, setControlsMsg] = useState("");
 
-  // Weekly earnings
+  // Weekly owner earnings
   const [weekMode, setWeekMode] = useState("revenue"); // revenue | orders
   const [weekData, setWeekData] = useState([
     { d: "Mon", v: 0 },
@@ -561,7 +581,7 @@ export default function GroceryOwnerDashboardPage() {
     try {
       const statuses = tabStatusMap[ordersTab];
       const baseSelect =
-        "id, order_id, status, created_at, total, total_amount, amount, customer_phone, phone, customer_name, name, customer_user_id";
+        "id, order_id, status, created_at, total, total_amount, amount, subtotal_amount, subtotal, item_total, items_total, tax_amount, tax, gst_amount, gst, tax_total, customer_phone, phone, customer_name, name, customer_user_id";
 
       const { table: t, storeIdCol, rows } = await selectOrdersAuto(baseSelect, sid, (qq) => {
         let q = qq;
@@ -601,7 +621,7 @@ export default function GroceryOwnerDashboardPage() {
     setSelectedCustomerOrders([]);
     try {
       const baseSelect =
-        "id, order_id, status, created_at, total, total_amount, amount, customer_user_id, customer_name, name, customer_phone, phone";
+        "id, order_id, status, created_at, total, total_amount, amount, subtotal_amount, subtotal, item_total, items_total, tax_amount, tax, gst_amount, gst, tax_total, customer_user_id, customer_name, name, customer_phone, phone";
 
       const { table: t, storeIdCol, rows } = await selectOrdersAuto(baseSelect, sid, (q) =>
         q.order("created_at", { ascending: false }).limit(500)
@@ -644,7 +664,7 @@ export default function GroceryOwnerDashboardPage() {
         if (["delivered", "completed"].includes(st)) g.delivered_count += 1;
         if (["rejected", "cancelled", "canceled", "failed"].includes(st)) g.rejected_count += 1;
 
-        const m = safeNum(o?.total ?? o?.total_amount ?? o?.amount ?? 0);
+        const m = ownerOrderEarnings(o);
         if (!["rejected", "cancelled", "canceled", "failed"].includes(st)) {
           g.revenue_total += m;
         }
@@ -723,7 +743,7 @@ export default function GroceryOwnerDashboardPage() {
       start.setDate(start.getDate() - 6);
       const startISO = start.toISOString();
 
-      const baseSelect = "created_at, status, total, total_amount, amount";
+      const baseSelect = "created_at, status, total, total_amount, amount, subtotal_amount, subtotal, item_total, items_total, tax_amount, tax, gst_amount, gst, tax_total";
 
       const { rows } = await selectOrdersAuto(baseSelect, sid, (q) =>
         q.gte("created_at", startISO).order("created_at", { ascending: true })
@@ -743,7 +763,7 @@ export default function GroceryOwnerDashboardPage() {
         const st = String(r.status || "").toLowerCase();
         if (!["rejected", "cancelled", "canceled", "failed"].includes(st)) {
           slot.orders += 1;
-          const m = safeNum(r.total ?? r.total_amount ?? r.amount ?? 0);
+          const m = ownerOrderEarnings(r);
           slot.revenue += m;
         }
         by.set(label, slot);
@@ -1200,7 +1220,7 @@ export default function GroceryOwnerDashboardPage() {
                           const st = String(o.status || "pending");
                           const ord = o.order_id || o.id || "-";
                           const cust = o.customer_name || o.name || o.customer_phone || o.phone || "-";
-                          const total = safeNum(o.total ?? o.total_amount ?? o.amount ?? 0);
+                          const total = ownerOrderEarnings(o);
                           const created = o.created_at ? new Date(o.created_at).toLocaleString() : "-";
 
                           return (
@@ -1210,7 +1230,7 @@ export default function GroceryOwnerDashboardPage() {
                               </td>
                               <td style={{ ...td, fontWeight: 1000 }}>{String(ord).slice(0, 10)}</td>
                               <td style={td}>{String(cust).slice(0, 26)}</td>
-                              <td style={td}>{fmtMoney(total, currency)}</td>
+                                <td style={td}>{fmtMoney(total, currency)}</td>
                               <td style={{ ...td, color: "rgba(15,23,42,0.72)" }}>{created}</td>
                             </tr>
                           );
@@ -1287,7 +1307,7 @@ export default function GroceryOwnerDashboardPage() {
                           <th style={th}>Customer</th>
                           <th style={th}>Orders</th>
                           <th style={th}>Delivered</th>
-                          <th style={th}>Revenue</th>
+                          <th style={th}>Earnings</th>
                           <th style={th}>Last Order</th>
                           <th style={th}>Action</th>
                         </tr>
@@ -1404,7 +1424,7 @@ export default function GroceryOwnerDashboardPage() {
                             selectedOrdersSorted.slice(0, 50).map((o) => {
                               const st = String(o.status || "pending");
                               const ord = o.order_id || o.id || "-";
-                              const total = safeNum(o.total ?? o.total_amount ?? o.amount ?? 0);
+                              const total = ownerOrderEarnings(o);
                               const created = o.created_at ? new Date(o.created_at).toLocaleString() : "-";
 
                               return (
@@ -1515,7 +1535,7 @@ export default function GroceryOwnerDashboardPage() {
                 <div style={boxTitle}>Weekly Earnings</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={weekMode === "revenue" ? miniBtnDark : miniBtn} onClick={() => setWeekMode("revenue")}>
-                    Revenue
+                    Earnings
                   </button>
                   <button style={weekMode === "orders" ? miniBtnDark : miniBtn} onClick={() => setWeekMode("orders")}>
                     Orders

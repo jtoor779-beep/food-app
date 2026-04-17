@@ -152,7 +152,87 @@ async function sendOwnerWebPush(userId: string | null, payload: { title: string;
   }
 }
 
-async function insertPaidNotifications(orderType: string, orderId: string) {
+function isLikelyExpoPushToken(token: string) {
+  return token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken[");
+}
+
+async function sendOwnerExpoPush(
+  userId: string | null,
+  payload: { title: string; body: string; url: string; orderId: string; orderType: string }
+) {
+  if (!supabaseAdmin || !userId) return 0;
+
+  try {
+    const { data: tokenRows, error } = await supabaseAdmin
+      .from("owner_push_tokens")
+      .select("expo_push_token")
+      .eq("user_id", userId);
+
+    if (error || !tokenRows?.length) return 0;
+
+    const tokens = Array.from(
+      new Set(
+        (tokenRows || [])
+          .map((row: any) => String(row?.expo_push_token || "").trim())
+          .filter((token) => token && isLikelyExpoPushToken(token))
+      )
+    );
+
+    if (!tokens.length) return 0;
+
+    const messages = tokens.map((token) => ({
+      to: token,
+      sound: "default",
+      title: payload.title,
+      body: payload.body,
+      priority: "high",
+      ttl: 3600,
+      badge: 1,
+      mutableContent: true,
+      interruptionLevel: "time-sensitive",
+      data: {
+        type: "order",
+        link: "/(tabs)/orders",
+        orderId: payload.orderId,
+        orderType: payload.orderType,
+        url: payload.url,
+      },
+    }));
+
+    const res = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(messages),
+    });
+
+    if (!res.ok) return 0;
+    return tokens.length;
+  } catch {
+    return 0;
+  }
+}
+
+async function sendOwnerNewOrderEmail(req: Request, orderType: string, orderId: string) {
+  try {
+    await fetch(new URL("/api/send-order-email", req.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType: "owner_new_order_received",
+        orderType,
+        orderId,
+      }),
+    });
+  } catch {
+    // best effort only
+  }
+}
+
+async function insertPaidNotifications(req: Request, orderType: string, orderId: string) {
   const names = tableNames(orderType);
 
   if (orderType === "grocery") {
@@ -193,6 +273,8 @@ async function insertPaidNotifications(orderType: string, orderId: string) {
         is_read: false,
       });
       await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
+      await sendOwnerExpoPush(ownerUserId, { title, body, url: names.ownerOrdersLink, orderId, orderType });
+      await sendOwnerNewOrderEmail(req, orderType, orderId);
     }
 
     if (orderRow.customer_user_id) {
@@ -246,6 +328,8 @@ async function insertPaidNotifications(orderType: string, orderId: string) {
       is_read: false,
     });
     await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
+    await sendOwnerExpoPush(ownerUserId, { title, body, url: names.ownerOrdersLink, orderId, orderType });
+    await sendOwnerNewOrderEmail(req, orderType, orderId);
   }
 
   if (orderRow.user_id) {
@@ -333,7 +417,7 @@ export async function POST(req: Request) {
       await updateOrderWithFallback(names.orderTable, orderId, patchAttempts);
 
       await deleteNotificationsForOrder(orderId);
-      await insertPaidNotifications(orderType, orderId);
+      await insertPaidNotifications(req, orderType, orderId);
 
       return NextResponse.json({ ok: true, updated: true });
     }

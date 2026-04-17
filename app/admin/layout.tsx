@@ -49,6 +49,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       { key: "revenue", href: "/admin/revenue", label: "Revenue" },
       { key: "payouts", href: "/admin/payouts", label: "Payouts" },
       { key: "driver_bank_accounts", href: "/admin/driver-bank-accounts", label: "Driver Bank Accounts" },
+      { key: "store_payouts", href: "/admin/store-payouts", label: "Store Payouts" },
+      { key: "store_bank_accounts", href: "/admin/store-bank-accounts", label: "Store Bank Accounts" },
 
       { key: "groceries", href: "/admin/groceries", label: "Groceries" },
 

@@ -297,6 +297,25 @@ function safeNumber(v, fallback = 0) {
   return isFinite(n) ? n : fallback;
 }
 
+function ownerOrderSubtotal(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const calc = items.reduce((sum, it) => {
+    const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
+    const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
+    return sum + price * qty;
+  }, 0);
+  const stored = safeNumber(pick(order, ["subtotal_amount", "subtotal", "item_total", "items_total"], Number.NaN), Number.NaN);
+  return Number.isFinite(stored) && stored > 0 ? stored : calc;
+}
+
+function ownerOrderTax(order) {
+  return safeNumber(pick(order, ["tax_amount", "tax", "gst_amount", "gst", "tax_total"], 0), 0);
+}
+
+function ownerOrderEarnings(order) {
+  return ownerOrderSubtotal(order) + ownerOrderTax(order);
+}
+
 function toText(v) {
   return String(v || "").trim();
 }
@@ -1003,8 +1022,7 @@ export default function RestaurantOwnerDashboard() {
         return sum + price * qty;
       }, 0);
 
-      const amtRaw = pick(o, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], calcTotal);
-      const amt = safeNumber(amtRaw, 0);
+      const amt = ownerOrderEarnings(o);
 
       if (createdMs && createdMs >= todayStart) {
         totals.todayOrders += 1;
@@ -1297,7 +1315,7 @@ export default function RestaurantOwnerDashboard() {
 
           <div style={statCard}>
             <div style={statNum}>{money(derived.totals.todayRevenue, currency)}</div>
-            <div style={statLabel}>Today Revenue</div>
+            <div style={statLabel}>Today Earnings</div>
           </div>
 
           <div style={statCard}>
@@ -1439,16 +1457,8 @@ export default function RestaurantOwnerDashboard() {
                           .filter(Boolean)
                           .join(", ");
 
-                        const calcTotal = items.reduce((sum, it) => {
-                          const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-                          const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-                          return sum + price * qty;
-                        }, 0);
-
-                        const total = safeNumber(
-                          pick(o, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], calcTotal),
-                          0
-                        );
+                        const total = ownerOrderEarnings(o);
+                        const tax = ownerOrderTax(o);
 
                         const customerName = pick(o, ["customer_name", "name", "full_name"], "-");
                         const customerPhone = pick(o, ["customer_phone", "phone", "mobile", "customer_mobile"], "-");
@@ -1523,6 +1533,9 @@ export default function RestaurantOwnerDashboard() {
 
                             <td style={td}>
                               <div style={{ fontWeight: 1000, color: "#0b1220" }}>{money(total, currency)}</div>
+                              <div style={{ marginTop: 4, color: "rgba(17,24,39,0.62)", fontWeight: 850 }}>
+                                Tax: {money(tax, currency)}
+                              </div>
                               <div style={{ marginTop: 6, color: "rgba(17,24,39,0.62)", fontWeight: 850 }}>
                                 Prep ETA: {prepTimeMins + (busyMode ? extraPrepMins : 0)} mins
                               </div>
@@ -1629,7 +1642,7 @@ export default function RestaurantOwnerDashboard() {
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button onClick={() => setChartMode("revenue")} style={chartMode === "revenue" ? btnDark : btnLight}>
-                    Revenue
+                    Earnings
                   </button>
                   <button onClick={() => setChartMode("orders")} style={chartMode === "orders" ? btnDark : btnLight}>
                     Orders

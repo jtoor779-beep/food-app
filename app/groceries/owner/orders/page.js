@@ -34,6 +34,31 @@ function safeArr(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function ownerOrderSubtotal(order) {
+  const items = safeArr(order?.order_items || order?.items);
+  const calc = items.reduce((sum, item) => {
+    const qty = Number(item?.qty ?? item?.quantity ?? 1) || 1;
+    const unit = Number(item?.price ?? item?.unit_price ?? item?.item_price ?? 0) || 0;
+    const line = Number(item?.line_total ?? qty * unit) || 0;
+    return sum + line;
+  }, 0);
+  const stored = Number(
+    pickDeep(order, ["subtotal_amount", "subtotal", "item_total", "items_total"], Number.NaN)
+  );
+  return Number.isFinite(stored) && stored > 0 ? stored : calc;
+}
+
+function ownerOrderTax(order) {
+  const tax = Number(
+    pickDeep(order, ["tax_amount", "tax", "gst_amount", "gst", "tax_total"], 0)
+  );
+  return Number.isFinite(tax) ? tax : 0;
+}
+
+function ownerOrderEarnings(order) {
+  return ownerOrderSubtotal(order) + ownerOrderTax(order);
+}
+
 /** âœ… NEW: safe pick helper */
 function pick(obj, keys, fallback = "") {
   for (const k of keys) {
@@ -1210,7 +1235,10 @@ export default function GroceryOwnerOrdersPage() {
                       </div>
 
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <div style={orderTotal}>{money(o.total_amount ?? o.total ?? 0, currency)}</div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={orderTotal}>{money(ownerOrderEarnings(o), currency)}</div>
+                          <div style={orderMetaDim}>Tax {money(ownerOrderTax(o), currency)}</div>
+                        </div>
                         <button onClick={() => setOpenOrderId((cur) => (cur === o.id ? null : o.id))} style={viewBtn}>
                           {isOpen ? "Hide details" : "View details"}
                         </button>

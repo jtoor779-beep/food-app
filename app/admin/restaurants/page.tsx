@@ -562,6 +562,25 @@ export default function AdminRestaurantsPage() {
     return { accepting_orders: false };
   }
 
+  async function sendOwnerApprovalEmail(row: AnyRow) {
+    try {
+      const ownerKey = getOwnerKey(row);
+      const ownerUserId = ownerKey ? String(row?.[ownerKey] ?? "").trim() : "";
+      if (!ownerUserId) return;
+      await fetch("/api/send-owner-approval-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: ownerUserId,
+          ownerRole: "restaurant_owner",
+          storeName: String(row?.name ?? "").trim() || "Your restaurant",
+        }),
+      });
+    } catch {
+      // best effort only
+    }
+  }
+
   async function doUpdate(row: AnyRow, payload: AnyRow, successPatch?: AnyRow) {
     setBusyId(row.id);
     setError(null);
@@ -639,7 +658,8 @@ export default function AdminRestaurantsPage() {
 
   async function forceClose(row: AnyRow) {
     const payload = buildForceCloseUpdate(row);
-    await doUpdate(row, payload);
+    const ok = await doUpdate(row, payload);
+    if (ok) await sendOwnerApprovalEmail(row);
   }
 
   async function deleteRestaurant(row: AnyRow) {

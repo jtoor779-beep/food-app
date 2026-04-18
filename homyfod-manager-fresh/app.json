@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "HomyFod Manager Fresh",
+    "slug": "homyfod-manager-fresh",
+    "scheme": "homyfodmanagerfresh",
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "45564e7f-3b3b-45f2-9491-2b13dedf5a7c"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.jagjittoor.homyfodmanagerfresh",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

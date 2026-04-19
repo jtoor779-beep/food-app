@@ -239,8 +239,13 @@ function safeNum(v, fb = 0) {
 }
 
 function ownerOrderSubtotal(order) {
-  const items = Array.isArray(order?.items) ? order.items : [];
-  const calcSubtotal = items.reduce((sum, it) => sum + safeNum(it?.line_total, 0), 0);
+  const items = Array.isArray(order?.order_items || order?.items) ? order.order_items || order.items : [];
+  const calcSubtotal = items.reduce((sum, it) => {
+    const qty = safeNum(pick(it, ["qty", "quantity"], 1), 1) || 1;
+    const unit = safeNum(pick(it, ["price", "item_price", "unit_price"], 0), 0);
+    const line = safeNum(pick(it, ["line_total"], Number.NaN), Number.NaN);
+    return sum + (Number.isFinite(line) && line > 0 ? line : qty * unit);
+  }, 0);
   const stored = safeNum(
     pick(order, ["subtotal_amount", "subtotal", "item_total", "items_total"], Number.NaN),
     Number.NaN

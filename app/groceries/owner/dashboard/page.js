@@ -349,15 +349,15 @@ function cleanStr(v) {
 }
 
 function ownerOrderSubtotal(order) {
-  const stored = safeNum(order?.subtotal_amount ?? order?.subtotal ?? order?.item_total ?? order?.items_total ?? 0);
-  if (stored > 0) return stored;
   const items = Array.isArray(order?.order_items || order?.items) ? order.order_items || order.items : [];
-  return items.reduce((sum, item) => {
+  const calc = items.reduce((sum, item) => {
     const qty = safeNum(item?.qty ?? item?.quantity ?? 1) || 1;
     const unit = safeNum(item?.price ?? item?.unit_price ?? item?.item_price ?? 0);
-    const line = Number(item?.line_total ?? qty * unit);
-    return sum + (Number.isFinite(line) ? line : qty * unit);
+    const line = safeNum(item?.line_total, Number.NaN);
+    return sum + (Number.isFinite(line) && line > 0 ? line : qty * unit);
   }, 0);
+  const stored = safeNum(order?.subtotal_amount ?? order?.subtotal ?? order?.item_total ?? order?.items_total ?? Number.NaN);
+  return Number.isFinite(stored) && stored > 0 ? stored : calc;
 }
 
 function ownerOrderTax(order) {

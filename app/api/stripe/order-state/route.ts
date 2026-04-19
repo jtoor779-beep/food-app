@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import webpush from "web-push";
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
@@ -103,116 +102,38 @@ async function deleteNotificationsForOrder(orderId: string) {
   }
 }
 
-function configureWebPush() {
-  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
-  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || "";
-  if (!vapidPublicKey || !vapidPrivateKey) return false;
-
-  webpush.setVapidDetails("mailto:admin@homyfod.com", vapidPublicKey, vapidPrivateKey);
-  return true;
-}
-
-async function sendOwnerWebPush(userId: string | null, payload: { title: string; body: string; url: string }) {
-  if (!supabaseAdmin || !userId || !configureWebPush()) return 0;
-
-  try {
-    const { data: subs, error } = await supabaseAdmin
-      .from("push_subscriptions")
-      .select("endpoint,p256dh,auth")
-      .eq("user_id", userId);
-
-    if (error || !subs?.length) return 0;
-
-    let sent = 0;
-    for (const sub of subs) {
-      try {
-        await webpush.sendNotification(
-          {
-            endpoint: String(sub?.endpoint || ""),
-            keys: {
-              p256dh: String(sub?.p256dh || ""),
-              auth: String(sub?.auth || ""),
-            },
-          },
-          JSON.stringify({
-            title: payload.title,
-            body: payload.body,
-            url: payload.url,
-          })
-        );
-        sent += 1;
-      } catch {
-        // best effort only
-      }
-    }
-
-    return sent;
-  } catch {
-    return 0;
-  }
-}
-
-function isLikelyExpoPushToken(token: string) {
-  return token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken[");
-}
-
-async function sendOwnerExpoPush(
-  userId: string | null,
-  payload: { title: string; body: string; url: string; orderId: string; orderType: string }
+async function sendOwnerNotification(
+  req: Request,
+  payload: {
+    userId: string | null;
+    title: string;
+    body: string;
+    webUrl: string;
+    orderId: string;
+    orderType: string;
+    status?: string;
+  },
 ) {
-  if (!supabaseAdmin || !userId) return 0;
+  if (!payload.userId) return;
 
   try {
-    const { data: tokenRows, error } = await supabaseAdmin
-      .from("owner_push_tokens")
-      .select("expo_push_token")
-      .eq("user_id", userId);
-
-    if (error || !tokenRows?.length) return 0;
-
-    const tokens = Array.from(
-      new Set(
-        (tokenRows || [])
-          .map((row: any) => String(row?.expo_push_token || "").trim())
-          .filter((token) => token && isLikelyExpoPushToken(token))
-      )
-    );
-
-    if (!tokens.length) return 0;
-
-    const messages = tokens.map((token) => ({
-      to: token,
-      sound: "default",
-      title: payload.title,
-      body: payload.body,
-      priority: "high",
-      ttl: 3600,
-      badge: 1,
-      mutableContent: true,
-      interruptionLevel: "time-sensitive",
-      data: {
+    await fetch(new URL("/api/send-owner-notification", req.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: payload.userId,
+        title: payload.title,
+        body: payload.body,
         type: "order",
-        link: "/(tabs)/orders",
+        link: "/orders",
+        url: payload.webUrl,
         orderId: payload.orderId,
         orderType: payload.orderType,
-        url: payload.url,
-      },
-    }));
-
-    const res = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Accept-encoding": "gzip, deflate",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(messages),
+        status: payload.status || "pending",
+      }),
     });
-
-    if (!res.ok) return 0;
-    return tokens.length;
   } catch {
-    return 0;
+    // best effort only
   }
 }
 
@@ -264,16 +185,15 @@ async function insertPaidNotifications(req: Request, orderType: string, orderId:
     if (ownerUserId) {
       const title = "New grocery order received";
       const body = `New grocery order ${sid ? "#" + sid : ""} received for ${storeName}. Tap to view.`;
-      await supabaseAdmin!.from("notifications").insert({
-        user_id: ownerUserId,
+      await sendOwnerNotification(req, {
+        userId: ownerUserId,
         title,
         body,
-        type: "order",
-        link: names.ownerOrdersLink,
-        is_read: false,
+        webUrl: names.ownerOrdersLink,
+        orderId,
+        orderType,
+        status: "pending",
       });
-      await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
-      await sendOwnerExpoPush(ownerUserId, { title, body, url: names.ownerOrdersLink, orderId, orderType });
       await sendOwnerNewOrderEmail(req, orderType, orderId);
     }
 
@@ -319,16 +239,15 @@ async function insertPaidNotifications(req: Request, orderType: string, orderId:
   if (ownerUserId) {
     const title = "New order received";
     const body = `New order ${sid ? "#" + sid : ""} received for ${restName}. Tap to view.`;
-    await supabaseAdmin!.from("notifications").insert({
-      user_id: ownerUserId,
+    await sendOwnerNotification(req, {
+      userId: ownerUserId,
       title,
       body,
-      type: "order",
-      link: names.ownerOrdersLink,
-      is_read: false,
+      webUrl: names.ownerOrdersLink,
+      orderId,
+      orderType,
+      status: "pending",
     });
-    await sendOwnerWebPush(ownerUserId, { title, body, url: names.ownerOrdersLink });
-    await sendOwnerExpoPush(ownerUserId, { title, body, url: names.ownerOrdersLink, orderId, orderType });
     await sendOwnerNewOrderEmail(req, orderType, orderId);
   }
 

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 type OrderEmailEvent =
   | "customer_order_placed"
   | "owner_new_order_received"
+  | "owner_order_confirmed"
   | "customer_order_delivered";
 
 type OrderType = "restaurant" | "grocery";
@@ -497,17 +498,22 @@ function buildEmailPayload(
     };
   }
 
-  if (eventType === "owner_new_order_received") {
+  if (eventType === "owner_new_order_received" || eventType === "owner_order_confirmed") {
     const ownerBreakdown = ownerInvoiceBreakdown(ctx);
-    const subject = `New order received #${idPart}`;
+    const isConfirmed = eventType === "owner_order_confirmed";
+    const subject = isConfirmed ? `Order confirmed #${idPart}` : `New order received #${idPart}`;
     return {
       toName: venueName,
       subject,
-      text: `A new ${ctx.label} #${idPart} has been received for ${venueName}. Customer: ${customerName}. Owner earnings (items + tax): ${formatMoney(ownerBreakdown.earnings)}.`,
+      text: isConfirmed
+        ? `${venueName} confirmed ${ctx.label} #${idPart}. Owner earnings (items + tax): ${formatMoney(ownerBreakdown.earnings)}.`
+        : `A new ${ctx.label} #${idPart} has been received for ${venueName}. Customer: ${customerName}. Owner earnings (items + tax): ${formatMoney(ownerBreakdown.earnings)}.`,
       html: buildEmailShell({
-        eyebrow: "New Order Alert",
-        title: "A new order just came in",
-        intro: `A fresh ${ctx.label} is waiting for ${venueName}. Open your dashboard, review the details, and move it into prep quickly.`,
+        eyebrow: isConfirmed ? "Order Confirmed" : "New Order Alert",
+        title: isConfirmed ? "Order confirmed and moved ahead" : "A new order just came in",
+        intro: isConfirmed
+          ? `${venueName} confirmed this ${ctx.label}. Your owner copy includes only item subtotal plus tax for payout clarity.`
+          : `A fresh ${ctx.label} is waiting for ${venueName}. Open your dashboard, review the details, and move it into prep quickly.`,
         highlightLabel: "Owner earnings",
         highlightValue: formatMoney(ownerBreakdown.earnings),
         detailRows: [
@@ -516,7 +522,7 @@ function buildEmailPayload(
           { label: ctx.label === "grocery order" ? "Store" : "Restaurant", value: venueName },
           { label: "Items subtotal", value: formatMoney(ownerBreakdown.subtotal) },
           { label: "Tax", value: formatMoney(ownerBreakdown.tax) },
-          { label: "Status", value: "New order received" },
+          { label: "Status", value: isConfirmed ? "Confirmed" : "New order received" },
         ],
         items,
         note: "Owner earnings shown here include item price plus tax only. Delivery fee, platform fee, commission, and other platform-side fees are not included.",
@@ -672,9 +678,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: "Order not found" }, { status: 404 });
     }
 
-    const recipientUserId = eventType === "owner_new_order_received"
-      ? ctx.ownerUserId
-      : ctx.customerUserId;
+    const recipientUserId =
+      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed"
+        ? ctx.ownerUserId
+        : ctx.customerUserId;
 
     if (!recipientUserId) {
       return NextResponse.json({ success: true, skipped: true, reason: "missing_recipient_user" });
@@ -694,7 +701,10 @@ export async function POST(req: Request) {
       ordersUrl: `${origin}/${orderType === "grocery" ? "groceries/orders" : "orders"}`,
       ownerOrdersUrl: `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`,
     });
-    const attachments = eventType === "owner_new_order_received" ? [buildInvoicePdfAttachment(ctx)] : [];
+    const attachments =
+      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed"
+        ? [buildInvoicePdfAttachment(ctx)]
+        : [];
 
     const brevo = await sendBrevoEmail(
       recipientEmail,

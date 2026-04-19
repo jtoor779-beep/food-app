@@ -298,11 +298,12 @@ function safeNumber(v, fallback = 0) {
 }
 
 function ownerOrderSubtotal(order) {
-  const items = Array.isArray(order?.items) ? order.items : [];
+  const items = Array.isArray(order?.order_items || order?.items) ? order.order_items || order.items : [];
   const calc = items.reduce((sum, it) => {
+    const qty = safeNumber(pick(it, ["qty", "quantity"], 1), 1) || 1;
     const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-    const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-    return sum + price * qty;
+    const line = safeNumber(pick(it, ["line_total"], Number.NaN), Number.NaN);
+    return sum + (Number.isFinite(line) && line > 0 ? line : price * qty);
   }, 0);
   const stored = safeNumber(pick(order, ["subtotal_amount", "subtotal", "item_total", "items_total"], Number.NaN), Number.NaN);
   return Number.isFinite(stored) && stored > 0 ? stored : calc;

@@ -886,6 +886,17 @@ export default function AdminOrdersPage() {
                   <div>
                     <b>Payment:</b> {String(selected?.payment_method || selected?.payment_status || "Unknown")}
                   </div>
+                  {selected?.reject_reason || selected?.rejection_reason || selected?.cancel_reason || selected?.owner_reject_reason ? (
+                    <div>
+                      <b>Reject reason:</b>{" "}
+                      {String(
+                        selected?.reject_reason ||
+                        selected?.rejection_reason ||
+                        selected?.cancel_reason ||
+                        selected?.owner_reject_reason
+                      )}
+                    </div>
+                  ) : null}
                   <div>
                     <b>Address:</b>{" "}
                     {String(

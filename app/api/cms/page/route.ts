@@ -23,6 +23,11 @@ function normalizeSlug(value: unknown) {
     .replace(/^_+|_+$/g, "");
 }
 
+function defaultContractLabelForSlug(slug: string) {
+  if (slug === "owner_contract") return "I agree to the owner contract.";
+  return "I agree to the driver contract.";
+}
+
 async function loadCmsMeta(slug: string) {
   try {
     const { data, error } = await supabaseAdmin!
@@ -78,10 +83,12 @@ export async function GET(req: Request) {
         id: page.id,
         slug: clean(page.slug),
         title: clean(page.title),
+        description: clean(meta?.description),
         content: clean(page.content),
         isEnabled: page.is_enabled !== false,
         contractRequired: Boolean(meta?.contractRequired),
-        contractCheckboxLabel: clean(meta?.contractCheckboxLabel) || "I agree to the driver contract.",
+        contractCheckboxLabel:
+          clean(meta?.contractCheckboxLabel) || defaultContractLabelForSlug(slug),
         attachmentName: clean(meta?.attachmentName),
         attachmentUrl,
       },

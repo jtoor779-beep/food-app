@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import supabase from "@/lib/supabase";
 
 type AnyRow = Record<string, any>;
@@ -94,6 +95,125 @@ function orderPayout(o: AnyRow) {
 
 const rolesDelivery = ["delivery_partner", "delivery"];
 
+type DriverMapPoint = {
+  user_id: string;
+  full_name: string;
+  phone: string;
+  status: string;
+  lat: number;
+  lng: number;
+  created_at: string;
+  source: "gps" | "profile";
+};
+
+function parseCoord(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isValidLatLng(lat: number | null, lng: number | null) {
+  return (
+    Number.isFinite(Number(lat)) &&
+    Number.isFinite(Number(lng)) &&
+    Math.abs(Number(lat)) <= 90 &&
+    Math.abs(Number(lng)) <= 180
+  );
+}
+
+function profileCoords(r: AnyRow) {
+  const lat =
+    parseCoord(r?.lat) ??
+    parseCoord(r?.latitude) ??
+    parseCoord(r?.location_lat) ??
+    parseCoord(r?.delivery_lat);
+  const lng =
+    parseCoord(r?.lng) ??
+    parseCoord(r?.longitude) ??
+    parseCoord(r?.location_lng) ??
+    parseCoord(r?.delivery_lng);
+  if (!isValidLatLng(lat, lng)) return null;
+  return { lat: Number(lat), lng: Number(lng) };
+}
+
+const DriverLiveMap = dynamic(
+  async () => {
+    const mod = await import("react-leaflet");
+    const { MapContainer, TileLayer, Marker, Popup, useMap } = mod;
+    const L = (await import("leaflet")).default;
+
+    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+      iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+      shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+    });
+
+    function FitBounds({ points }: { points: DriverMapPoint[] }) {
+      const map = useMap();
+      useEffect(() => {
+        if (!Array.isArray(points) || points.length === 0) return;
+        if (points.length === 1) {
+          map.setView([points[0].lat, points[0].lng], 14, { animate: true });
+          return;
+        }
+        const bounds = L.latLngBounds(points.map((point) => [point.lat, point.lng] as [number, number]));
+        map.fitBounds(bounds, { padding: [36, 36] });
+      }, [map, points]);
+      return null;
+    }
+
+    return function DriverLiveMapInner({
+      points,
+      focusUserId,
+    }: {
+      points: DriverMapPoint[];
+      focusUserId: string;
+    }) {
+      const focus = points.find((point) => point.user_id === focusUserId) || null;
+      const centerLat = focus?.lat ?? points[0]?.lat ?? 35.3733;
+      const centerLng = focus?.lng ?? points[0]?.lng ?? -119.0187;
+      const fitPoints = focus ? [focus] : points;
+
+      return (
+        <div
+          style={{
+            borderRadius: 14,
+            overflow: "hidden",
+            border: "1px solid rgba(15,23,42,0.12)",
+            background: "rgba(255,255,255,0.85)",
+          }}
+        >
+          <MapContainer
+            center={[centerLat, centerLng]}
+            zoom={12}
+            style={{ width: "100%", height: 420 }}
+            scrollWheelZoom
+          >
+            <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <FitBounds points={fitPoints} />
+            {points.map((point) => (
+              <Marker key={`${point.user_id}:${point.created_at || ""}`} position={[point.lat, point.lng]}>
+                <Popup>
+                  <div style={{ minWidth: 180 }}>
+                    <div style={{ fontWeight: 900 }}>{safeVal(point.full_name, "Driver")}</div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>Phone: {safeVal(point.phone, "-")}</div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>Status: {safeVal(point.status, "-")}</div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>
+                      Lat/Lng: {point.lat.toFixed(5)}, {point.lng.toFixed(5)}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>Updated: {fmtDate(point.created_at)}</div>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+        </div>
+      );
+    };
+  },
+  { ssr: false }
+);
+
 export default function AdminDeliveryPartnersPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<AnyRow[]>([]);
@@ -117,6 +237,147 @@ export default function AdminDeliveryPartnersPage() {
   const [detailOrders, setDetailOrders] = useState<AnyRow[]>([]);
   const [detailTab, setDetailTab] = useState<"all" | "active" | "completed" | "canceled">("all");
   const [expandedOrderKey, setExpandedOrderKey] = useState("");
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapErr, setMapErr] = useState("");
+  const [mapPoints, setMapPoints] = useState<DriverMapPoint[]>([]);
+  const [focusedMapUserId, setFocusedMapUserId] = useState("");
+
+  const loadOnlineDriverLocations = useCallback(async (baseRows?: AnyRow[], withSpinner = true) => {
+    const sourceRows = Array.isArray(baseRows) ? baseRows : rows;
+    const onlineDrivers = sourceRows.filter((r) => r?.is_delivery_online === true && r?.delivery_disabled !== true);
+
+    if (withSpinner) setMapLoading(true);
+    setMapErr("");
+
+    try {
+      if (onlineDrivers.length === 0) {
+        setMapPoints([]);
+        setFocusedMapUserId("");
+        return;
+      }
+
+      const byUser = new Map<string, AnyRow>();
+      for (const row of onlineDrivers) {
+        const userId = String(row?.user_id || "").trim();
+        if (!userId) continue;
+        if (!byUser.has(userId)) byUser.set(userId, row);
+      }
+      const onlineUserIds = Array.from(byUser.keys());
+
+      const latestByUser = new Map<string, DriverMapPoint>();
+
+      const latestGpsRows: AnyRow[] = [];
+      let gpsErrorText = "";
+
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = String(session?.access_token || "").trim();
+        if (token) {
+          const response = await fetch("/api/admin/driver-live-locations", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              userIds: onlineUserIds,
+              lookbackHours: 6,
+            }),
+          });
+          const json = await response.json().catch(() => null);
+          if (response.ok && json?.ok && Array.isArray(json?.rows)) {
+            latestGpsRows.push(...json.rows);
+          } else {
+            gpsErrorText = String(json?.error || "Admin GPS API lookup failed.");
+          }
+        } else {
+          gpsErrorText = "Admin session token missing for GPS lookup.";
+        }
+      } catch (e: any) {
+        gpsErrorText = String(e?.message || e || "");
+      }
+
+      if (!latestGpsRows.length) {
+        try {
+          const { data, error } = await supabase
+            .from("delivery_events")
+            .select("delivery_user_id, lat, lng, created_at, event_type")
+            .in("delivery_user_id", onlineUserIds)
+            .in("event_type", ["gps", "gps_test"])
+            .not("lat", "is", null)
+            .not("lng", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(6000);
+          if (!error && Array.isArray(data)) {
+            latestGpsRows.push(...data);
+          } else if (error && !gpsErrorText) {
+            gpsErrorText = String(error.message || "");
+          }
+        } catch (e: any) {
+          if (!gpsErrorText) gpsErrorText = String(e?.message || e || "");
+        }
+      }
+
+      for (const gpsRow of latestGpsRows) {
+        const userId = String(gpsRow?.delivery_user_id || "").trim();
+        if (!userId || latestByUser.has(userId)) continue;
+        const lat = parseCoord(gpsRow?.lat);
+        const lng = parseCoord(gpsRow?.lng);
+        if (!isValidLatLng(lat, lng)) continue;
+        const profile = byUser.get(userId) || {};
+        latestByUser.set(userId, {
+          user_id: userId,
+          full_name: safeVal(profile?.full_name, "Driver"),
+          phone: safeVal(profile?.phone, ""),
+          status: safeVal(profile?.delivery_status, "approved"),
+          lat: Number(lat),
+          lng: Number(lng),
+          created_at: String(gpsRow?.created_at || profile?.last_seen_at || profile?.updated_at || ""),
+          source: "gps",
+        });
+      }
+
+      for (const [userId, profile] of byUser.entries()) {
+        if (latestByUser.has(userId)) continue;
+        const coords = profileCoords(profile);
+        if (!coords) continue;
+        latestByUser.set(userId, {
+          user_id: userId,
+          full_name: safeVal(profile?.full_name, "Driver"),
+          phone: safeVal(profile?.phone, ""),
+          status: safeVal(profile?.delivery_status, "approved"),
+          lat: coords.lat,
+          lng: coords.lng,
+          created_at: String(profile?.last_seen_at || profile?.updated_at || profile?.created_at || ""),
+          source: "profile",
+        });
+      }
+
+      const nextPoints = Array.from(latestByUser.values()).sort((a, b) => {
+        const ta = new Date(a.created_at || 0).getTime();
+        const tb = new Date(b.created_at || 0).getTime();
+        return tb - ta || normalize(a.full_name).localeCompare(normalize(b.full_name));
+      });
+
+      setMapPoints(nextPoints);
+      setFocusedMapUserId((prev) =>
+        prev && nextPoints.some((point) => point.user_id === prev) ? prev : (nextPoints[0]?.user_id || "")
+      );
+
+      if (gpsErrorText) {
+        const lower = gpsErrorText.toLowerCase();
+        if (lower.includes("relation") || lower.includes("does not exist") || lower.includes("column")) {
+          setMapErr("GPS events table/columns are not available yet, so only profile coordinates are shown.");
+        } else {
+          setMapErr(`GPS lookup warning: ${gpsErrorText}`);
+        }
+      }
+    } finally {
+      if (withSpinner) setMapLoading(false);
+    }
+  }, [rows]);
 
   async function load() {
     setLoading(true);
@@ -142,8 +403,11 @@ export default function AdminDeliveryPartnersPage() {
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    void loadOnlineDriverLocations(rows, true);
+  }, [rows, loadOnlineDriverLocations]);
 
   const filtered = useMemo(() => {
     let list = [...rows];
@@ -189,6 +453,30 @@ export default function AdminDeliveryPartnersPage() {
 
     return list;
   }, [rows, tab, q, sort]);
+
+  const onlineDrivers = useMemo(
+    () => rows.filter((r) => r?.is_delivery_online === true && r?.delivery_disabled !== true),
+    [rows]
+  );
+
+  const onlineMapUserIdSet = useMemo(
+    () => new Set(mapPoints.map((point) => String(point.user_id || "").trim()).filter(Boolean)),
+    [mapPoints]
+  );
+
+  const onlineNoLocationCount = useMemo(
+    () =>
+      onlineDrivers.filter((r) => {
+        const userId = String(r?.user_id || "").trim();
+        return userId ? !onlineMapUserIdSet.has(userId) : true;
+      }).length,
+    [onlineDrivers, onlineMapUserIdSet]
+  );
+
+  const focusedMapPoint = useMemo(
+    () => mapPoints.find((point) => point.user_id === focusedMapUserId) || null,
+    [mapPoints, focusedMapUserId]
+  );
 
   async function updatePartner(user_id: string, patch: AnyRow) {
     setSaving(true);
@@ -667,6 +955,123 @@ export default function AdminDeliveryPartnersPage() {
         </div>
       </div>
 
+      <div style={{ ...card, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 950 }}>Online Drivers Live Map</div>
+            <div style={{ fontSize: 12, opacity: 0.72, marginTop: 4 }}>
+              Shows currently online drivers and their latest available location point.
+            </div>
+          </div>
+          <button
+            style={btn}
+            onClick={() => void loadOnlineDriverLocations(rows, true)}
+            disabled={mapLoading}
+          >
+            {mapLoading ? "Refreshing map..." : "Refresh map"}
+          </button>
+        </div>
+
+        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(4, minmax(140px, 1fr))", gap: 10 }}>
+          <div style={{ ...card, padding: 10 }}>
+            <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 900 }}>Online Drivers</div>
+            <div style={{ marginTop: 4, fontSize: 24, fontWeight: 950 }}>{onlineDrivers.length}</div>
+          </div>
+          <div style={{ ...card, padding: 10 }}>
+            <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 900 }}>Mapped Drivers</div>
+            <div style={{ marginTop: 4, fontSize: 24, fontWeight: 950 }}>{mapPoints.length}</div>
+          </div>
+          <div style={{ ...card, padding: 10 }}>
+            <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 900 }}>Without Location</div>
+            <div style={{ marginTop: 4, fontSize: 24, fontWeight: 950 }}>{onlineNoLocationCount}</div>
+          </div>
+          <div style={{ ...card, padding: 10 }}>
+            <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 900 }}>Focused Driver</div>
+            <div style={{ marginTop: 4, fontSize: 13, fontWeight: 900 }}>
+              {focusedMapPoint ? safeVal(focusedMapPoint.full_name, "Driver") : "-"}
+            </div>
+          </div>
+        </div>
+
+        {mapErr ? (
+          <div
+            style={{
+              marginTop: 12,
+              borderRadius: 12,
+              border: "1px solid rgba(245,158,11,0.28)",
+              background: "rgba(255,247,237,0.88)",
+              padding: 10,
+              fontSize: 12,
+              fontWeight: 850,
+              color: "#9A3412",
+            }}
+          >
+            {mapErr}
+          </div>
+        ) : null}
+
+        {onlineDrivers.length === 0 ? (
+          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75, fontWeight: 900 }}>
+            No driver is online right now.
+          </div>
+        ) : mapPoints.length === 0 ? (
+          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75, fontWeight: 900 }}>
+            Drivers are online, but no valid coordinates are available yet.
+          </div>
+        ) : (
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.25fr 0.75fr", gap: 12 }}>
+            <DriverLiveMap points={mapPoints} focusUserId={focusedMapUserId} />
+            <div style={{ border: "1px solid rgba(15,23,42,0.12)", borderRadius: 14, padding: 10, background: "rgba(255,255,255,0.88)" }}>
+              <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.75, marginBottom: 8 }}>
+                Online driver list ({mapPoints.length})
+              </div>
+              <div style={{ maxHeight: 400, overflowY: "auto", display: "grid", gap: 8 }}>
+                {mapPoints.map((point) => {
+                  const focused = point.user_id === focusedMapUserId;
+                  const mapsHref = `https://www.google.com/maps?q=${point.lat},${point.lng}`;
+                  return (
+                    <div
+                      key={`${point.user_id}:${point.created_at || ""}`}
+                      style={{
+                        border: focused ? "1px solid rgba(255,140,0,0.45)" : "1px solid rgba(15,23,42,0.10)",
+                        background: focused ? "rgba(255,140,0,0.08)" : "rgba(255,255,255,0.95)",
+                        borderRadius: 12,
+                        padding: 10,
+                      }}
+                    >
+                      <div style={{ fontWeight: 950 }}>{safeVal(point.full_name, "Driver")}</div>
+                      <div style={{ marginTop: 2, fontSize: 12, opacity: 0.74 }}>{safeVal(point.phone, "-")}</div>
+                      <div style={{ marginTop: 2, fontSize: 12, opacity: 0.74 }}>{point.lat.toFixed(5)}, {point.lng.toFixed(5)}</div>
+                      <div style={{ marginTop: 2, fontSize: 12, opacity: 0.74 }}>
+                        Updated: {fmtDate(point.created_at)} ({point.source})
+                      </div>
+                      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button style={btn} onClick={() => setFocusedMapUserId(point.user_id)}>
+                          Focus
+                        </button>
+                        <a
+                          href={mapsHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            ...btn,
+                            textDecoration: "none",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          Open map
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
       <div style={{ ...card }}>
         <div style={{ fontSize: 12, opacity: 0.75, fontWeight: 900, marginBottom: 10 }}>
           Showing {filtered.length} delivery partners
@@ -1116,4 +1521,5 @@ const inputStyle: React.CSSProperties = {
   fontWeight: 800,
   outline: "none",
 };
+
 

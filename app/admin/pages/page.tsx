@@ -15,6 +15,7 @@ type CmsPageRow = {
 };
 
 type CmsPageMeta = {
+  description: string;
   attachmentName: string;
   attachmentBucket: string;
   attachmentPath: string;
@@ -22,8 +23,27 @@ type CmsPageMeta = {
   contractCheckboxLabel: string;
 };
 
+type ContractAcceptanceSummary = {
+  total: number;
+  accepted: number;
+  pending: number;
+};
+
+type ContractAcceptanceItem = {
+  user_id: string;
+  role: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  created_at: string;
+  accepted: boolean;
+  accepted_at: string;
+  source: string;
+};
+
 const CMS_TABLE = "cms_pages";
 const CMS_META_KEY = "cms_page_meta";
+const CONTRACT_SLUGS = new Set(["driver_contract", "owner_contract"]);
 
 const DEFAULT_PAGE_OPTIONS = [
   { slug: "about_us", title: "About Us" },
@@ -31,6 +51,7 @@ const DEFAULT_PAGE_OPTIONS = [
   { slug: "refund_policy", title: "Refund Policy" },
   { slug: "privacy_policy", title: "Privacy Policy" },
   { slug: "driver_contract", title: "Driver Contract" },
+  { slug: "owner_contract", title: "Owner Contract" },
 ];
 
 function normalizeSlug(v: string) {
@@ -45,6 +66,7 @@ function normalizeSlug(v: string) {
 
 function defaultMeta(): CmsPageMeta {
   return {
+    description: "",
     attachmentName: "",
     attachmentBucket: "",
     attachmentPath: "",
@@ -55,12 +77,24 @@ function defaultMeta(): CmsPageMeta {
 
 function normalizeMeta(input: any): CmsPageMeta {
   return {
+    description: String(input?.description || ""),
     attachmentName: String(input?.attachmentName || ""),
     attachmentBucket: String(input?.attachmentBucket || ""),
     attachmentPath: String(input?.attachmentPath || ""),
     contractRequired: Boolean(input?.contractRequired),
     contractCheckboxLabel: String(input?.contractCheckboxLabel || "I agree to the driver contract."),
   };
+}
+
+function contractAudienceLabel(slug: string) {
+  if (slug === "driver_contract") return "Delivery partners";
+  if (slug === "owner_contract") return "Store owners";
+  return "Users";
+}
+
+function defaultContractLabelForSlug(slug: string) {
+  if (slug === "owner_contract") return "I agree to the owner contract.";
+  return "I agree to the driver contract.";
 }
 
 async function loadSetting(key: string) {
@@ -80,6 +114,14 @@ async function saveSetting(key: string, value_json: any) {
   if (inserted.error) throw inserted.error;
 }
 
+function fmtDateTime(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  return parsed.toLocaleString();
+}
+
 export default function AdminPagesManagerPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -93,6 +135,7 @@ export default function AdminPagesManagerPage() {
   const [, setPageId] = useState<string>("");
   const [pageTitle, setPageTitle] = useState<string>("About Us");
   const [pageSlug, setPageSlug] = useState<string>("about_us");
+  const [pageDescription, setPageDescription] = useState<string>("");
   const [pageContent, setPageContent] = useState<string>("");
   const [pageEnabled, setPageEnabled] = useState<boolean>(true);
   const [attachmentName, setAttachmentName] = useState("");
@@ -100,8 +143,17 @@ export default function AdminPagesManagerPage() {
   const [attachmentPath, setAttachmentPath] = useState("");
   const [contractRequired, setContractRequired] = useState(false);
   const [contractCheckboxLabel, setContractCheckboxLabel] = useState("I agree to the driver contract.");
+  const [contractSummary, setContractSummary] = useState<ContractAcceptanceSummary>({
+    total: 0,
+    accepted: 0,
+    pending: 0,
+  });
+  const [contractItems, setContractItems] = useState<ContractAcceptanceItem[]>([]);
+  const [contractLoading, setContractLoading] = useState(false);
+  const [contractError, setContractError] = useState("");
 
   function applyMeta(meta: CmsPageMeta) {
+    setPageDescription(meta.description);
     setAttachmentName(meta.attachmentName);
     setAttachmentBucket(meta.attachmentBucket);
     setAttachmentPath(meta.attachmentPath);
@@ -113,10 +165,14 @@ export default function AdminPagesManagerPage() {
     setPageId("");
     setPageSlug(slug);
     setPageTitle(title);
+    setPageDescription("");
     setPageContent("");
     setPageEnabled(true);
     setSelectedSlug(slug);
-    applyMeta(defaultMeta());
+    applyMeta({
+      ...defaultMeta(),
+      contractCheckboxLabel: defaultContractLabelForSlug(slug),
+    });
   }
 
   function resetFormFromPreset(slug: string) {
@@ -132,7 +188,12 @@ export default function AdminPagesManagerPage() {
     setPageContent(String(row?.content || ""));
     setPageEnabled(row?.is_enabled !== false);
     setSelectedSlug(slug);
-    applyMeta((nextMetaMap || metaBySlug)?.[slug] || defaultMeta());
+    const meta = (nextMetaMap || metaBySlug)?.[slug] || defaultMeta();
+    applyMeta({
+      ...meta,
+      contractCheckboxLabel:
+        String(meta.contractCheckboxLabel || "").trim() || defaultContractLabelForSlug(slug),
+    });
   }
 
   async function loadPages(preferredSlug?: string) {
@@ -244,11 +305,12 @@ export default function AdminPagesManagerPage() {
       const nextMetaMap = {
         ...metaBySlug,
         [slug]: normalizeMeta({
+          description: pageDescription,
           attachmentName,
           attachmentBucket,
           attachmentPath,
           contractRequired,
-          contractCheckboxLabel,
+          contractCheckboxLabel: contractCheckboxLabel || defaultContractLabelForSlug(slug),
         }),
       };
 
@@ -339,11 +401,82 @@ export default function AdminPagesManagerPage() {
     }
   }
 
+  async function loadContractAcceptance(slugInput: string) {
+    const slug = normalizeSlug(slugInput);
+    if (!CONTRACT_SLUGS.has(slug)) {
+      setContractSummary({ total: 0, accepted: 0, pending: 0 });
+      setContractItems([]);
+      setContractError("");
+      setContractLoading(false);
+      return;
+    }
+
+    setContractLoading(true);
+    setContractError("");
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = String(session?.access_token || "").trim();
+      if (!token) throw new Error("Admin session missing. Please log in again.");
+
+      const response = await fetch(`/api/admin/contract-acceptance?slug=${encodeURIComponent(slug)}`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || "Unable to load contract acceptance.");
+      }
+
+      setContractSummary({
+        total: Number(json?.summary?.total || 0),
+        accepted: Number(json?.summary?.accepted || 0),
+        pending: Number(json?.summary?.pending || 0),
+      });
+
+      const nextItems = Array.isArray(json?.items) ? json.items : [];
+      setContractItems(
+        nextItems.map((entry: any) => ({
+          user_id: String(entry?.user_id || ""),
+          role: String(entry?.role || ""),
+          full_name: String(entry?.full_name || ""),
+          email: String(entry?.email || ""),
+          phone: String(entry?.phone || ""),
+          created_at: String(entry?.created_at || ""),
+          accepted: Boolean(entry?.accepted),
+          accepted_at: String(entry?.accepted_at || ""),
+          source: String(entry?.source || ""),
+        }))
+      );
+    } catch (e: any) {
+      setContractError(e?.message || "Unable to load contract acceptance.");
+      setContractSummary({ total: 0, accepted: 0, pending: 0 });
+      setContractItems([]);
+    } finally {
+      setContractLoading(false);
+    }
+  }
+
   /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     loadPages("about_us");
   }, []);
   /* eslint-enable react-hooks/exhaustive-deps */
+
+  useEffect(() => {
+    const slug = normalizeSlug(selectedSlug || pageSlug || "");
+    void loadContractAcceptance(slug);
+  }, [selectedSlug, pageSlug]);
+
+  useEffect(() => {
+    const slug = normalizeSlug(selectedSlug || pageSlug || "");
+    if (!CONTRACT_SLUGS.has(slug)) return;
+    if (String(contractCheckboxLabel || "").trim()) return;
+    setContractCheckboxLabel(defaultContractLabelForSlug(slug));
+  }, [selectedSlug, pageSlug, contractCheckboxLabel]);
 
   const selectedRow = useMemo(
     () => rows.find((x) => normalizeSlug(x.slug) === normalizeSlug(selectedSlug || pageSlug || "")),
@@ -351,6 +484,8 @@ export default function AdminPagesManagerPage() {
   );
 
   const pageCount = rows.length;
+  const selectedSlugNormalized = normalizeSlug(selectedSlug || pageSlug || "");
+  const isContractPage = CONTRACT_SLUGS.has(selectedSlugNormalized);
   const pageWrap: React.CSSProperties = { display: "grid", gap: 14 };
   const topBar: React.CSSProperties = {
     display: "flex",
@@ -430,13 +565,13 @@ export default function AdminPagesManagerPage() {
         <div>
           <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: -0.3 }}>CMS Pages</div>
           <div style={{ fontSize: 13, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
-            Manage About Us, policies, and document-style pages for the apps. Table: <b>public.{CMS_TABLE}</b>
+            Create unlimited pages and edit page name, description, and content for all apps. Table: <b>public.{CMS_TABLE}</b>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <Link href="/admin" style={btnGhost}>
-            ← Back to Dashboard
+            {"<- Back to Dashboard"}
           </Link>
 
           <button onClick={() => resetForm("", "")} style={btnGhost} disabled={saving || uploading}>
@@ -509,10 +644,13 @@ export default function AdminPagesManagerPage() {
                     title={slug}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                      <div style={{ fontSize: 12, fontWeight: 950, color: "#0F172A" }}>📄 {title}</div>
+                      <div style={{ fontSize: 12, fontWeight: 950, color: "#0F172A" }}>{title}</div>
                       <div style={{ fontSize: 11, opacity: 0.72, fontWeight: 900 }}>{enabled ? "Enabled" : "Disabled"}</div>
                     </div>
                     <div style={{ fontSize: 11, opacity: 0.72, marginTop: 5, fontWeight: 800 }}>Slug: {slug}</div>
+                    {meta.description ? (
+                      <div style={{ fontSize: 11, opacity: 0.72, marginTop: 4, lineHeight: 1.4 }}>{meta.description}</div>
+                    ) : null}
                     {meta.attachmentName ? (
                       <div style={{ fontSize: 11, opacity: 0.72, marginTop: 4, fontWeight: 800 }}>Attachment: {meta.attachmentName}</div>
                     ) : null}
@@ -561,7 +699,7 @@ export default function AdminPagesManagerPage() {
                     }}
                     disabled={saving || uploading}
                   >
-                    🗑️ Delete
+                    Delete Page
                   </button>
                 ) : null}
               </div>
@@ -589,7 +727,17 @@ export default function AdminPagesManagerPage() {
             </div>
 
             <div style={{ marginTop: 12 }}>
-              <div style={smallLabel}>Page Content</div>
+              <div style={smallLabel}>Page Description</div>
+              <input
+                value={pageDescription}
+                onChange={(e) => setPageDescription(e.target.value)}
+                placeholder="Short description shown in app previews."
+                style={input}
+              />
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div style={smallLabel}>Page Body</div>
               <textarea
                 value={pageContent}
                 onChange={(e) => setPageContent(e.target.value)}
@@ -652,7 +800,7 @@ export default function AdminPagesManagerPage() {
                     cursor: "pointer",
                   }}
                 >
-                  {contractRequired ? "Required ✅" : "Optional"}
+                  {contractRequired ? "Required" : "Optional"}
                 </button>
               </div>
 
@@ -661,7 +809,7 @@ export default function AdminPagesManagerPage() {
                 <input
                   value={contractCheckboxLabel}
                   onChange={(e) => setContractCheckboxLabel(e.target.value)}
-                  placeholder="I agree to the driver contract."
+                  placeholder={defaultContractLabelForSlug(selectedSlugNormalized)}
                   style={input}
                 />
               </div>
@@ -680,7 +828,7 @@ export default function AdminPagesManagerPage() {
                     cursor: "pointer",
                   }}
                 >
-                  {pageEnabled ? "Enabled ✅" : "Disabled ❌"}
+                  {pageEnabled ? "Enabled" : "Disabled"}
                 </button>
               </div>
             </div>
@@ -718,8 +866,12 @@ export default function AdminPagesManagerPage() {
             <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
               <div style={{ fontSize: 22, fontWeight: 950, color: "#0F172A" }}>{pageTitle || "Page Title"}</div>
 
+              {pageDescription ? (
+                <div style={{ fontSize: 13, opacity: 0.78, fontWeight: 800 }}>{pageDescription}</div>
+              ) : null}
+
               <div style={{ fontSize: 12, opacity: 0.72, fontWeight: 850 }}>
-                Slug: <b>{pageSlug || "(empty)"}</b> • Status: <b>{pageEnabled ? "Enabled" : "Disabled"}</b>
+                Slug: <b>{pageSlug || "(empty)"}</b> | Status: <b>{pageEnabled ? "Enabled" : "Disabled"}</b>
               </div>
 
               {attachmentName ? (
@@ -730,7 +882,7 @@ export default function AdminPagesManagerPage() {
 
               {contractRequired ? (
                 <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 850 }}>
-                  Driver checkbox: <b>{contractCheckboxLabel || "I agree to the driver contract."}</b>
+                  Contract checkbox: <b>{contractCheckboxLabel || defaultContractLabelForSlug(selectedSlugNormalized)}</b>
                 </div>
               ) : null}
 
@@ -749,6 +901,105 @@ export default function AdminPagesManagerPage() {
               >
                 {pageContent || "Your page content preview will appear here."}
               </div>
+
+              {isContractPage ? (
+                <div
+                  style={{
+                    marginTop: 4,
+                    borderRadius: 16,
+                    border: "1px solid rgba(15,23,42,0.10)",
+                    background: "rgba(255,255,255,0.92)",
+                    padding: 12,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ fontSize: 12, fontWeight: 950, opacity: 0.9 }}>
+                      Contract acceptance status ({contractAudienceLabel(selectedSlugNormalized)})
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void loadContractAcceptance(selectedSlugNormalized)}
+                      style={{ ...btnGhost, padding: "8px 10px" }}
+                      disabled={contractLoading}
+                    >
+                      {contractLoading ? "Refreshing..." : "Refresh status"}
+                    </button>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+                    <div style={{ border: "1px solid rgba(15,23,42,0.10)", borderRadius: 12, padding: 10 }}>
+                      <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 800 }}>Total</div>
+                      <div style={{ fontSize: 20, fontWeight: 950 }}>{contractSummary.total}</div>
+                    </div>
+                    <div style={{ border: "1px solid rgba(34,197,94,0.25)", background: "rgba(34,197,94,0.08)", borderRadius: 12, padding: 10 }}>
+                      <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 800 }}>Accepted</div>
+                      <div style={{ fontSize: 20, fontWeight: 950 }}>{contractSummary.accepted}</div>
+                    </div>
+                    <div style={{ border: "1px solid rgba(239,68,68,0.25)", background: "rgba(239,68,68,0.08)", borderRadius: 12, padding: 10 }}>
+                      <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 800 }}>Pending</div>
+                      <div style={{ fontSize: 20, fontWeight: 950 }}>{contractSummary.pending}</div>
+                    </div>
+                  </div>
+
+                  {contractError ? (
+                    <div
+                      style={{
+                        borderRadius: 12,
+                        border: "1px solid rgba(239,68,68,0.22)",
+                        background: "rgba(239,68,68,0.08)",
+                        padding: 10,
+                        fontSize: 12,
+                        fontWeight: 800,
+                        color: "#7F1D1D",
+                      }}
+                    >
+                      {contractError}
+                    </div>
+                  ) : null}
+
+                  {contractLoading ? (
+                    <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.72 }}>Loading acceptance rows...</div>
+                  ) : contractItems.length === 0 ? (
+                    <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.72 }}>No matching users found yet for this contract audience.</div>
+                  ) : (
+                    <div style={{ border: "1px solid rgba(15,23,42,0.10)", borderRadius: 12, overflow: "hidden" }}>
+                      <div style={{ maxHeight: 260, overflow: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ background: "rgba(15,23,42,0.04)" }}>
+                              <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.10)" }}>User</th>
+                              <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.10)" }}>Role</th>
+                              <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.10)" }}>Status</th>
+                              <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.10)" }}>Accepted At</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {contractItems.map((item) => (
+                              <tr key={`${item.user_id}:${item.accepted_at || "pending"}`}>
+                                <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.08)" }}>
+                                  <div style={{ fontWeight: 900 }}>{item.full_name || item.email || item.user_id || "-"}</div>
+                                  <div style={{ opacity: 0.65 }}>{item.email || item.phone || item.user_id || "-"}</div>
+                                </td>
+                                <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.08)", fontWeight: 800 }}>
+                                  {item.role || "-"}
+                                </td>
+                                <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.08)", fontWeight: 900 }}>
+                                  {item.accepted ? "Accepted" : "Pending"}
+                                </td>
+                                <td style={{ padding: "8px 10px", borderBottom: "1px solid rgba(15,23,42,0.08)", fontWeight: 800 }}>
+                                  {item.accepted ? fmtDateTime(item.accepted_at) : "-"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -756,3 +1007,5 @@ export default function AdminPagesManagerPage() {
     </div>
   );
 }
+
+

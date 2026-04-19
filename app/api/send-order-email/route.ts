@@ -5,6 +5,7 @@ type OrderEmailEvent =
   | "customer_order_placed"
   | "owner_new_order_received"
   | "owner_order_confirmed"
+  | "owner_order_rejected"
   | "customer_order_delivered";
 
 type OrderType = "restaurant" | "grocery";
@@ -233,19 +234,13 @@ async function getRestaurantContext(orderId: string) {
   if (orderRow.restaurant_id) {
     const { data } = await supabaseAdmin
       .from("restaurants")
-      .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+      .select("id, name, owner_user_id")
       .eq("id", orderRow.restaurant_id)
       .maybeSingle();
     restaurantRow = data || null;
   }
 
-  const ownerUserId =
-    restaurantRow?.owner_user_id ||
-    restaurantRow?.owner_id ||
-    restaurantRow?.user_id ||
-    restaurantRow?.created_by ||
-    restaurantRow?.owner ||
-    null;
+  const ownerUserId = restaurantRow?.owner_user_id || null;
 
   return {
     orderId: orderRow.id,
@@ -276,19 +271,13 @@ async function getGroceryContext(orderId: string) {
   if (orderRow.store_id) {
     const { data } = await supabaseAdmin
       .from("grocery_stores")
-      .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+      .select("id, name, owner_user_id")
       .eq("id", orderRow.store_id)
       .maybeSingle();
     storeRow = data || null;
   }
 
-  const ownerUserId =
-    storeRow?.owner_user_id ||
-    storeRow?.owner_id ||
-    storeRow?.user_id ||
-    storeRow?.created_by ||
-    storeRow?.owner ||
-    null;
+  const ownerUserId = storeRow?.owner_user_id || null;
 
   return {
     orderId: orderRow.id,
@@ -338,6 +327,16 @@ function formatDeliveredAt(value: any) {
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
+}
+
+function ownerRejectReason(ctx: any) {
+  return String(
+    ctx?.reject_reason ||
+      ctx?.rejection_reason ||
+      ctx?.cancel_reason ||
+      ctx?.owner_reject_reason ||
+      ""
+  ).trim();
 }
 
 function ownerInvoiceBreakdown(ctx: any): OwnerInvoiceBreakdown {
@@ -534,6 +533,38 @@ function buildEmailPayload(
     };
   }
 
+  if (eventType === "owner_order_rejected") {
+    const ownerBreakdown = ownerInvoiceBreakdown(ctx);
+    const reason = ownerRejectReason(ctx) || "No reason provided.";
+    return {
+      toName: venueName,
+      subject: `Order rejected #${idPart}`,
+      text: `${venueName} rejected ${ctx.label} #${idPart}. Reason: ${reason}. Owner breakdown: items ${formatMoney(ownerBreakdown.subtotal)} + tax ${formatMoney(ownerBreakdown.tax)}.`,
+      html: buildEmailShell({
+        eyebrow: "Order Rejected",
+        title: "You rejected this order",
+        intro: `This email confirms that ${venueName} rejected ${ctx.label} #${idPart}.`,
+        detailRows: [
+          { label: "Order", value: `#${idPart}` },
+          { label: "Customer", value: customerName },
+          { label: "Items subtotal", value: formatMoney(ownerBreakdown.subtotal) },
+          { label: "Tax", value: formatMoney(ownerBreakdown.tax) },
+          { label: "Owner amount", value: formatMoney(ownerBreakdown.earnings) },
+          { label: "Rejected at", value: formatDeliveredAt(ctx.created_at || ctx.updated_at) },
+          { label: "Reason", value: reason },
+        ],
+        items,
+        highlightLabel: "Rejected amount snapshot",
+        highlightValue: `${formatMoney(ownerBreakdown.earnings)} owner view`,
+        note: "This message is for owner record-keeping and reflects item subtotal plus tax only.",
+        logoUrl: meta.logoUrl,
+        ctaLabel: "Open owner orders",
+        ctaUrl: meta.ownerOrdersUrl,
+        assetOrigin: meta.origin,
+      }),
+    };
+  }
+
   const deliveredAt = formatDeliveredAt(ctx.deliveredAt);
   const subject = `Order delivered #${idPart}`;
   return {
@@ -679,7 +710,7 @@ export async function POST(req: Request) {
     }
 
     const recipientUserId =
-      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed"
+      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed" || eventType === "owner_order_rejected"
         ? ctx.ownerUserId
         : ctx.customerUserId;
 
@@ -702,7 +733,7 @@ export async function POST(req: Request) {
       ownerOrdersUrl: `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`,
     });
     const attachments =
-      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed"
+      eventType === "owner_new_order_received" || eventType === "owner_order_confirmed" || eventType === "owner_order_rejected"
         ? [buildInvoicePdfAttachment(ctx)]
         : [];
 

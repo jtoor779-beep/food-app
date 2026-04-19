@@ -39,6 +39,16 @@ function clampText(s: any, max = 28) {
   return str.slice(0, max - 1) + "…";
 }
 
+function ownerRejectReason(row: AnyRow | null | undefined) {
+  return String(
+    row?.reject_reason ||
+      row?.rejection_reason ||
+      row?.cancel_reason ||
+      row?.owner_reject_reason ||
+      ""
+  ).trim();
+}
+
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
   { value: "pending", label: "Pending" },
@@ -886,15 +896,22 @@ export default function AdminOrdersPage() {
                   <div>
                     <b>Payment:</b> {String(selected?.payment_method || selected?.payment_status || "Unknown")}
                   </div>
-                  {selected?.reject_reason || selected?.rejection_reason || selected?.cancel_reason || selected?.owner_reject_reason ? (
-                    <div>
-                      <b>Reject reason:</b>{" "}
-                      {String(
-                        selected?.reject_reason ||
-                        selected?.rejection_reason ||
-                        selected?.cancel_reason ||
-                        selected?.owner_reject_reason
-                      )}
+                  {ownerRejectReason(selected) ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "12px 14px",
+                        borderRadius: 14,
+                        background: "rgba(255, 0, 90, 0.08)",
+                        border: "1px solid rgba(255, 0, 90, 0.18)",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 950, color: "#9f1239", textTransform: "uppercase", letterSpacing: 0.3 }}>
+                        Owner rejection note
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 14, fontWeight: 700, color: styles.pageText }}>
+                        {ownerRejectReason(selected)}
+                      </div>
                     </div>
                   ) : null}
                   <div>

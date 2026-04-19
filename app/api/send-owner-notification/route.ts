@@ -122,19 +122,13 @@ async function resolveOwnerUserIdFromOrder(orderId: string, orderType: string | 
 
   const { data: ownerRow, error: ownerError } = await supabaseAdmin
     .from(ownerTable)
-    .select("owner_user_id, owner_id, user_id, created_by, owner")
+    .select("owner_user_id")
     .eq("id", ownerEntityId)
     .maybeSingle();
 
   if (ownerError) return "";
 
-  return clean(
-    ownerRow?.owner_user_id ||
-      ownerRow?.owner_id ||
-      ownerRow?.user_id ||
-      ownerRow?.created_by ||
-      ownerRow?.owner,
-  );
+  return clean(ownerRow?.owner_user_id);
 }
 
 async function collectOwnerExpoTokens(userId: string) {

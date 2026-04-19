@@ -167,17 +167,11 @@ async function insertPaidNotifications(req: Request, orderType: string, orderId:
 
     const { data: storeRow } = await supabaseAdmin!
       .from(names.ownerTable)
-      .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+      .select("id, name, owner_user_id")
       .eq("id", orderRow.store_id)
       .maybeSingle();
 
-    const ownerUserId =
-      storeRow?.owner_user_id ||
-      storeRow?.owner_id ||
-      storeRow?.user_id ||
-      storeRow?.created_by ||
-      storeRow?.owner ||
-      null;
+    const ownerUserId = storeRow?.owner_user_id || null;
 
     const storeName = storeRow?.name || "Grocery Store";
     const sid = shortId(orderId);
@@ -221,17 +215,11 @@ async function insertPaidNotifications(req: Request, orderType: string, orderId:
 
   const { data: restRow } = await supabaseAdmin!
     .from(names.ownerTable)
-    .select("id, name, owner_user_id, owner_id, user_id, created_by, owner")
+    .select("id, name, owner_user_id")
     .eq("id", orderRow.restaurant_id)
     .maybeSingle();
 
-  const ownerUserId =
-    restRow?.owner_user_id ||
-    restRow?.owner_id ||
-    restRow?.user_id ||
-    restRow?.created_by ||
-    restRow?.owner ||
-    null;
+  const ownerUserId = restRow?.owner_user_id || null;
 
   const restName = restRow?.name || "Restaurant";
   const sid = shortId(orderId);

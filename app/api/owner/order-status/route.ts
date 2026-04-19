@@ -73,13 +73,14 @@ async function updateWithFallback(table: string, orderId: string, storeKey: stri
 
 async function sendJson(req: Request, path: string, payload: Record<string, unknown>) {
   try {
-    await fetch(new URL(path, req.url), {
+    const response = await fetch(new URL(path, req.url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    return response.ok;
   } catch {
-    // best effort only
+    return false;
   }
 }
 
@@ -150,14 +151,19 @@ export async function POST(req: Request) {
       });
     }
 
+    let driverNotificationSent: boolean | null = null;
     if (nextStatus === "ready") {
-      void sendJson(req, "/api/send-driver-notification", {
+      driverNotificationSent = await sendJson(req, "/api/send-driver-notification", {
         orderId,
         restaurantName: clean(storeRow.name) || "Store",
       });
     }
 
-    return NextResponse.json({ success: true, status: clean(updated?.status) || nextStatus });
+    return NextResponse.json({
+      success: true,
+      status: clean(updated?.status) || nextStatus,
+      driverNotificationSent,
+    });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, message: error?.message || "Unable to update owner order status." },

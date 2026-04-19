@@ -100,53 +100,27 @@ export async function POST(req: Request) {
       });
     }
 
-    // 1) Try online + approved delivery partners first.
-    const baseProfilesQuery = supabaseAdmin
-      .from("profiles")
-      .select("user_id")
-      .eq("role", "delivery_partner")
-      .eq("delivery_approved", true)
-      .eq("delivery_disabled", false);
+    // Push should reach every approved driver device, not only the subset
+    // currently marked online, because drivers can still open available orders
+    // and accept them even if that online flag is stale.
+    const { data: approvedDrivers, error: approvedDriversError } =
+      await supabaseAdmin
+        .from("profiles")
+        .select("user_id")
+        .eq("role", "delivery_partner")
+        .eq("delivery_approved", true)
+        .eq("delivery_disabled", false);
 
-    const { data: onlineDrivers, error: onlineDriversError } =
-      await baseProfilesQuery.eq("is_delivery_online", true);
-
-    if (onlineDriversError) {
-      console.error("profiles online query error:", onlineDriversError);
+    if (approvedDriversError) {
+      console.error("profiles approved query error:", approvedDriversError);
       return NextResponse.json(
-        { success: false, message: onlineDriversError.message },
+        { success: false, message: approvedDriversError.message },
         { status: 500 }
       );
     }
 
-    let audience: "online" | "approved_fallback" | "token_fallback_all" =
-      "online";
-    let driverIds = normalizeDriverIds(onlineDrivers as ProfileRow[]);
-
-    // 2) Fallback to all approved drivers when none are online.
-    if (!driverIds.length) {
-      const { data: approvedDrivers, error: approvedDriversError } =
-        await supabaseAdmin
-          .from("profiles")
-          .select("user_id")
-          .eq("role", "delivery_partner")
-          .eq("delivery_approved", true)
-          .eq("delivery_disabled", false);
-
-      if (approvedDriversError) {
-        console.error(
-          "profiles approved fallback query error:",
-          approvedDriversError
-        );
-        return NextResponse.json(
-          { success: false, message: approvedDriversError.message },
-          { status: 500 }
-        );
-      }
-
-      driverIds = normalizeDriverIds(approvedDrivers as ProfileRow[]);
-      audience = "approved_fallback";
-    }
+    let audience: "approved" | "token_fallback_all" = "approved";
+    const driverIds = normalizeDriverIds(approvedDrivers as ProfileRow[]);
 
     if (!driverIds.length) {
       return NextResponse.json({
@@ -285,7 +259,6 @@ export async function POST(req: Request) {
       audience,
       sent: validTokens.length,
       invalidTokensRemoved: invalidTokens.length,
-      expo: expoJson,
       diagnostics: {
         eligibleDrivers: driverIds.length,
         tokenRows: (tokenRows || []).length,

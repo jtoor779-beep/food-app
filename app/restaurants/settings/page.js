@@ -902,7 +902,7 @@ export default function RestaurantSettingsPage() {
               <div style={{ ...cardGlass, marginTop: 12 }}>
                 <div style={cardTitle}>
                   <div>
-                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Open / close control</div>
+                    <div style={{ fontWeight: 1000, color: "#0b1220" }}>Store Hours & Open/Close Control</div>
                     <div style={cardHint}>Customers can browse your menu while closed, but they cannot add items to cart or place orders.</div>
                   </div>
                   <div style={metaRow}>
@@ -930,6 +930,40 @@ export default function RestaurantSettingsPage() {
                   </div>
                 </div>
 
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: "10px 12px",
+                    borderRadius: 14,
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    background: "rgba(255,255,255,0.82)",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 950, color: "rgba(17,24,39,0.72)" }}>Weekly schedule preview</div>
+                  <div style={{ marginTop: 8, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.66)" }}>
+                    All days currently follow the same open/close time.
+                  </div>
+                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))", gap: 8 }}>
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                      <div
+                        key={day}
+                        style={{
+                          borderRadius: 10,
+                          border: "1px solid rgba(0,0,0,0.08)",
+                          background: "rgba(255,255,255,0.92)",
+                          padding: "8px 6px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <div style={{ fontSize: 11, fontWeight: 1000, color: "#0b1220" }}>{day}</div>
+                        <div style={{ marginTop: 4, fontSize: 11, fontWeight: 850, color: "rgba(17,24,39,0.72)" }}>
+                          {opensAtTime || "--:--"} - {closesAtTime || "--:--"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div style={{ ...grid2, gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
                   <div>
                     <div style={label}>Timezone</div>
@@ -943,7 +977,7 @@ export default function RestaurantSettingsPage() {
 
                 <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button onClick={saveAvailability} disabled={savingAvailability || saving} style={btnLight}>
-                    {savingAvailability ? "Saving…" : "Save Hours"}
+                    {savingAvailability ? "Saving…" : "Save Store Hours"}
                   </button>
                   <button onClick={() => setRestaurantOpenState(true)} disabled={savingAvailability || saving} style={btnDark}>
                     Open Now

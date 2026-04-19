@@ -880,7 +880,7 @@ export default function GroceryOwnerSettingsPage() {
             <div style={{ ...locBox, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
                 <div>
-                  <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Open / close control</div>
+                  <div style={{ fontWeight: 1000, color: "#0b1220", fontSize: 13 }}>Store Hours & Open/Close Control</div>
                   <div style={{ marginTop: 6, color: "rgba(17,24,39,0.70)", fontWeight: 850, fontSize: 12 }}>
                     Customers can still browse your grocery items while closed, but they cannot add to cart or place orders.
                   </div>
@@ -910,6 +910,40 @@ export default function GroceryOwnerSettingsPage() {
                 </div>
               </div>
 
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "10px 12px",
+                  borderRadius: 14,
+                  border: "1px solid rgba(0,0,0,0.08)",
+                  background: "rgba(255,255,255,0.82)",
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 950, color: "rgba(17,24,39,0.72)" }}>Weekly schedule preview</div>
+                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 850, color: "rgba(17,24,39,0.66)" }}>
+                  All days currently follow the same open/close time.
+                </div>
+                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(92px, 1fr))", gap: 8 }}>
+                  {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                    <div
+                      key={day}
+                      style={{
+                        borderRadius: 10,
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        background: "rgba(255,255,255,0.92)",
+                        padding: "8px 6px",
+                        textAlign: "center",
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 1000, color: "#0b1220" }}>{day}</div>
+                      <div style={{ marginTop: 4, fontSize: 11, fontWeight: 850, color: "rgba(17,24,39,0.72)" }}>
+                        {opensAtTime || "--:--"} - {closesAtTime || "--:--"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 950, marginBottom: 6, color: "rgba(17,24,39,0.75)" }}>Timezone</div>
@@ -923,7 +957,7 @@ export default function GroceryOwnerSettingsPage() {
 
               <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button onClick={saveAvailability} style={btnLight} disabled={savingAvailability || loading}>
-                  {savingAvailability ? "Saving..." : "Save Hours"}
+                  {savingAvailability ? "Saving..." : "Save Store Hours"}
                 </button>
                 <button onClick={() => setStoreOpenState(true)} style={btnDark} disabled={savingAvailability || loading}>
                   Open Now

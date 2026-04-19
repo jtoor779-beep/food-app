@@ -144,6 +144,22 @@ function safeDate(d) {
   }
 }
 
+function parseDateInputLocal(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    const dt = new Date(y, mo, d, 0, 0, 0, 0);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+
+  return safeDate(raw);
+}
+
 function nnum(v, fallback = 0) {
   const x = Number(v);
   return Number.isFinite(x) ? x : fallback;
@@ -996,8 +1012,61 @@ function DeliveryHomePageInner() {
     };
   }
 
+  async function fetchPayoutSnapshotViaApi(uid) {
+    if (!uid) return null;
+    try {
+      const res = await fetch(`/api/delivery/payouts?deliveryUserId=${encodeURIComponent(uid)}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload?.success) return null;
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  async function saveBankViaApi(payload) {
+    try {
+      const res = await fetch("/api/delivery/payouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "save_bank", ...payload }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.success) return { ok: false, payload: body };
+      return { ok: true, payload: body };
+    } catch {
+      return { ok: false, payload: {} };
+    }
+  }
+
+  async function createPayoutViaApi(payload) {
+    try {
+      const res = await fetch("/api/delivery/payouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "request_payout", ...payload }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.success) return { ok: false, payload: body };
+      return { ok: true, payload: body };
+    } catch {
+      return { ok: false, payload: {} };
+    }
+  }
+
   async function loadPayoutRequestsForUser(uid) {
     if (!uid) return { mode: "local", rows: [] };
+
+    try {
+      const snapshot = await fetchPayoutSnapshotViaApi(uid);
+      if (snapshot?.success) {
+        const rows = Array.isArray(snapshot.requests) ? snapshot.requests.map(normalizePayoutRequest) : [];
+        return { mode: "db", rows };
+      }
+    } catch {}
 
     try {
       const { data, error } = await supabase
@@ -1050,6 +1119,13 @@ function DeliveryHomePageInner() {
     if (!uid) return { mode: "local", row: null };
 
     try {
+      const snapshot = await fetchPayoutSnapshotViaApi(uid);
+      if (snapshot?.success && snapshot?.bank) {
+        return { mode: "db", row: normalizeBankRow(snapshot.bank) };
+      }
+    } catch {}
+
+    try {
       const { data, error } = await supabase
         .from(PAYOUT_BANK_TABLE)
         .select("id, delivery_user_id, account_holder_name, bank_name, account_number_last4, routing_code_last4, country, currency, status, created_at, updated_at")
@@ -1093,27 +1169,68 @@ function DeliveryHomePageInner() {
     const accountLast4 = account_number.slice(-4);
     const routingLast4 = routing_code.slice(-4);
     const nowIso = new Date().toISOString();
+    const dbRowBase = {
+      delivery_user_id: userId,
+      account_holder_name,
+      bank_name,
+      account_number_last4: accountLast4,
+      routing_code_last4: routingLast4,
+      country,
+      currency: cur,
+      status: "pending_verification",
+      updated_at: nowIso,
+    };
+    const dbRowFull = {
+      ...dbRowBase,
+      account_number_full: account_number,
+      routing_code_full: routing_code,
+    };
+    const localRow = {
+      account_holder_name,
+      bank_name,
+      account_number_full: account_number,
+      routing_code_full: routing_code,
+      account_number_last4: accountLast4,
+      routing_code_last4: routingLast4,
+      country,
+      currency: cur,
+      status: "pending_verification",
+      updated_at: nowIso,
+    };
 
     try {
-      try {
-        const dbRowBase = {
-          delivery_user_id: userId,
+      const apiSave = await saveBankViaApi({
+        delivery_user_id: userId,
+        account_holder_name,
+        bank_name,
+        account_number,
+        routing_code,
+        country,
+        currency: cur,
+      });
+      if (apiSave.ok) {
+        const normalized = normalizeBankRow(apiSave?.payload?.bank || dbRowBase);
+        const normalizedUpdatedAt = String(normalized.updated_at || nowIso);
+        persistBankLocal(userId, { ...localRow, status: normalized.status, updated_at: normalizedUpdatedAt });
+        setBankStoreMode("db");
+        setBankSavedAt(normalizedUpdatedAt);
+        setBankForm((prev) => ({
+          ...prev,
           account_holder_name,
           bank_name,
-          account_number_last4: accountLast4,
-          routing_code_last4: routingLast4,
+          account_number: "",
+          routing_code: "",
           country,
           currency: cur,
-          status: "pending_verification",
-          updated_at: nowIso,
-        };
+          account_number_last4: accountLast4,
+          routing_code_last4: routingLast4,
+          status: normalized.status || "pending_verification",
+        }));
+        showToast("Bank details saved (pending verification)");
+        return;
+      }
 
-        const dbRowFull = {
-          ...dbRowBase,
-          account_number_full: account_number,
-          routing_code_full: routing_code,
-        };
-
+      try {
         let { error } = await supabase.from(PAYOUT_BANK_TABLE).upsert([dbRowFull], { onConflict: "delivery_user_id" });
         if (error) {
           // Backward-compatible fallback when full-detail columns are not added yet.
@@ -1121,6 +1238,7 @@ function DeliveryHomePageInner() {
           error = retry.error;
         }
         if (!error) {
+          persistBankLocal(userId, localRow);
           setBankStoreMode("db");
           setBankSavedAt(nowIso);
           setBankForm((prev) => ({
@@ -1140,18 +1258,6 @@ function DeliveryHomePageInner() {
         }
       } catch {}
 
-      const localRow = {
-        account_holder_name,
-        bank_name,
-        account_number_full: account_number,
-        routing_code_full: routing_code,
-        account_number_last4: accountLast4,
-        routing_code_last4: routingLast4,
-        country,
-        currency: cur,
-        status: "pending_verification",
-        updated_at: nowIso,
-      };
       persistBankLocal(userId, localRow);
       setBankStoreMode("local");
       setBankSavedAt(nowIso);
@@ -2005,20 +2111,33 @@ function DeliveryHomePageInner() {
       };
 
       let savedInDB = false;
+      const localRow = normalizePayoutRequest(requestRow);
       try {
+        const apiCreate = await createPayoutViaApi(requestRow);
+        if (apiCreate.ok) {
+          savedInDB = true;
+          const apiRow = normalizePayoutRequest(apiCreate?.payload?.request || requestRow);
+          const next = [apiRow, ...(payoutRequests || []).filter((r) => String(r?.id || "") !== String(apiRow.id || ""))];
+          setPayoutStoreMode("db");
+          setPayoutRequests(next);
+          persistPayoutRequests(next);
+          showToast(`Payout requested: ${money(payoutCenter.availableAmount, currency)} (${rows.length} orders)`);
+          return;
+        }
+
         const { error } = await supabase.from(PAYOUT_REQUESTS_TABLE).insert([requestRow]);
         if (!error) savedInDB = true;
       } catch {}
 
       if (savedInDB) {
-        const result = await loadPayoutRequestsForUser(userId);
-        setPayoutStoreMode(result.mode);
-        setPayoutRequests(result.rows || []);
+        const next = [localRow, ...(payoutRequests || []).filter((r) => String(r?.id || "") !== String(localRow.id || ""))];
+        setPayoutStoreMode("db");
+        setPayoutRequests(next);
+        persistPayoutRequests(next);
         showToast(`Payout requested: ${money(payoutCenter.availableAmount, currency)} (${rows.length} orders)`);
         return;
       }
 
-      const localRow = normalizePayoutRequest(requestRow);
       const next = [localRow, ...(payoutRequests || [])];
       setPayoutStoreMode("local");
       setPayoutRequests(next);
@@ -3107,8 +3226,10 @@ function DeliveryHomePageInner() {
         ? addDays(startOfDay(now), -89)
         : null;
 
-    const fromDt = payoutRange === "custom" && payoutFrom ? safeDate(payoutFrom) : rangeStart;
-    const toDt = payoutRange === "custom" && payoutTo ? safeDate(payoutTo) : null;
+    const customFrom = payoutRange === "custom" ? parseDateInputLocal(payoutFrom) : null;
+    const customTo = payoutRange === "custom" ? parseDateInputLocal(payoutTo) : null;
+    const fromDt = customFrom ? startOfDay(customFrom) : rangeStart;
+    const toDtExclusive = customTo ? addDays(startOfDay(customTo), 1) : null;
 
     const requestedRequests = (payoutRequests || []).filter((r) => normalizePayoutRequestStatus(r?.status) === "requested");
     const processingRequests = (payoutRequests || []).filter((r) => normalizePayoutRequestStatus(r?.status) === "processing");
@@ -3119,8 +3240,9 @@ function DeliveryHomePageInner() {
     let pool = (completedOrders || []).filter((o) => {
       if (payoutSource !== "all" && String(o?._source || "") !== payoutSource) return false;
       const dt = safeDate(o.delivered_at || o.updated_at || o.created_at);
-      if (fromDt && dt && dt < startOfDay(fromDt)) return false;
-      if (toDt && dt && dt > addDays(startOfDay(toDt), 1)) return false;
+      if (fromDt && toDtExclusive && toDtExclusive <= fromDt) return false;
+      if (fromDt && dt && dt < fromDt) return false;
+      if (toDtExclusive && dt && dt >= toDtExclusive) return false;
       return true;
     });
 

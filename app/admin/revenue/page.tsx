@@ -44,6 +44,11 @@ const TAX_COLS = ["tax_amount", "gst_amount", "tax", "gst", "tax_total", "tax_va
 const TIP_COLS = ["tip_amount", "tip", "driver_tip", "delivery_tip", "tip_value"];
 const DELIVERY_FEE_COLS = ["delivery_fee", "delivery_fee_amount", "delivery_charge", "delivery_charge_amount", "shipping_fee", "delivery_total"];
 const DELIVERY_PAYOUT_COLS = ["delivery_payout", "driver_payout", "courier_payout"];
+const DELIVERY_ADMIN_COMMISSION_COLS = [
+  "delivery_admin_commission_amount",
+  "delivery_commission_amount",
+  "admin_delivery_commission",
+];
 const DISCOUNT_COLS = ["discount_amount", "discount", "coupon_discount", "discount_total"];
 const SUBTOTAL_COLS = ["subtotal_amount", "subtotal", "sub_total"];
 
@@ -610,6 +615,7 @@ export default function AdminRevenuePage() {
     let platformFeeRevenue = 0;
     let deliveryFeeRevenue = 0;
     let driverPayouts = 0;
+    let deliveryAdminCommissionRevenue = 0;
     let tipRevenue = 0;
     let taxRevenue = 0;
     let discountValue = 0;
@@ -628,6 +634,10 @@ export default function AdminRevenuePage() {
       const rowDeliveryFee = pickNumFromCols(raw, DELIVERY_FEE_COLS);
       const payoutFromCols = pickNumFromCols(raw, DELIVERY_PAYOUT_COLS);
       const rowDeliveryPayout = payoutFromCols > 0 ? payoutFromCols : rowDeliveryFee + rowTipAmount;
+      const storedDeliveryAdminCommission = pickNumFromCols(raw, DELIVERY_ADMIN_COMMISSION_COLS);
+      const inferredDeliveryAdminCommission = Math.max(0, rowDeliveryFee + rowTipAmount - rowDeliveryPayout);
+      const rowDeliveryAdminCommission =
+        storedDeliveryAdminCommission > 0 ? storedDeliveryAdminCommission : inferredDeliveryAdminCommission;
       const rowDiscountAmount = pickNumFromCols(raw, DISCOUNT_COLS);
       const rowSubtotalAmount = pickNumFromCols(raw, SUBTOTAL_COLS);
       const feeBase = rowSubtotalAmount > 0 ? rowSubtotalAmount : Math.max(0, rowAmount);
@@ -643,6 +653,7 @@ export default function AdminRevenuePage() {
       platformFeeRevenue += rowPlatformFee;
       deliveryFeeRevenue += rowDeliveryFee;
       driverPayouts += rowDeliveryPayout;
+      deliveryAdminCommissionRevenue += rowDeliveryAdminCommission;
       tipRevenue += rowTipAmount;
       taxRevenue += rowTaxAmount;
       discountValue += rowDiscountAmount;
@@ -681,7 +692,7 @@ export default function AdminRevenuePage() {
 
     const avgOrderValue = revenueOrders ? completedRevenue / revenueOrders : 0;
     const completionRate = filteredRows.length ? Math.round((completedOrders / filteredRows.length) * 100) : 0;
-    const netPlatformProfit = platformFeeRevenue + deliveryFeeRevenue - driverPayouts;
+    const netPlatformProfit = platformFeeRevenue + deliveryAdminCommissionRevenue;
 
     const topOutlets = Object.entries(outletMap)
       .map(([key, v]) => ({ key, ...v }))
@@ -704,6 +715,7 @@ export default function AdminRevenuePage() {
       platformFeeRevenue,
       deliveryFeeRevenue,
       driverPayouts,
+      deliveryAdminCommissionRevenue,
       tipRevenue,
       taxRevenue,
       discountValue,
@@ -978,19 +990,27 @@ export default function AdminRevenuePage() {
         <div style={card(3)}>
           <div style={title}>Delivery Fees Collected</div>
           <div style={value}>{formatMoney(summary.deliveryFeeRevenue, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From delivery_fee on completed rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From delivery_fee on filtered rows</div>
         </div>
 
         <div style={card(3)}>
           <div style={title}>Driver Payouts</div>
           <div style={value}>{formatMoney(summary.driverPayouts, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From delivery_payout on completed rows</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>From delivery_payout on filtered rows</div>
+        </div>
+
+        <div style={card(3)}>
+          <div style={title}>Delivery Admin Commission</div>
+          <div style={value}>{formatMoney(summary.deliveryAdminCommissionRevenue, displayCurrency)}</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>
+            Gross delivery fee + tip - driver payout (or stored commission field)
+          </div>
         </div>
 
         <div style={card(3)}>
           <div style={title}>Net Platform Profit</div>
           <div style={value}>{formatMoney(summary.netPlatformProfit, displayCurrency)}</div>
-          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>Platform fee + delivery fees − driver payouts</div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 6 }}>Platform fee + delivery admin commission</div>
         </div>
 
         <div style={card(3)}>

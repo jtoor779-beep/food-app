@@ -374,6 +374,27 @@ export async function POST(req: Request) {
       "platformFee",
     ]);
     const tip = pickMoney(meta, ["tip", "tip_amount", "tipAmount"]);
+    const deliveryPayout = pickMoney(meta, [
+      "delivery_payout",
+      "driver_payout",
+      "deliveryPayout",
+    ]);
+    const deliveryAdminCommissionAmount = pickMoney(meta, [
+      "delivery_admin_commission_amount",
+      "deliveryAdminCommissionAmount",
+      "delivery_commission_amount",
+    ]);
+    const deliveryAdminCommissionPercent = Math.max(
+      0,
+      toNumber(
+        pickFirst(
+          meta?.delivery_admin_commission_percent,
+          meta?.deliveryAdminCommissionPercent,
+          meta?.delivery_commission_percent
+        ),
+        0
+      )
+    );
     const feesIncludedInItems =
       safeStr(
         pickFirst(
@@ -478,6 +499,13 @@ export async function POST(req: Request) {
       delivery_fee: String(deliveryFee || 0),
       tax_amount: String(tax || 0),
       tip_amount: String(tip || 0),
+      delivery_payout: String(deliveryPayout || 0),
+      delivery_admin_commission_percent: String(
+        deliveryAdminCommissionPercent || 0
+      ),
+      delivery_admin_commission_amount: String(
+        deliveryAdminCommissionAmount || 0
+      ),
     };
 
     for (const k of Object.keys(metadata)) {
@@ -567,6 +595,14 @@ const successUrl = buildStripeReturnUrl(
         if (Number.isFinite(Number(platformFee))) patch.platform_fee = platformFee;
         if (Number.isFinite(Number(tax))) patch.tax_amount = tax;
         if (Number.isFinite(Number(tip))) patch.tip_amount = tip;
+        if (Number.isFinite(Number(deliveryPayout)))
+          patch.delivery_payout = deliveryPayout;
+        if (Number.isFinite(Number(deliveryAdminCommissionPercent)))
+          patch.delivery_admin_commission_percent =
+            deliveryAdminCommissionPercent;
+        if (Number.isFinite(Number(deliveryAdminCommissionAmount)))
+          patch.delivery_admin_commission_amount =
+            deliveryAdminCommissionAmount;
 
         const normalizedOrderType = String(orderTypeRaw || "").toLowerCase();
         const orderTable = normalizedOrderType.includes("groc")

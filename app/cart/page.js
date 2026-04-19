@@ -530,6 +530,29 @@ function calculateConfiguredDeliveryFee({ platform, subtotal, distanceMiles }) {
   };
 }
 
+function calculateDeliveryPayoutBreakdown({ platform, deliveryFee, tipAmount }) {
+  const grossDeliveryFee = Math.max(0, toNum(deliveryFee, 0));
+  const tip = Math.max(0, toNum(tipAmount, 0));
+  const rawCommissionPercent = Math.max(0, toNum(platform?.delivery_fee_commission_percent, 0));
+  const deliveryAdminCommissionPercent = Math.min(100, rawCommissionPercent);
+  const deliveryAdminCommissionAmount = roundMoney(
+    (grossDeliveryFee * deliveryAdminCommissionPercent) / 100
+  );
+  const netDeliveryFee = roundMoney(
+    Math.max(0, grossDeliveryFee - deliveryAdminCommissionAmount)
+  );
+  const deliveryPayout = roundMoney(netDeliveryFee + tip);
+
+  return {
+    grossDeliveryFee,
+    tip,
+    deliveryAdminCommissionPercent,
+    deliveryAdminCommissionAmount,
+    netDeliveryFee,
+    deliveryPayout,
+  };
+}
+
 async function countRows(table, filters = []) {
   try {
     let q = supabase.from(table).select("id", { count: "exact", head: true });
@@ -853,6 +876,7 @@ async function persistOrderItemSnapshot(table, orderId, items) {
 const PLATFORM_DEFAULTS = {
   commission_percent: "10",
   delivery_fee_base: "20",
+  delivery_fee_commission_percent: "0",
   delivery_fee_per_km: "0",
   delivery_fee_distance_threshold_miles: "2",
   delivery_fee_per_mile_after_threshold: "0",
@@ -898,6 +922,10 @@ async function loadPlatformSettingsSafe() {
       ...PLATFORM_DEFAULTS,
       commission_percent: safeNumStr(json?.commission_percent, PLATFORM_DEFAULTS.commission_percent),
       delivery_fee_base: safeNumStr(json?.delivery_fee_base, PLATFORM_DEFAULTS.delivery_fee_base),
+      delivery_fee_commission_percent: safeNumStr(
+        json?.delivery_fee_commission_percent,
+        PLATFORM_DEFAULTS.delivery_fee_commission_percent
+      ),
       delivery_fee_per_km: safeNumStr(json?.delivery_fee_per_km, PLATFORM_DEFAULTS.delivery_fee_per_km),
       delivery_fee_distance_threshold_miles: safeNumStr(
         json?.delivery_fee_distance_threshold_miles,
@@ -939,6 +967,9 @@ async function insertRestaurantOrderAuto(payload) {
     const x = { ...payload };
     // keep safe keys for YOUR schema
     delete x.delivery_fee;
+    delete x.delivery_payout;
+    delete x.delivery_admin_commission_percent;
+    delete x.delivery_admin_commission_amount;
     delete x.tax_amount;
     delete x.tip_amount;
     delete x.payment_method;
@@ -1864,7 +1895,7 @@ export default function CartPage() {
     }));
   }
 
-  async function payWithStripe(orderId) {
+  async function payWithStripe(orderId, pricingOverride = null) {
     setErrMsg("");
     setInfoMsg("");
 
@@ -1877,12 +1908,70 @@ export default function CartPage() {
       throw new Error("Cart is empty.");
     }
 
-    const platformFee =
+    const basePlatformFee =
       cartMode === "restaurant"
         ? Number(commissionAmount || 0)
         : cartMode === "grocery"
         ? Number(groceryPlatformFeeAmount || 0)
         : 0;
+    const platformFee = Math.max(0, Number(pricingOverride?.platform_fee ?? basePlatformFee));
+    const tipForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.tip_amount !== undefined
+          ? pricingOverride?.tip_amount
+          : tip || 0
+      )
+    );
+    const deliveryFeeForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.delivery_fee !== undefined
+          ? pricingOverride?.delivery_fee
+          : deliveryFee || 0
+      )
+    );
+    const taxForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.tax_amount !== undefined
+          ? pricingOverride?.tax_amount
+          : gst || 0
+      )
+    );
+    const discountForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.discount_amount !== undefined
+          ? pricingOverride?.discount_amount
+          : discount || 0
+      )
+    );
+    const subtotalForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.subtotal_amount !== undefined
+          ? pricingOverride?.subtotal_amount
+          : subtotal || 0
+      )
+    );
+    const payoutBreakdown = calculateDeliveryPayoutBreakdown({
+      platform,
+      deliveryFee: deliveryFeeForStripe,
+      tipAmount: tipForStripe,
+    });
+    const payableForStripe = Math.max(
+      0,
+      Number(
+        pricingOverride?.payable ??
+          subtotalForStripe +
+            deliveryFeeForStripe +
+            taxForStripe +
+            tipForStripe +
+            platformFee -
+            discountForStripe
+      )
+    );
 
     const restaurant_id = cartMode === "restaurant" ? (items[0]?.restaurant_id || "") : "";
     const store_id = cartMode === "grocery" ? (gItems[0]?.store_id || "") : "";
@@ -1915,17 +2004,29 @@ export default function CartPage() {
           landmark: (landmark || "").trim(),
         }),
 
-        tip: Number(tip || 0),
+        tip: tipForStripe,
+        tip_amount: tipForStripe,
 
-        delivery_fee: Number(deliveryFee || 0),
-        platform_fee: Number(platformFee || 0),
-        tax_amount: Number(gst || 0),
-        discount_amount: Number(discount || 0),
+        delivery_fee: payoutBreakdown.grossDeliveryFee,
+        delivery_payout: Number(
+          pricingOverride?.delivery_payout ?? payoutBreakdown.deliveryPayout
+        ),
+        delivery_admin_commission_percent: Number(
+          pricingOverride?.delivery_admin_commission_percent ??
+            payoutBreakdown.deliveryAdminCommissionPercent
+        ),
+        delivery_admin_commission_amount: Number(
+          pricingOverride?.delivery_admin_commission_amount ??
+            payoutBreakdown.deliveryAdminCommissionAmount
+        ),
+        platform_fee: platformFee,
+        tax_amount: taxForStripe,
+        discount_amount: discountForStripe,
 
-        deliveryFee: Number(deliveryFee || 0),
-        gst: Number(gst || 0),
-        discount: Number(discount || 0),
-        payable: Number(payable || 0),
+        deliveryFee: payoutBreakdown.grossDeliveryFee,
+        gst: taxForStripe,
+        discount: discountForStripe,
+        payable: payableForStripe,
 
         platform_fee_percent: Number(commissionPercent || 0),
         platform_fee_amount: Number(platformFee || 0),
@@ -2150,13 +2251,19 @@ export default function CartPage() {
           .filter(Boolean)
           .join(" | ");
 
+        const payoutBreakdown = calculateDeliveryPayoutBreakdown({
+          platform,
+          deliveryFee: finalDeliveryFee,
+          tipAmount: Number(tip || 0),
+        });
         const total_amount = Math.max(
           0,
-          Number(subtotal || 0) + finalDeliveryFee + Number(gst || 0) + Number(tip || 0) + platformFee - Number(finalDiscount || 0)
-        );
-        const deliveryPayout = Math.max(
-          0,
-          finalDeliveryFee + Number(tip || 0)
+          Number(subtotal || 0) +
+            finalDeliveryFee +
+            Number(gst || 0) +
+            Number(tip || 0) +
+            platformFee -
+            Number(finalDiscount || 0)
         );
 
         const orderPayload = {
@@ -2173,15 +2280,23 @@ export default function CartPage() {
           store_lat: storeLat,
           store_lng: storeLng,
           delivery_distance_miles: deliveryDistanceMiles,
-          delivery_fee: finalDeliveryFee,
+          delivery_fee: payoutBreakdown.grossDeliveryFee,
           tip_amount: Number(tip || 0),
           platform_fee: platformFee,
-          delivery_payout: deliveryPayout,
+          delivery_admin_commission_percent:
+            payoutBreakdown.deliveryAdminCommissionPercent,
+          delivery_admin_commission_amount:
+            payoutBreakdown.deliveryAdminCommissionAmount,
+          delivery_payout: payoutBreakdown.deliveryPayout,
         };
         console.log("[grocery-cart] order payload", {
           store_id,
           delivery_fee: orderPayload.delivery_fee,
           tip_amount: orderPayload.tip_amount,
+          delivery_admin_commission_percent:
+            orderPayload.delivery_admin_commission_percent,
+          delivery_admin_commission_amount:
+            orderPayload.delivery_admin_commission_amount,
           delivery_payout: orderPayload.delivery_payout,
           delivery_distance_miles: orderPayload.delivery_distance_miles,
           store_lat: orderPayload.store_lat,
@@ -2248,7 +2363,20 @@ export default function CartPage() {
 
         // âœ… Grocery = ONLY Stripe (card) when payment is still due
         setInfoMsg("Redirecting to secure Stripe checkout...");
-        await payWithStripe(orderRow.id);
+        await payWithStripe(orderRow.id, {
+          subtotal_amount: Number(subtotal || 0),
+          delivery_fee: orderPayload.delivery_fee,
+          tip_amount: orderPayload.tip_amount,
+          tax_amount: Number(gst || 0),
+          discount_amount: Number(finalDiscount || 0),
+          platform_fee: orderPayload.platform_fee,
+          delivery_admin_commission_percent:
+            orderPayload.delivery_admin_commission_percent,
+          delivery_admin_commission_amount:
+            orderPayload.delivery_admin_commission_amount,
+          delivery_payout: orderPayload.delivery_payout,
+          payable: total_amount,
+        });
         return;
       } catch (e) {
         setErrMsg(e?.message || String(e));
@@ -2423,6 +2551,11 @@ export default function CartPage() {
         distanceMiles: deliveryDistanceMiles,
       });
       const finalDeliveryFee = Number(finalDeliveryQuote.fee || 0);
+      const deliveryPayoutBreakdown = calculateDeliveryPayoutBreakdown({
+        platform,
+        deliveryFee: finalDeliveryFee,
+        tipAmount: Number(tip || 0),
+      });
 
       const subtotal_amount = Math.max(0, Number(subtotal || 0));
       const discount_amount = Math.max(0, Number(finalDiscount || 0));
@@ -2466,6 +2599,11 @@ export default function CartPage() {
         delivery_fee: finalDeliveryFee,
         tax_amount: Number(gst || 0),
         tip_amount: Number(tip || 0),
+        delivery_admin_commission_percent:
+          deliveryPayoutBreakdown.deliveryAdminCommissionPercent,
+        delivery_admin_commission_amount:
+          deliveryPayoutBreakdown.deliveryAdminCommissionAmount,
+        delivery_payout: deliveryPayoutBreakdown.deliveryPayout,
         platform_fee: platformFee,
 
         payment_method: paymentMethod === "card" ? "stripe" : (paymentMethod || "card"),
@@ -2506,7 +2644,20 @@ export default function CartPage() {
         await markOrderPaidWithoutStripeWeb(orderRow.id, "restaurant");
       } else if (paymentMethod === "card") {
         setInfoMsg("Redirecting to secure Stripe checkout...");
-        await payWithStripe(orderRow.id);
+        await payWithStripe(orderRow.id, {
+          subtotal_amount,
+          delivery_fee: finalDeliveryFee,
+          tip_amount: Number(tip || 0),
+          tax_amount: Number(gst || 0),
+          discount_amount,
+          platform_fee: platformFee,
+          delivery_admin_commission_percent:
+            deliveryPayoutBreakdown.deliveryAdminCommissionPercent,
+          delivery_admin_commission_amount:
+            deliveryPayoutBreakdown.deliveryAdminCommissionAmount,
+          delivery_payout: deliveryPayoutBreakdown.deliveryPayout,
+          payable: total_amount,
+        });
         return;
       }
 

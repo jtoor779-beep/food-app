@@ -9,6 +9,7 @@ type DriverPushTokenRow = {
 
 type ProfileRow = {
   user_id: string;
+  is_delivery_online?: boolean | null;
 };
 
 type ExpoTicket = {
@@ -100,16 +101,15 @@ export async function POST(req: Request) {
       });
     }
 
-    // Push should reach every approved driver device, not only the subset
-    // currently marked online, because drivers can still open available orders
-    // and accept them even if that online flag is stale.
+    // Only online + approved + enabled drivers should receive new order offers.
     const { data: approvedDrivers, error: approvedDriversError } =
       await supabaseAdmin
         .from("profiles")
-        .select("user_id")
-        .eq("role", "delivery_partner")
+        .select("user_id, is_delivery_online")
+        .in("role", ["delivery_partner", "delivery"])
         .eq("delivery_approved", true)
-        .eq("delivery_disabled", false);
+        .eq("delivery_disabled", false)
+        .eq("is_delivery_online", true);
 
     if (approvedDriversError) {
       console.error("profiles approved query error:", approvedDriversError);
@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       );
     }
 
-    let audience: "approved" | "token_fallback_all" = "approved";
+    const audience: "approved" | "token_fallback_all" = "approved";
     const driverIds = normalizeDriverIds(approvedDrivers as ProfileRow[]);
 
     if (!driverIds.length) {
@@ -149,34 +149,7 @@ export async function POST(req: Request) {
       .map((row: DriverPushTokenRow) => String(row?.expo_push_token || "").trim())
       .filter(Boolean);
 
-    let validTokens = Array.from(new Set(allTokens.filter(isLikelyExpoPushToken)));
-
-    // 3b) Last-resort fallback: if targeted selection has no valid token,
-    // send to all known driver push tokens.
-    if (!validTokens.length) {
-      const { data: allTokenRows, error: allTokensError } = await supabaseAdmin
-        .from("driver_push_tokens")
-        .select("expo_push_token");
-
-      if (allTokensError) {
-        console.error("driver_push_tokens fallback query error:", allTokensError);
-        return NextResponse.json(
-          { success: false, message: allTokensError.message },
-          { status: 500 }
-        );
-      }
-
-      const fallbackTokens = Array.from(
-        new Set(
-          (allTokenRows || [])
-            .map((row: any) => String(row?.expo_push_token || "").trim())
-            .filter((token: string) => token && isLikelyExpoPushToken(token))
-        )
-      );
-
-      validTokens = fallbackTokens;
-      audience = "token_fallback_all";
-    }
+    const validTokens = Array.from(new Set(allTokens.filter(isLikelyExpoPushToken)));
 
     if (!validTokens.length) {
       return NextResponse.json({

@@ -622,6 +622,36 @@ function PaymentSuccessInner() {
         const taxAmount = Math.max(0, num(bd?.tax_amount, num(bd?.tax_cents, 0) / 100));
         const tipAmount = Math.max(0, num(bd?.tip_amount, num(bd?.tip_cents, 0) / 100));
         const discountAmount = Math.max(0, num(bd?.discount_amount, num(bd?.discount_cents, 0) / 100));
+        const deliveryPayout = Math.max(
+          0,
+          num(
+            bd?.delivery_payout,
+            num(md?.delivery_payout, num(md?.driver_payout, deliveryFee + tipAmount))
+          )
+        );
+        const deliveryAdminCommissionPercent = Math.max(
+          0,
+          num(
+            bd?.delivery_admin_commission_percent,
+            num(
+              md?.delivery_admin_commission_percent,
+              num(md?.deliveryAdminCommissionPercent, 0)
+            )
+          )
+        );
+        const deliveryAdminCommissionAmount = Math.max(
+          0,
+          num(
+            bd?.delivery_admin_commission_amount,
+            num(
+              md?.delivery_admin_commission_amount,
+              num(
+                md?.deliveryAdminCommissionAmount,
+                Math.max(0, deliveryFee + tipAmount - deliveryPayout)
+              )
+            )
+          )
+        );
 
         const localAddr = typeof window !== "undefined" ? readSavedAddress() : null;
         const metaAddr = typeof window !== "undefined" ? readAddressFromStripeMeta(md) : null;
@@ -735,6 +765,9 @@ function PaymentSuccessInner() {
 
           delivery_fee: deliveryFee,
           tip_amount: tipAmount,
+          delivery_payout: deliveryPayout,
+          delivery_admin_commission_percent: deliveryAdminCommissionPercent,
+          delivery_admin_commission_amount: deliveryAdminCommissionAmount,
           platform_fee: platformFee,
           tax_amount: taxAmount,
           discount_amount: discountAmount,

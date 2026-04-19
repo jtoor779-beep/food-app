@@ -8,6 +8,7 @@ type AnyRow = Record<string, any>;
 type SettingsState = {
   commission_percent: string; // keep as string for input
   delivery_fee_base: string;
+  delivery_fee_commission_percent: string;
   delivery_fee_per_km: string;
   delivery_fee_distance_threshold_miles: string;
   delivery_fee_per_mile_after_threshold: string;
@@ -24,6 +25,7 @@ type SettingsState = {
 const DEFAULTS: SettingsState = {
   commission_percent: "10",
   delivery_fee_base: "20",
+  delivery_fee_commission_percent: "0",
   delivery_fee_per_km: "0",
   delivery_fee_distance_threshold_miles: "2",
   delivery_fee_per_mile_after_threshold: "0",
@@ -341,6 +343,7 @@ export default function AdminSettingsPage() {
         ...form,
         commission_percent: toNumberString(form.commission_percent),
         delivery_fee_base: toNumberString(form.delivery_fee_base),
+        delivery_fee_commission_percent: toNumberString(form.delivery_fee_commission_percent),
         delivery_fee_per_km: toNumberString(form.delivery_fee_per_km),
         delivery_fee_distance_threshold_miles: toNumberString(form.delivery_fee_distance_threshold_miles),
         delivery_fee_per_mile_after_threshold: toNumberString(form.delivery_fee_per_mile_after_threshold),
@@ -636,6 +639,17 @@ for each row execute function public.touch_updated_at();`}
                 placeholder="e.g. 20"
               />
               <div style={styles.small}>Flat amount added to delivery orders.</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: styles.muted, marginBottom: 6, fontWeight: 900 }}>Delivery commission %</div>
+              <input
+                value={form.delivery_fee_commission_percent}
+                onChange={(e) => setForm((p) => ({ ...p, delivery_fee_commission_percent: e.target.value }))}
+                style={styles.input}
+                placeholder="e.g. 10"
+              />
+              <div style={styles.small}>Admin share from delivery fee. Driver sees payout after this cut.</div>
             </div>
 
             <div>

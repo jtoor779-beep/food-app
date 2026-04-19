@@ -45,6 +45,7 @@ type AttachmentMeta = {
 };
 
 type AttachmentUI = AttachmentMeta & { signedUrl?: string | null };
+type AudienceFilter = "all" | "owner" | "driver" | "customer";
 
 function safeLower(s: any) {
   return String(s || "").toLowerCase();
@@ -63,7 +64,7 @@ function fmtTime(iso?: string | null) {
 function clamp(s: any, max = 110) {
   const str = String(s ?? "");
   if (str.length <= max) return str;
-  return str.slice(0, max - 1) + "…";
+  return str.slice(0, max - 3) + "...";
 }
 
 function ticketTone(t: Ticket) {
@@ -72,6 +73,25 @@ function ticketTone(t: Ticket) {
   if (st === "resolved" || st === "closed") return "good";
   if (p === "urgent" || p === "high") return "warn";
   return "neutral";
+}
+
+function ticketAudience(t: Ticket): Exclude<AudienceFilter, "all"> {
+  const category = safeLower(t.category);
+  const channel = safeLower(t.channel);
+
+  if (category.includes("owner") || channel.includes("manager") || channel.includes("owner")) return "owner";
+  if (channel.includes("driver")) return "driver";
+  if (category.includes("dispatch") || category.includes("driver_support")) return "driver";
+  if ((channel === "ios" || channel === "android") && (category === "dispatch" || category === "technical" || category === "payout")) {
+    return "driver";
+  }
+  return "customer";
+}
+
+function audienceLabel(v: Exclude<AudienceFilter, "all">) {
+  if (v === "owner") return "Owner";
+  if (v === "driver") return "Driver";
+  return "Customer";
 }
 
 /* =========================
@@ -114,6 +134,7 @@ export default function AdminSupportPage() {
 
   // filters
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "pending" | "resolved" | "closed">("all");
+  const [audienceFilter, setAudienceFilter] = useState<AudienceFilter>("all");
   const [catFilter, setCatFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
 
@@ -441,6 +462,15 @@ export default function AdminSupportPage() {
     return c;
   }, [tickets]);
 
+  const audienceCounts = useMemo(() => {
+    const c = { owner: 0, driver: 0, customer: 0 };
+    for (const t of tickets) {
+      const key = ticketAudience(t);
+      c[key] += 1;
+    }
+    return c;
+  }, [tickets]);
+
   const categoryOptions = useMemo(
     () => [
       { v: "all", label: "All categories" },
@@ -459,6 +489,7 @@ export default function AdminSupportPage() {
   const filteredTickets = useMemo(() => {
     let base = tickets;
 
+    if (audienceFilter !== "all") base = base.filter((t) => ticketAudience(t) === audienceFilter);
     if (statusFilter !== "all") base = base.filter((t) => safeLower(t.status) === statusFilter);
     if (catFilter !== "all") base = base.filter((t) => safeLower(t.category) === catFilter);
 
@@ -471,6 +502,7 @@ export default function AdminSupportPage() {
           safeLower(t.user_email || "").includes(s) ||
           safeLower(t.order_id || "").includes(s) ||
           safeLower(t.category).includes(s) ||
+          safeLower(t.channel || "").includes(s) ||
           safeLower(t.priority).includes(s) ||
           safeLower(t.status).includes(s)
         );
@@ -478,7 +510,7 @@ export default function AdminSupportPage() {
     }
 
     return base;
-  }, [tickets, statusFilter, catFilter, search]);
+  }, [tickets, audienceFilter, statusFilter, catFilter, search]);
 
   return (
     <main style={pageBg}>
@@ -489,7 +521,7 @@ export default function AdminSupportPage() {
           <div>
             <div style={kicker}>ADMIN - SUPPORT</div>
             <h1 style={title}>Support Inbox</h1>
-            <div style={subTitle}>View all customer tickets, reply, and update statuses. (Food + Groceries + Delivery)</div>
+            <div style={subTitle}>Clean support inbox with separate Owner, Driver, and Customer ticket lanes.</div>
           </div>
 
           <div style={statCard}>
@@ -523,12 +555,26 @@ export default function AdminSupportPage() {
           {/* Left: Ticket List */}
           <div style={panel}>
             <div style={panelHeader}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={panelTitle}>All Tickets</div>
-                <div style={panelSub}>Filter, search, and open a ticket thread.</div>
+              <div style={panelHeaderBlock}>
+                <div style={panelTitle}>{audienceFilter === "all" ? "All Tickets" : `${audienceFilter[0].toUpperCase()}${audienceFilter.slice(1)} Tickets`}</div>
+                <div style={panelSub}>Separate lanes for Owner, Driver, and Customer. Open any ticket to manage the thread.</div>
+                <div style={laneRow}>
+                  <button type="button" onClick={() => setAudienceFilter("all")} style={{ ...laneBtn, ...(audienceFilter === "all" ? laneBtnActive : {}) }}>
+                    All ({tickets.length})
+                  </button>
+                  <button type="button" onClick={() => setAudienceFilter("owner")} style={{ ...laneBtn, ...(audienceFilter === "owner" ? laneBtnActive : {}) }}>
+                    Owner ({audienceCounts.owner})
+                  </button>
+                  <button type="button" onClick={() => setAudienceFilter("driver")} style={{ ...laneBtn, ...(audienceFilter === "driver" ? laneBtnActive : {}) }}>
+                    Driver ({audienceCounts.driver})
+                  </button>
+                  <button type="button" onClick={() => setAudienceFilter("customer")} style={{ ...laneBtn, ...(audienceFilter === "customer" ? laneBtnActive : {}) }}>
+                    Customer ({audienceCounts.customer})
+                  </button>
+                </div>
               </div>
 
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <div style={filtersRow}>
                 <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={select}>
                   <option value="all">All</option>
                   <option value="open">Open</option>
@@ -545,7 +591,7 @@ export default function AdminSupportPage() {
                   ))}
                 </select>
 
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search email / order id / subject…" style={searchMini} />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search email / order id / subject..." style={searchMini} />
               </div>
             </div>
 
@@ -555,6 +601,7 @@ export default function AdminSupportPage() {
               <div style={ticketList}>
                 {filteredTickets.map((t) => {
                   const tone = ticketTone(t);
+                  const audience = ticketAudience(t);
                   const active = activeTicket?.id === t.id;
                   return (
                     <button
@@ -574,6 +621,7 @@ export default function AdminSupportPage() {
                         <div style={{ minWidth: 0 }}>
                           <div style={ticketSubject}>{t.subject}</div>
                           <div style={ticketMeta}>
+                            <span style={pillSoft}>{audienceLabel(audience)}</span>
                             <span style={pill}>{t.category}</span>
                             <span style={pillSoft}>{t.priority}</span>
                             {t.order_id ? <span style={pillSoft}>Order: {t.order_id}</span> : null}
@@ -604,7 +652,7 @@ export default function AdminSupportPage() {
                 <div style={panelSub}>
                   {activeTicket ? (
                     <>
-                      <b>{activeTicket.subject}</b> • {activeTicket.user_email || "customer"} • Status: <b>{activeTicket.status}</b>
+                      <b>{activeTicket.subject}</b> | {audienceLabel(ticketAudience(activeTicket))} | {activeTicket.user_email || "customer"} | Status: <b>{activeTicket.status}</b>
                     </>
                   ) : (
                     "Open a ticket to view the chat thread."
@@ -853,6 +901,44 @@ const panelSub: React.CSSProperties = {
   fontWeight: 800,
   color: "rgba(17,24,39,0.62)",
   fontSize: 12,
+};
+
+const panelHeaderBlock: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  flex: 1,
+  minWidth: 260,
+};
+
+const laneRow: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const laneBtn: React.CSSProperties = {
+  borderRadius: 999,
+  border: "1px solid rgba(0,0,0,0.10)",
+  background: "rgba(255,255,255,0.82)",
+  padding: "8px 12px",
+  fontWeight: 900,
+  fontSize: 12,
+  color: "#0b1220",
+  cursor: "pointer",
+};
+
+const laneBtnActive: React.CSSProperties = {
+  background: "rgba(17,24,39,0.94)",
+  color: "#fff",
+  border: "1px solid rgba(17,24,39,0.94)",
+};
+
+const filtersRow: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  justifyContent: "flex-end",
 };
 
 const select: React.CSSProperties = {
@@ -1199,3 +1285,6 @@ const toastBox: React.CSSProperties = {
   zIndex: 9999,
   boxShadow: "0 12px 32px rgba(0,0,0,0.10)",
 };
+
+
+

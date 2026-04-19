@@ -46,6 +46,7 @@ export default function AdminStorePayoutsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
+  const [expandedBatch, setExpandedBatch] = useState<Record<string, boolean>>({});
 
   async function load() {
     try {
@@ -111,6 +112,7 @@ export default function AdminStorePayoutsPage() {
                   const rowId = String(row?.id || "");
                   const statusTone = tone(String(row?.status || ""));
                   const orders = pickOrders(row);
+                  const isBatchOpen = !!expandedBatch[rowId];
                   return (
                     <tr key={rowId}>
                       <td style={td}>{String(row?.owner_user_id || "").slice(0, 8)}</td>
@@ -123,14 +125,27 @@ export default function AdminStorePayoutsPage() {
                       </td>
                       <td style={td}>
                         {orders.length ? (
-                          <div style={{ display: "grid", gap: 6 }}>
-                            <div style={{ fontWeight: 900 }}>{orders.length} orders</div>
-                            {orders.slice(0, 6).map((order: any) => (
-                              <div key={String(order?.order_id)} style={orderLine}>
-                                <div>#{String(order?.order_id || "").slice(0, 8)} - {order?.customer_name || "Customer"}</div>
-                                <div>Sales ${Number(order?.item_subtotal || 0).toFixed(2)} - Tax ${Number(order?.tax_amount || 0).toFixed(2)}</div>
+                          <div style={{ display: "grid", gap: 8, minWidth: 240 }}>
+                            <div style={{ fontWeight: 900 }}>{orders.length} orders in batch</div>
+                            <button
+                              type="button"
+                              style={batchToggleBtn}
+                              onClick={() =>
+                                setExpandedBatch((prev) => ({ ...prev, [rowId]: !prev[rowId] }))
+                              }
+                            >
+                              {isBatchOpen ? "Hide all batch orders" : `Show all ${orders.length} batch orders`}
+                            </button>
+                            {isBatchOpen ? (
+                              <div style={batchListWrap}>
+                                {orders.map((order: any) => (
+                                  <div key={String(order?.order_id)} style={orderLine}>
+                                    <div>#{String(order?.order_id || "").slice(0, 8)} - {order?.customer_name || "Customer"}</div>
+                                    <div>Sales ${Number(order?.item_subtotal || 0).toFixed(2)} - Tax ${Number(order?.tax_amount || 0).toFixed(2)}</div>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            ) : null}
                           </div>
                         ) : (
                           "-"
@@ -169,5 +184,7 @@ const tableWrap: React.CSSProperties = { overflowX: "auto", borderRadius: 14, bo
 const th: React.CSSProperties = { textAlign: "left", padding: 12, fontSize: 12, fontWeight: 900, color: "rgba(15,23,42,0.7)", borderBottom: "1px solid rgba(15,23,42,0.08)" };
 const td: React.CSSProperties = { padding: 12, fontSize: 13, borderBottom: "1px solid rgba(15,23,42,0.06)", color: "#0f172a" };
 const btn: React.CSSProperties = { padding: "8px 12px", borderRadius: 10, border: "1px solid rgba(15,23,42,0.12)", background: "#fff", cursor: "pointer", fontWeight: 900 };
+const batchToggleBtn: React.CSSProperties = { padding: "8px 12px", borderRadius: 10, border: "1px solid rgba(15,23,42,0.12)", background: "#f8fafc", cursor: "pointer", fontWeight: 900, textAlign: "left" };
+const batchListWrap: React.CSSProperties = { display: "grid", gap: 6, maxHeight: 230, overflowY: "auto", paddingRight: 4 };
 const subRow: React.CSSProperties = { color: "rgba(15,23,42,0.68)", fontSize: 12, fontWeight: 700, marginTop: 4 };
 const orderLine: React.CSSProperties = { padding: 8, borderRadius: 10, background: "rgba(15,23,42,0.04)", fontSize: 12, fontWeight: 700, color: "#0f172a" };

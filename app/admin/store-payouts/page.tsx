@@ -1,10 +1,7 @@
 "use client";
 
-import React from "react";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
-
-const TABLE = "owner_payout_requests";
 
 function tone(status: string) {
   const next = String(status || "requested").toLowerCase();
@@ -20,6 +17,30 @@ function pickOrders(row: any) {
   return [];
 }
 
+async function adminFetch(path: string, init?: RequestInit) {
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+
+  const token = String(session?.access_token || "").trim();
+  if (!token) throw new Error("Admin session expired. Please sign in again.");
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    ...(init?.headers || {}),
+  };
+
+  const response = await fetch(path, { ...init, headers });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(String(payload?.error || payload?.message || `Request failed (${response.status}).`));
+  }
+  return payload;
+}
+
 export default function AdminStorePayoutsPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,9 +51,8 @@ export default function AdminStorePayoutsPage() {
     try {
       setError("");
       setLoading(true);
-      const { data, error: nextError } = await supabase.from(TABLE).select("*").order("created_at", { ascending: false }).limit(500);
-      if (nextError) throw nextError;
-      setRows(data || []);
+      const payload = await adminFetch("/api/admin/store-payouts", { method: "GET" });
+      setRows(Array.isArray(payload?.rows) ? payload.rows : []);
     } catch (err: any) {
       setRows([]);
       setError(String(err?.message || "Unable to load store payouts."));
@@ -47,9 +67,13 @@ export default function AdminStorePayoutsPage() {
 
   async function updateStatus(row: any, status: string) {
     try {
-      setBusyId(String(row?.id || ""));
-      const { error: nextError } = await supabase.from(TABLE).update({ status }).eq("id", row.id);
-      if (nextError) throw nextError;
+      const id = String(row?.id || "");
+      if (!id) throw new Error("Missing payout request id.");
+      setBusyId(id);
+      await adminFetch("/api/admin/store-payouts", {
+        method: "POST",
+        body: JSON.stringify({ id, status }),
+      });
       await load();
     } catch (err: any) {
       setError(String(err?.message || "Unable to update payout status."));
@@ -69,7 +93,7 @@ export default function AdminStorePayoutsPage() {
 
       <div style={card}>
         {loading ? (
-          <div style={sub}>Loading…</div>
+          <div style={sub}>Loading...</div>
         ) : rows.length === 0 ? (
           <div style={sub}>No store payout requests found.</div>
         ) : (
@@ -84,9 +108,11 @@ export default function AdminStorePayoutsPage() {
               </thead>
               <tbody>
                 {rows.map((row) => {
+                  const rowId = String(row?.id || "");
                   const statusTone = tone(String(row?.status || ""));
+                  const orders = pickOrders(row);
                   return (
-                    <tr key={String(row.id)}>
+                    <tr key={rowId}>
                       <td style={td}>{String(row?.owner_user_id || "").slice(0, 8)}</td>
                       <td style={td}>{row?.owner_role || "-"}</td>
                       <td style={td}>{String(row?.store_id || "").slice(0, 8) || "-"}</td>
@@ -96,13 +122,13 @@ export default function AdminStorePayoutsPage() {
                         <div style={subRow}>Tax ${Number(row?.tax_amount || row?.settlement_snapshot?.tax_amount || 0).toFixed(2)}</div>
                       </td>
                       <td style={td}>
-                        {pickOrders(row).length ? (
+                        {orders.length ? (
                           <div style={{ display: "grid", gap: 6 }}>
-                            <div style={{ fontWeight: 900 }}>{pickOrders(row).length} orders</div>
-                            {pickOrders(row).slice(0, 6).map((order: any) => (
+                            <div style={{ fontWeight: 900 }}>{orders.length} orders</div>
+                            {orders.slice(0, 6).map((order: any) => (
                               <div key={String(order?.order_id)} style={orderLine}>
-                                <div>#{String(order?.order_id || "").slice(0, 8)} • {order?.customer_name || "Customer"}</div>
-                                <div>Sales ${Number(order?.item_subtotal || 0).toFixed(2)} • Tax ${Number(order?.tax_amount || 0).toFixed(2)}</div>
+                                <div>#{String(order?.order_id || "").slice(0, 8)} - {order?.customer_name || "Customer"}</div>
+                                <div>Sales ${Number(order?.item_subtotal || 0).toFixed(2)} - Tax ${Number(order?.tax_amount || 0).toFixed(2)}</div>
                               </div>
                             ))}
                           </div>
@@ -118,9 +144,9 @@ export default function AdminStorePayoutsPage() {
                       </td>
                       <td style={td}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button style={btn} disabled={busyId === row.id} onClick={() => updateStatus(row, "processing")}>Processing</button>
-                          <button style={btn} disabled={busyId === row.id} onClick={() => updateStatus(row, "paid")}>Paid</button>
-                          <button style={btn} disabled={busyId === row.id} onClick={() => updateStatus(row, "failed")}>Failed</button>
+                          <button style={btn} disabled={busyId === rowId} onClick={() => updateStatus(row, "processing")}>Processing</button>
+                          <button style={btn} disabled={busyId === rowId} onClick={() => updateStatus(row, "paid")}>Paid</button>
+                          <button style={btn} disabled={busyId === rowId} onClick={() => updateStatus(row, "failed")}>Failed</button>
                         </div>
                       </td>
                     </tr>

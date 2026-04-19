@@ -1,16 +1,37 @@
 "use client";
 
-import React from "react";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import supabase from "@/lib/supabase";
-
-const TABLE = "owner_payout_bank_accounts";
 
 function tone(status: string) {
   const next = String(status || "pending_verification").toLowerCase();
   if (next === "approved") return { bg: "#dcfce7", color: "#166534" };
   if (next === "rejected") return { bg: "#fee2e2", color: "#b91c1c" };
   return { bg: "#fef3c7", color: "#92400e" };
+}
+
+async function adminFetch(path: string, init?: RequestInit) {
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
+
+  const token = String(session?.access_token || "").trim();
+  if (!token) throw new Error("Admin session expired. Please sign in again.");
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    ...(init?.headers || {}),
+  };
+
+  const response = await fetch(path, { ...init, headers });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(String(payload?.error || payload?.message || `Request failed (${response.status}).`));
+  }
+  return payload;
 }
 
 export default function AdminStoreBankAccountsPage() {
@@ -23,9 +44,8 @@ export default function AdminStoreBankAccountsPage() {
     try {
       setError("");
       setLoading(true);
-      const { data, error: nextError } = await supabase.from(TABLE).select("*").order("updated_at", { ascending: false }).limit(500);
-      if (nextError) throw nextError;
-      setRows(data || []);
+      const payload = await adminFetch("/api/admin/store-bank-accounts", { method: "GET" });
+      setRows(Array.isArray(payload?.rows) ? payload.rows : []);
     } catch (err: any) {
       setRows([]);
       setError(String(err?.message || "Unable to load store bank accounts."));
@@ -38,13 +58,15 @@ export default function AdminStoreBankAccountsPage() {
     void load();
   }, []);
 
-  const grouped = useMemo(() => rows, [rows]);
-
   async function updateStatus(row: any, status: string) {
     try {
-      setBusyId(String(row?.id || ""));
-      const { error: nextError } = await supabase.from(TABLE).update({ status }).eq("id", row.id);
-      if (nextError) throw nextError;
+      const id = String(row?.id || "");
+      if (!id) throw new Error("Missing bank account id.");
+      setBusyId(id);
+      await adminFetch("/api/admin/store-bank-accounts", {
+        method: "POST",
+        body: JSON.stringify({ id, status }),
+      });
       await load();
     } catch (err: any) {
       setError(String(err?.message || "Unable to update bank status."));
@@ -64,8 +86,8 @@ export default function AdminStoreBankAccountsPage() {
 
       <div style={card}>
         {loading ? (
-          <div style={sub}>Loading…</div>
-        ) : grouped.length === 0 ? (
+          <div style={sub}>Loading...</div>
+        ) : rows.length === 0 ? (
           <div style={sub}>No bank account records found.</div>
         ) : (
           <div style={tableWrap}>
@@ -78,10 +100,11 @@ export default function AdminStoreBankAccountsPage() {
                 </tr>
               </thead>
               <tbody>
-                {grouped.map((row) => {
+                {rows.map((row) => {
+                  const rowId = String(row?.id || "");
                   const statusTone = tone(String(row?.status || ""));
                   return (
-                    <tr key={String(row.id)}>
+                    <tr key={rowId}>
                       <td style={td}>{String(row?.owner_user_id || "").slice(0, 8)}</td>
                       <td style={td}>{row?.owner_role || "-"}</td>
                       <td style={td}>{row?.bank_name || "-"}</td>
@@ -95,8 +118,8 @@ export default function AdminStoreBankAccountsPage() {
                       </td>
                       <td style={td}>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button style={btn} disabled={busyId === row.id} onClick={() => updateStatus(row, "approved")}>Approve</button>
-                          <button style={btn} disabled={busyId === row.id} onClick={() => updateStatus(row, "rejected")}>Reject</button>
+                          <button style={btn} disabled={busyId === rowId} onClick={() => updateStatus(row, "approved")}>Approve</button>
+                          <button style={btn} disabled={busyId === rowId} onClick={() => updateStatus(row, "rejected")}>Reject</button>
                         </div>
                       </td>
                     </tr>

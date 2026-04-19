@@ -41,10 +41,18 @@ function clampText(s: any, max = 28) {
 
 function ownerRejectReason(row: AnyRow | null | undefined) {
   return String(
-    row?.reject_reason ||
+    row?.owner_reject_reason ||
+      row?.owner_rejection_reason ||
+      row?.reject_reason ||
       row?.rejection_reason ||
       row?.cancel_reason ||
-      row?.owner_reject_reason ||
+      row?.cancelled_reason ||
+      row?.cancellation_reason ||
+      row?.rejected_reason ||
+      row?.reject_note ||
+      row?.rejection_note ||
+      row?.status_note ||
+      row?.status_notes ||
       ""
   ).trim();
 }
@@ -994,13 +1002,13 @@ export default function AdminOrdersPage() {
               </div>
             </div>
 
-            {ownerRejectReason(selected) ? (
+            {normalizeStatus(selected?.status) === "cancelled" || ownerRejectReason(selected) ? (
               <div style={{ ...styles.card, marginTop: 12, background: "rgba(255, 0, 90, 0.06)", border: "1px solid rgba(255, 0, 90, 0.20)" }}>
                 <div style={{ fontSize: 13, fontWeight: 950, color: "#9f1239", textTransform: "uppercase", letterSpacing: 0.3 }}>
                   Owner Rejection Reason
                 </div>
                 <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.6, fontWeight: 700, color: styles.pageText }}>
-                  {ownerRejectReason(selected)}
+                  {ownerRejectReason(selected) || "No rejection reason was saved for this order."}
                 </div>
               </div>
             ) : null}

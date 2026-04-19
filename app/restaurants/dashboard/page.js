@@ -354,7 +354,7 @@ function buildCSV(rows) {
     "customer_name",
     "customer_phone",
     "customer_address",
-    "total",
+    "owner_earnings",
     "items",
   ];
   const lines = [header.join(",")];
@@ -368,7 +368,7 @@ function buildCSV(rows) {
         esc(r.customer_name),
         esc(r.customer_phone),
         esc(r.customer_address),
-        esc(r.total),
+        esc(r.owner_earnings),
         esc(r.items_text),
       ].join(",")
     );
@@ -436,6 +436,7 @@ export default function RestaurantOwnerDashboard() {
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
   const [ownerEmail, setOwnerEmail] = useState("");
+  const [ownerUserId, setOwnerUserId] = useState("");
   const [role, setRole] = useState("");
   const [restaurantName, setRestaurantName] = useState("");
   const [restaurantId, setRestaurantId] = useState("");
@@ -661,6 +662,7 @@ export default function RestaurantOwnerDashboard() {
     }
 
     setOwnerEmail(session.user.email || "");
+    setOwnerUserId(session.user.id || "");
 
     // âœ… role
     const prof = await fetchProfileRoleSafe(session.user.id);
@@ -856,38 +858,151 @@ export default function RestaurantOwnerDashboard() {
   }
 
   async function updateStatus(orderId, newStatus) {
-    setErr("");
-    const { error } = await supabase.from("orders").update({ status: newStatus }).eq("id", orderId);
-    if (error) {
-      setErr(error.message);
-      return;
+    if (!orderId) return;
+    const normalizedStatus = String(newStatus || "").trim().toLowerCase();
+    if (!normalizedStatus) return;
+
+    let rejectReason = "";
+    if (normalizedStatus === "rejected") {
+      rejectReason = String(window.prompt("Please enter reject reason for this order:") || "").trim();
+      if (!rejectReason) {
+        setErr("Reject reason is required.");
+        return;
+      }
     }
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
 
-    notifyCustomerOrderStatus(orderId, newStatus);
+    setErr("");
+    setInfo("");
 
-    if (String(newStatus || "").toLowerCase() === "ready") {
-      notifyDriversOrderReady(orderId);
+    try {
+      const result = await applyOwnerOrderStatusUpdate(orderId, normalizedStatus, rejectReason);
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: result.status } : o)));
+
+      await notifyCustomerOrderStatus(orderId, result.status);
+
+      if (result.status === "ready" && (result.usedFallback || result.driverNotificationSent === false)) {
+        await notifyDriversOrderReady(orderId);
+      }
+    } catch (e) {
+      setErr(e?.message || String(e));
     }
   }
 
   async function bulkUpdateStatus(ids, newStatus) {
     if (!ids || ids.length === 0) return;
-    setErr("");
-    try {
-      const { error } = await supabase.from("orders").update({ status: newStatus }).in("id", ids);
-      if (error) throw error;
-      setOrders((prev) => prev.map((o) => (ids.includes(o.id) ? { ...o, status: newStatus } : o)));
+    const normalizedStatus = String(newStatus || "").trim().toLowerCase();
+    if (!normalizedStatus) return;
 
-      ids.forEach((id) => notifyCustomerOrderStatus(id, newStatus));
-
-      if (String(newStatus || "").toLowerCase() === "ready") {
-        ids.forEach((id) => notifyDriversOrderReady(id));
+    let rejectReason = "";
+    if (normalizedStatus === "rejected") {
+      rejectReason = String(window.prompt("Please enter reject reason for selected orders:") || "").trim();
+      if (!rejectReason) {
+        setErr("Reject reason is required.");
+        return;
       }
-      setInfo(`Bulk updated ${ids.length} orders -> ${newStatus}`);
-    } catch (e) {
-      setErr(e?.message || String(e));
     }
+
+    setErr("");
+    setInfo("");
+
+    const updated = [];
+    const failures = [];
+
+    for (const id of ids) {
+      try {
+        const result = await applyOwnerOrderStatusUpdate(id, normalizedStatus, rejectReason);
+        updated.push({ id, result });
+        await notifyCustomerOrderStatus(id, result.status);
+        if (result.status === "ready" && (result.usedFallback || result.driverNotificationSent === false)) {
+          await notifyDriversOrderReady(id);
+        }
+      } catch (e) {
+        failures.push({ id, message: e?.message || String(e) });
+      }
+    }
+
+    if (updated.length > 0) {
+      const statusById = new Map(updated.map((x) => [x.id, x.result.status]));
+      setOrders((prev) => prev.map((o) => (statusById.has(o.id) ? { ...o, status: statusById.get(o.id) } : o)));
+      setInfo(`Bulk updated ${updated.length} orders -> ${normalizedStatus}`);
+    }
+
+    if (failures.length > 0) {
+      setErr(`Failed to update ${failures.length} orders. First error: ${failures[0].message}`);
+    }
+  }
+
+  async function updateOrderStatusViaApi(orderId, newStatus, rejectReason) {
+    if (!orderId || !restaurantId || !ownerUserId || !newStatus) {
+      return { ok: false, message: "Missing owner/store context.", status: newStatus, driverNotificationSent: null };
+    }
+
+    try {
+      const res = await fetch("/api/owner/order-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          storeId: restaurantId,
+          ownerUserId,
+          orderType: "restaurant",
+          status: newStatus,
+          rejectReason: rejectReason || undefined,
+        }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload?.success) {
+        return {
+          ok: false,
+          message: String(payload?.message || `Status update failed (${res.status})`),
+          status: newStatus,
+          driverNotificationSent: null,
+        };
+      }
+
+      const status = String(payload?.status || newStatus).trim().toLowerCase();
+      const driverNotificationSent =
+        payload?.driverNotificationSent === true ? true : payload?.driverNotificationSent === false ? false : null;
+      return { ok: true, message: "", status, driverNotificationSent };
+    } catch (e) {
+      return { ok: false, message: e?.message || String(e), status: newStatus, driverNotificationSent: null };
+    }
+  }
+
+  async function updateOrderStatusDirect(orderId, newStatus, rejectReason) {
+    const patch = { status: newStatus };
+    if (newStatus === "rejected" && rejectReason) {
+      patch.reject_reason = rejectReason;
+      patch.rejection_reason = rejectReason;
+      patch.cancel_reason = rejectReason;
+      patch.owner_reject_reason = rejectReason;
+    }
+
+    const { error } = await supabase.from("orders").update(patch).eq("id", orderId);
+    if (error) throw error;
+    return { status: newStatus };
+  }
+
+  async function applyOwnerOrderStatusUpdate(orderId, newStatus, rejectReason = "") {
+    const nextStatus = String(newStatus || "").trim().toLowerCase();
+    if (!nextStatus) throw new Error("Invalid status.");
+
+    const apiResult = await updateOrderStatusViaApi(orderId, nextStatus, rejectReason);
+    if (apiResult.ok) {
+      return {
+        status: apiResult.status || nextStatus,
+        usedFallback: false,
+        driverNotificationSent: apiResult.driverNotificationSent,
+      };
+    }
+
+    const fallback = await updateOrderStatusDirect(orderId, nextStatus, rejectReason);
+    return {
+      status: String(fallback.status || nextStatus).trim().toLowerCase(),
+      usedFallback: true,
+      driverNotificationSent: null,
+    };
   }
 
   async function toggleAccepting(next) {
@@ -1017,12 +1132,6 @@ export default function RestaurantOwnerDashboard() {
       const createdMs = created ? new Date(created).getTime() : null;
 
       const items = o.items || [];
-      const calcTotal = items.reduce((sum, it) => {
-        const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-        const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-        return sum + price * qty;
-      }, 0);
-
       const amt = ownerOrderEarnings(o);
 
       if (createdMs && createdMs >= todayStart) {
@@ -1137,23 +1246,8 @@ export default function RestaurantOwnerDashboard() {
       const aTime = new Date(a.created_at || a.createdAt || a.created || 0).getTime() || 0;
       const bTime = new Date(b.created_at || b.createdAt || b.created || 0).getTime() || 0;
 
-      const aItems = a.items || [];
-      const bItems = b.items || [];
-
-      const aCalc = aItems.reduce((sum, it) => {
-        const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-        const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-        return sum + price * qty;
-      }, 0);
-
-      const bCalc = bItems.reduce((sum, it) => {
-        const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-        const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-        return sum + price * qty;
-      }, 0);
-
-      const aAmt = safeNumber(pick(a, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], aCalc), 0);
-      const bAmt = safeNumber(pick(b, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], bCalc), 0);
+      const aAmt = ownerOrderEarnings(a);
+      const bAmt = ownerOrderEarnings(b);
 
       if (sortBy === "newest") return bTime - aTime;
       if (sortBy === "oldest") return aTime - bTime;
@@ -1190,13 +1284,7 @@ export default function RestaurantOwnerDashboard() {
         .filter(Boolean)
         .join(" | ");
 
-      const calcTotal = items.reduce((sum, it) => {
-        const price = safeNumber(pick(it, ["price", "item_price", "unit_price"], 0), 0);
-        const qty = safeNumber(pick(it, ["qty", "quantity"], 0), 0);
-        return sum + price * qty;
-      }, 0);
-
-      const total = safeNumber(pick(o, ["total", "total_amount", "total_price", "amount", "grand_total", "payable_total"], calcTotal), 0);
+      const ownerEarnings = ownerOrderEarnings(o);
 
       return {
         id: o.id || "",
@@ -1206,7 +1294,7 @@ export default function RestaurantOwnerDashboard() {
         customer_name: pick(o, ["customer_name", "name", "full_name"], ""),
         customer_phone: pick(o, ["customer_phone", "phone", "mobile", "customer_mobile"], ""),
         customer_address: pick(o, ["customer_address", "address", "delivery_address"], ""),
-        total,
+        owner_earnings: ownerEarnings,
         items_text: itemsText,
       };
     });

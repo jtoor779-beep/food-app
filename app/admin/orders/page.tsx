@@ -896,24 +896,6 @@ export default function AdminOrdersPage() {
                   <div>
                     <b>Payment:</b> {String(selected?.payment_method || selected?.payment_status || "Unknown")}
                   </div>
-                  {ownerRejectReason(selected) ? (
-                    <div
-                      style={{
-                        marginTop: 10,
-                        padding: "12px 14px",
-                        borderRadius: 14,
-                        background: "rgba(255, 0, 90, 0.08)",
-                        border: "1px solid rgba(255, 0, 90, 0.18)",
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 950, color: "#9f1239", textTransform: "uppercase", letterSpacing: 0.3 }}>
-                        Owner rejection note
-                      </div>
-                      <div style={{ marginTop: 6, fontSize: 14, fontWeight: 700, color: styles.pageText }}>
-                        {ownerRejectReason(selected)}
-                      </div>
-                    </div>
-                  ) : null}
                   <div>
                     <b>Address:</b>{" "}
                     {String(
@@ -1011,6 +993,17 @@ export default function AdminOrdersPage() {
                 )}
               </div>
             </div>
+
+            {ownerRejectReason(selected) ? (
+              <div style={{ ...styles.card, marginTop: 12, background: "rgba(255, 0, 90, 0.06)", border: "1px solid rgba(255, 0, 90, 0.20)" }}>
+                <div style={{ fontSize: 13, fontWeight: 950, color: "#9f1239", textTransform: "uppercase", letterSpacing: 0.3 }}>
+                  Owner Rejection Reason
+                </div>
+                <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.6, fontWeight: 700, color: styles.pageText }}>
+                  {ownerRejectReason(selected)}
+                </div>
+              </div>
+            ) : null}
 
             <div style={{ ...styles.card, marginTop: 12, background: "rgba(15, 23, 42, 0.03)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

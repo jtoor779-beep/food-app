@@ -494,18 +494,26 @@ async function enrichCustomersFromProfiles(orders) {
 /**
  * Update status safely with detected table.
  */
-async function updateOrderStatusAuto({ table, orderId, nextStatus }) {
+async function updateOrderStatusAuto({ table, orderId, nextStatus, rejectReason = "" }) {
   if (!table) throw new Error("Orders table not detected yet.");
+
+  const patch = { status: nextStatus };
+  if (normalizeRole(nextStatus) === "rejected" && rejectReason) {
+    patch.reject_reason = rejectReason;
+    patch.rejection_reason = rejectReason;
+    patch.cancel_reason = rejectReason;
+    patch.owner_reject_reason = rejectReason;
+  }
 
   // First try: update by id
   {
-    const { error } = await supabase.from(table).update({ status: nextStatus }).eq("id", orderId);
+    const { error } = await supabase.from(table).update(patch).eq("id", orderId);
     if (!error) return true;
   }
 
   // Second try: update by order_id
   {
-    const { error } = await supabase.from(table).update({ status: nextStatus }).eq("order_id", orderId);
+    const { error } = await supabase.from(table).update(patch).eq("order_id", orderId);
     if (error) throw error;
     return true;
   }
@@ -969,6 +977,18 @@ export default function GroceryOwnerOrdersPage() {
 
   async function updateOrderStatus(orderId, nextStatus) {
     if (!orderId) return;
+    const normalizedStatus = normalizeRole(nextStatus || "");
+    if (!normalizedStatus) return;
+
+    let rejectReason = "";
+    if (normalizedStatus === "rejected") {
+      rejectReason = String(window.prompt("Please enter reject reason for this order:") || "").trim();
+      if (!rejectReason) {
+        setErrMsg("Reject reason is required.");
+        return;
+      }
+    }
+
     setBusy(true);
     setErrMsg("");
     setInfoMsg("");
@@ -976,15 +996,11 @@ export default function GroceryOwnerOrdersPage() {
     try {
       if (!ordersSource.table) throw new Error("Orders table not detected yet. Click Refresh once.");
 
-      await updateOrderStatusAuto({
-        table: ordersSource.table,
-        orderId,
-        nextStatus,
-      });
+      const result = await applyOwnerOrderStatusUpdate(orderId, normalizedStatus, rejectReason);
 
       setInfoMsg("Status updated");
-      await notifyCustomerOrderStatus(orderId, nextStatus);
-      if (normalizeRole(nextStatus) === "ready") {
+      await notifyCustomerOrderStatus(orderId, result.status);
+      if (result.status === "ready" && (result.usedFallback || result.driverNotificationSent === false)) {
         await notifyDriversOrderReady(orderId);
       }
 
@@ -994,6 +1010,70 @@ export default function GroceryOwnerOrdersPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function updateOrderStatusViaApi(orderId, nextStatus, rejectReason) {
+    if (!orderId || !storeId || !userId || !nextStatus) {
+      return { ok: false, message: "Missing owner/store context.", status: nextStatus, driverNotificationSent: null };
+    }
+
+    try {
+      const res = await fetch("/api/owner/order-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          storeId,
+          ownerUserId: userId,
+          orderType: "grocery",
+          status: nextStatus,
+          rejectReason: rejectReason || undefined,
+        }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload?.success) {
+        return {
+          ok: false,
+          message: String(payload?.message || `Status update failed (${res.status})`),
+          status: nextStatus,
+          driverNotificationSent: null,
+        };
+      }
+
+      const status = normalizeRole(payload?.status || nextStatus);
+      const driverNotificationSent =
+        payload?.driverNotificationSent === true ? true : payload?.driverNotificationSent === false ? false : null;
+      return { ok: true, message: "", status, driverNotificationSent };
+    } catch (e) {
+      return { ok: false, message: e?.message || String(e), status: nextStatus, driverNotificationSent: null };
+    }
+  }
+
+  async function applyOwnerOrderStatusUpdate(orderId, nextStatus, rejectReason = "") {
+    const normalizedStatus = normalizeRole(nextStatus || "");
+    if (!normalizedStatus) throw new Error("Invalid status.");
+
+    const apiResult = await updateOrderStatusViaApi(orderId, normalizedStatus, rejectReason);
+    if (apiResult.ok) {
+      return {
+        status: normalizeRole(apiResult.status || normalizedStatus),
+        usedFallback: false,
+        driverNotificationSent: apiResult.driverNotificationSent,
+      };
+    }
+
+    await updateOrderStatusAuto({
+      table: ordersSource.table,
+      orderId,
+      nextStatus: normalizedStatus,
+      rejectReason,
+    });
+    return {
+      status: normalizedStatus,
+      usedFallback: true,
+      driverNotificationSent: null,
+    };
   }
 
   useEffect(() => {

@@ -339,6 +339,18 @@ function ownerRejectReason(ctx: any) {
   ).trim();
 }
 
+function buildManagerAppBridgeUrl(origin: string, input?: { screen?: string; fallback?: string }) {
+  const safeOrigin = String(origin || "").trim().replace(/\/$/, "");
+  if (!safeOrigin) return "";
+  const screen = String(input?.screen || "orders").trim().replace(/^\/+/, "");
+  const fallback = String(input?.fallback || "").trim();
+  const params = new URLSearchParams();
+  if (screen) params.set("screen", screen);
+  if (fallback) params.set("fallback", fallback);
+  const query = params.toString();
+  return `${safeOrigin}/manager-app${query ? `?${query}` : ""}`;
+}
+
 function ownerInvoiceBreakdown(ctx: any): OwnerInvoiceBreakdown {
   const items = Array.isArray(ctx?.items) ? ctx.items : [];
   const itemSubtotal = items.reduce((sum: number, item: EmailItem) => sum + toNumber(item?.lineTotal, 0), 0);
@@ -820,11 +832,15 @@ export async function POST(req: Request) {
     const reqUrl = new URL(req.url);
     const origin = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || reqUrl.origin).replace(/\/$/, "");
     ctx.items = await inlineEmailItems(Array.isArray(ctx.items) ? ctx.items : [], origin);
+    const ownerWebOrdersUrl = `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`;
     const payload = buildEmailPayload(eventType, ctx, {
       origin,
       logoUrl: `${origin}/logo.png`,
       ordersUrl: `${origin}/${orderType === "grocery" ? "groceries/orders" : "orders"}`,
-      ownerOrdersUrl: `${origin}/${orderType === "grocery" ? "groceries/owner/orders" : "restaurants/orders"}`,
+      ownerOrdersUrl: buildManagerAppBridgeUrl(origin, {
+        screen: "orders",
+        fallback: ownerWebOrdersUrl,
+      }),
     });
     const attachments =
       eventType === "owner_new_order_received" || eventType === "owner_order_confirmed" || eventType === "owner_order_rejected"

@@ -400,6 +400,7 @@ export default function RestaurantOrdersPage() {
   const [info, setInfo] = useState("");
 
   const [ownerEmail, setOwnerEmail] = useState("");
+  const [ownerUserId, setOwnerUserId] = useState("");
   const [role, setRole] = useState("");
 
   // âœ… Multi-restaurant support
@@ -561,6 +562,7 @@ export default function RestaurantOrdersPage() {
     }
 
     setOwnerEmail(session.user.email || "");
+    setOwnerUserId(session.user.id || "");
 
     // role
     const { data: prof, error: pErr } = await supabase
@@ -847,24 +849,109 @@ export default function RestaurantOrdersPage() {
   }
 
   async function updateStatus(orderId, newStatus) {
+    if (!orderId) return;
+    const normalizedStatus = String(newStatus || "").trim().toLowerCase();
+    if (!normalizedStatus) return;
+
+    let rejectReason = "";
+    if (normalizedStatus === "rejected") {
+      rejectReason = String(window.prompt("Please enter reject reason for this order:") || "").trim();
+      if (!rejectReason) {
+        setErr("Reject reason is required.");
+        return;
+      }
+    }
+
     setErr("");
     setInfo("");
 
-    const { error } = await supabase.from("orders").update({ status: newStatus }).eq("id", orderId);
-    if (error) {
-      setErr(error.message);
-      return;
+    try {
+      const result = await applyOwnerOrderStatusUpdate(orderId, normalizedStatus, rejectReason);
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: result.status } : o)));
+
+      await notifyCustomerOrderStatus(orderId, result.status);
+
+      if (result.status === "ready" && (result.usedFallback || result.driverNotificationSent === false)) {
+        await notifyDriversOrderReady(orderId);
+      }
+      setInfo(`Status updated to "${result.status}"`);
+      setTimeout(() => setInfo(""), 1800);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    }
+  }
+
+  async function updateOrderStatusViaApi(orderId, newStatus, rejectReason) {
+    if (!orderId || !restaurantId || !ownerUserId || !newStatus) {
+      return { ok: false, message: "Missing owner/store context.", status: newStatus, driverNotificationSent: null };
     }
 
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o)));
+    try {
+      const res = await fetch("/api/owner/order-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId,
+          storeId: restaurantId,
+          ownerUserId,
+          orderType: "restaurant",
+          status: newStatus,
+          rejectReason: rejectReason || undefined,
+        }),
+      });
 
-    await notifyCustomerOrderStatus(orderId, newStatus);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload?.success) {
+        return {
+          ok: false,
+          message: String(payload?.message || `Status update failed (${res.status})`),
+          status: newStatus,
+          driverNotificationSent: null,
+        };
+      }
 
-    if (String(newStatus || "").toLowerCase() === "ready") {
-      await notifyDriversOrderReady(orderId);
+      const status = String(payload?.status || newStatus).trim().toLowerCase();
+      const driverNotificationSent =
+        payload?.driverNotificationSent === true ? true : payload?.driverNotificationSent === false ? false : null;
+      return { ok: true, message: "", status, driverNotificationSent };
+    } catch (e) {
+      return { ok: false, message: e?.message || String(e), status: newStatus, driverNotificationSent: null };
     }
-    setInfo(`Status updated to "${newStatus}"`);
-    setTimeout(() => setInfo(""), 1800);
+  }
+
+  async function updateOrderStatusDirect(orderId, newStatus, rejectReason) {
+    const patch = { status: newStatus };
+    if (newStatus === "rejected" && rejectReason) {
+      patch.reject_reason = rejectReason;
+      patch.rejection_reason = rejectReason;
+      patch.cancel_reason = rejectReason;
+      patch.owner_reject_reason = rejectReason;
+    }
+
+    const { error } = await supabase.from("orders").update(patch).eq("id", orderId);
+    if (error) throw error;
+    return { status: newStatus };
+  }
+
+  async function applyOwnerOrderStatusUpdate(orderId, newStatus, rejectReason = "") {
+    const nextStatus = String(newStatus || "").trim().toLowerCase();
+    if (!nextStatus) throw new Error("Invalid status.");
+
+    const apiResult = await updateOrderStatusViaApi(orderId, nextStatus, rejectReason);
+    if (apiResult.ok) {
+      return {
+        status: apiResult.status || nextStatus,
+        usedFallback: false,
+        driverNotificationSent: apiResult.driverNotificationSent,
+      };
+    }
+
+    const fallback = await updateOrderStatusDirect(orderId, nextStatus, rejectReason);
+    return {
+      status: String(fallback.status || nextStatus).trim().toLowerCase(),
+      usedFallback: true,
+      driverNotificationSent: null,
+    };
   }
 
   const totals = useMemo(() => {

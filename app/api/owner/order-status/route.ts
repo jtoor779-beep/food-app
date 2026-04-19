@@ -53,12 +53,18 @@ async function updateWithFallback(table: string, orderId: string, storeKey: stri
 
   let lastError: any = null;
   for (const variant of variants) {
-    const { error } = await supabaseAdmin!
+    const { data, error } = await supabaseAdmin!
       .from(table)
       .update(variant)
       .eq("id", orderId)
-      .eq(storeKey, storeId);
-    if (!error) return true;
+      .eq(storeKey, storeId)
+      .select("id, status")
+      .maybeSingle();
+    if (!error && data?.id) return data;
+    if (!error && !data?.id) {
+      lastError = new Error("Order row was not updated.");
+      continue;
+    }
     lastError = error;
   }
 
@@ -126,10 +132,10 @@ export async function POST(req: Request) {
       });
     }
 
-    await updateWithFallback(table, orderId, storeKey, storeId, patch);
+    const updated = await updateWithFallback(table, orderId, storeKey, storeId, patch);
 
     if (nextStatus === "accepted") {
-      await sendJson(req, "/api/send-order-email", {
+      void sendJson(req, "/api/send-order-email", {
         eventType: "owner_order_confirmed",
         orderType,
         orderId,
@@ -137,7 +143,7 @@ export async function POST(req: Request) {
     }
 
     if (nextStatus === "rejected") {
-      await sendJson(req, "/api/send-order-email", {
+      void sendJson(req, "/api/send-order-email", {
         eventType: "owner_order_rejected",
         orderType,
         orderId,
@@ -145,13 +151,13 @@ export async function POST(req: Request) {
     }
 
     if (nextStatus === "ready") {
-      await sendJson(req, "/api/send-driver-notification", {
+      void sendJson(req, "/api/send-driver-notification", {
         orderId,
         restaurantName: clean(storeRow.name) || "Store",
       });
     }
 
-    return NextResponse.json({ success: true, status: nextStatus });
+    return NextResponse.json({ success: true, status: clean(updated?.status) || nextStatus });
   } catch (error: any) {
     return NextResponse.json(
       { success: false, message: error?.message || "Unable to update owner order status." },

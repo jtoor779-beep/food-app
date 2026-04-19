@@ -593,46 +593,140 @@ function buildEmailPayload(
   };
 }
 
+function truncatePdfLabel(value: any, max = 42) {
+  const text = String(value ?? "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
 function buildInvoicePdfAttachment(ctx: any) {
   const ownerBreakdown = ownerInvoiceBreakdown(ctx);
-  const lines = [
-    "HomyFod Invoice",
-    "",
-    `Order ID: #${shortId(ctx.orderId)}`,
-    `Type: ${ctx.label === "grocery order" ? "Grocery Order" : "Restaurant Order"}`,
-    `Store: ${ctx.venueName || "-"}`,
-    `Customer: ${ctx.customerName || "-"}`,
-    `Items subtotal: ${formatMoney(ownerBreakdown.subtotal)}`,
-    `Tax: ${formatMoney(ownerBreakdown.tax)}`,
-    `Owner earnings: ${formatMoney(ownerBreakdown.earnings)}`,
-    "",
-    "Items:",
-    ...((ctx.items || []).map((item: EmailItem) =>
-      `${item.name} | Qty ${item.qty} | ${formatMoney(item.unitPrice)} | ${formatMoney(item.lineTotal)}`
-    )),
-  ];
+  const items: EmailItem[] = Array.isArray(ctx?.items) ? ctx.items.slice(0, 8) : [];
+  const extraItemCount = Array.isArray(ctx?.items) && ctx.items.length > items.length ? ctx.items.length - items.length : 0;
+  const venueLabel = ctx.label === "grocery order" ? "Grocery store" : "Restaurant";
+  const typeLabel = ctx.label === "grocery order" ? "Grocery Order" : "Restaurant Order";
+  const issueDate = formatDeliveredAt(ctx?.updated_at || ctx?.created_at || new Date().toISOString());
+  const customer = truncatePdfLabel(ctx?.customerName || "-", 30);
+  const venueName = truncatePdfLabel(ctx?.venueName || "-", 30);
 
-  const textCommands = lines
-    .map((line, index) => `1 0 0 1 48 ${760 - index * 22} Tm (${escapePdfText(line)}) Tj`)
-    .join("\n");
-  const stream = `BT\n/F1 20 Tf\n${textCommands}\nET`;
-  const length = stream.length;
+  const commands: string[] = [];
+  const push = (value: string) => commands.push(value);
+  const rect = (x: number, y: number, w: number, h: number, fill: [number, number, number], stroke?: [number, number, number]) => {
+    push(`${fill[0]} ${fill[1]} ${fill[2]} rg`);
+    if (stroke) {
+      push(`${stroke[0]} ${stroke[1]} ${stroke[2]} RG`);
+      push(`${x} ${y} ${w} ${h} re B`);
+      return;
+    }
+    push(`${x} ${y} ${w} ${h} re f`);
+  };
+  const text = (
+    x: number,
+    y: number,
+    value: string,
+    opts?: { size?: number; font?: "F1" | "F2"; color?: [number, number, number] }
+  ) => {
+    const size = opts?.size ?? 11;
+    const font = opts?.font ?? "F1";
+    const color = opts?.color ?? [0.07, 0.09, 0.13];
+    push(`BT /${font} ${size} Tf ${color[0]} ${color[1]} ${color[2]} rg 1 0 0 1 ${x} ${y} Tm (${escapePdfText(value)}) Tj ET`);
+  };
+  const line = (x1: number, y1: number, x2: number, y2: number, color: [number, number, number], width = 1) => {
+    push(`${width} w`);
+    push(`${color[0]} ${color[1]} ${color[2]} RG`);
+    push(`${x1} ${y1} m ${x2} ${y2} l S`);
+  };
+
+  rect(0, 0, 612, 792, [1, 1, 1]);
+  rect(36, 712, 540, 56, [0.97, 0.45, 0.09]);
+  text(52, 744, "HomyFod Invoice", { size: 24, font: "F2", color: [1, 1, 1] });
+  text(52, 724, "Owner earnings copy", { size: 11, font: "F1", color: [1, 0.96, 0.92] });
+  text(430, 744, `#${shortId(ctx.orderId)}`, { size: 18, font: "F2", color: [1, 1, 1] });
+  text(432, 724, issueDate, { size: 10, font: "F1", color: [1, 0.96, 0.92] });
+
+  rect(36, 628, 256, 64, [1, 0.98, 0.95], [0.98, 0.87, 0.76]);
+  rect(306, 628, 270, 64, [0.98, 0.99, 1], [0.84, 0.9, 0.98]);
+  text(52, 674, "Order summary", { size: 12, font: "F2", color: [0.07, 0.09, 0.13] });
+  text(52, 654, `Type: ${typeLabel}`, { size: 11 });
+  text(52, 638, `${venueLabel}: ${venueName}`, { size: 11 });
+  text(322, 674, "Owner payout view", { size: 12, font: "F2", color: [0.07, 0.09, 0.13] });
+  text(322, 654, `Items subtotal: ${formatMoney(ownerBreakdown.subtotal)}`, { size: 11 });
+  text(322, 638, `Tax: ${formatMoney(ownerBreakdown.tax)}   Total owner amount: ${formatMoney(ownerBreakdown.earnings)}`, { size: 11 });
+
+  rect(36, 544, 170, 62, [1, 1, 1], [0.9, 0.92, 0.95]);
+  rect(221, 544, 170, 62, [1, 1, 1], [0.9, 0.92, 0.95]);
+  rect(406, 544, 170, 62, [1, 1, 1], [0.9, 0.92, 0.95]);
+  text(52, 586, "Customer", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(52, 562, customer, { size: 14, font: "F2" });
+  text(237, 586, "Invoice date", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(237, 562, truncatePdfLabel(issueDate, 24), { size: 14, font: "F2" });
+  text(422, 586, "Order type", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(422, 562, typeLabel, { size: 14, font: "F2" });
+
+  text(36, 514, "Items", { size: 15, font: "F2" });
+  line(36, 507, 576, 507, [0.9, 0.92, 0.95], 1);
+  text(40, 488, "Item", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(315, 488, "Qty", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(385, 488, "Unit", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(492, 488, "Line total", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  line(36, 480, 576, 480, [0.9, 0.92, 0.95], 1);
+
+  let currentY = 456;
+  items.forEach((item, index) => {
+    const fill = index % 2 === 0 ? [0.995, 0.997, 1] as [number, number, number] : [1, 1, 1] as [number, number, number];
+    rect(36, currentY - 10, 540, 26, fill);
+    text(40, currentY, truncatePdfLabel(item.name, 38), { size: 10 });
+    text(320, currentY, String(item.qty || 0), { size: 10 });
+    text(378, currentY, formatMoney(item.unitPrice || 0), { size: 10 });
+    text(494, currentY, formatMoney(item.lineTotal || 0), { size: 10, font: "F2" });
+    currentY -= 30;
+  });
+
+  if (extraItemCount > 0) {
+    text(40, currentY, `+ ${extraItemCount} more item${extraItemCount === 1 ? "" : "s"} in this order`, {
+      size: 10,
+      font: "F1",
+      color: [0.39, 0.45, 0.54],
+    });
+    currentY -= 24;
+  }
+
+  const summaryTop = Math.max(186, currentY - 18);
+  rect(330, summaryTop, 246, 110, [1, 0.985, 0.965], [0.98, 0.87, 0.76]);
+  text(348, summaryTop + 84, "Owner summary", { size: 13, font: "F2" });
+  text(348, summaryTop + 58, "Items subtotal", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(478, summaryTop + 58, formatMoney(ownerBreakdown.subtotal), { size: 12, font: "F2" });
+  text(348, summaryTop + 36, "Tax", { size: 10, font: "F2", color: [0.39, 0.45, 0.54] });
+  text(478, summaryTop + 36, formatMoney(ownerBreakdown.tax), { size: 12, font: "F2" });
+  line(348, summaryTop + 26, 558, summaryTop + 26, [0.98, 0.87, 0.76], 1);
+  text(348, summaryTop + 10, "Owner amount", { size: 11, font: "F2" });
+  text(468, summaryTop + 10, formatMoney(ownerBreakdown.earnings), { size: 15, font: "F2", color: [0.97, 0.45, 0.09] });
+
+  text(36, 92, "This invoice is the HomyFod owner copy and shows item subtotal plus tax only.", {
+    size: 10,
+    font: "F1",
+    color: [0.39, 0.45, 0.54],
+  });
+
+  const stream = commands.join("\n");
+  const length = Buffer.byteLength(stream, "utf8");
 
   const objects = [
     "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
     "2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj",
-    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj",
+    "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >> endobj",
     "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj",
-    `5 0 obj << /Length ${length} >> stream\n${stream}\nendstream endobj`,
+    "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj",
+    `6 0 obj << /Length ${length} >> stream\n${stream}\nendstream endobj`,
   ];
 
   let pdf = "%PDF-1.4\n";
   const offsets: number[] = [0];
   objects.forEach((obj) => {
-    offsets.push(pdf.length);
+    offsets.push(Buffer.byteLength(pdf, "utf8"));
     pdf += `${obj}\n`;
   });
-  const xrefStart = pdf.length;
+  const xrefStart = Buffer.byteLength(pdf, "utf8");
   pdf += `xref\n0 ${objects.length + 1}\n`;
   pdf += "0000000000 65535 f \n";
   offsets.slice(1).forEach((offset) => {

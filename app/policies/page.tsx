@@ -12,7 +12,22 @@ type CmsPageRow = {
   is_enabled: boolean | null;
 };
 
-const POLICY_SLUGS = ["terms_conditions", "refund_policy", "privacy_policy"];
+type PolicyPageConfig = {
+  slug: string;
+  quickLabel: string;
+  href: string;
+};
+
+const POLICY_PAGE_CONFIG: PolicyPageConfig[] = [
+  { slug: "terms_conditions", quickLabel: "Terms & Conditions", href: "/terms-and-conditions" },
+  { slug: "refund_policy", quickLabel: "Refund Policy", href: "/refund-policy" },
+  { slug: "privacy_policy", quickLabel: "Privacy Policy", href: "/privacy-policy" },
+  { slug: "driver_contract", quickLabel: "Driver Contract", href: "/pages/driver_contract" },
+  { slug: "owner_contract", quickLabel: "Store Owner Contract", href: "/pages/owner_contract" },
+];
+
+const POLICY_SLUGS = POLICY_PAGE_CONFIG.map((entry) => entry.slug);
+const POLICY_CONFIG_BY_SLUG = new Map(POLICY_PAGE_CONFIG.map((entry) => [entry.slug, entry]));
 
 export default function PoliciesPage() {
   const [loading, setLoading] = useState(true);
@@ -160,17 +175,20 @@ export default function PoliciesPage() {
           </div>
 
           <div style={quickLinksWrap}>
-            <Link href="/terms-and-conditions" style={quickLink}>
-              📄 Terms & Conditions
-            </Link>
+            {orderedPages.map((page) => {
+              const slug = String(page.slug || "").trim();
+              if (!slug) return null;
 
-            <Link href="/refund-policy" style={quickLink}>
-              💸 Refund Policy
-            </Link>
+              const pageConfig = POLICY_CONFIG_BY_SLUG.get(slug);
+              const quickLabel = pageConfig?.quickLabel || String(page.title || "Policy").trim() || "Policy";
+              const href = pageConfig?.href || ("/pages/" + encodeURIComponent(slug));
 
-            <Link href="/privacy-policy" style={quickLink}>
-              🔒 Privacy Policy
-            </Link>
+              return (
+                <Link key={slug} href={href} style={quickLink}>
+                  {quickLabel}
+                </Link>
+              );
+            })}
           </div>
         </div>
 

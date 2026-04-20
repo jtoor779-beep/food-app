@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 
 export default function DriverAuthCallbackPage() {
   const deepLink = useMemo(() => {
-    if (typeof window === "undefined") return "homyfoddriver://auth/callback";
+    if (typeof window === "undefined") return "homyfoddriver:///auth/callback";
 
     const allowedQueryKeys = new Set([
       "code",
@@ -48,7 +48,7 @@ export default function DriverAuthCallbackPage() {
     const query = nextQuery.toString();
     const hash = nextHash.toString();
 
-    return `homyfoddriver://auth/callback${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`;
+    return `homyfoddriver:///auth/callback${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`;
   }, []);
 
   useEffect(() => {

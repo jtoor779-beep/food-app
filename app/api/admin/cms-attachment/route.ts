@@ -26,6 +26,38 @@ function safeFileName(value: string) {
     .replace(/^-|-$/g, "") || "attachment";
 }
 
+function isMissingBucketError(error: any) {
+  const msg = cleanLower(error?.message);
+  return (
+    msg.includes("bucket not found") ||
+    msg.includes("does not exist") ||
+    msg.includes("not found")
+  );
+}
+
+async function ensureAttachmentBucket() {
+  const listRes = await supabaseAdmin!.storage.listBuckets();
+  if (listRes.error) throw listRes.error;
+
+  const exists = (listRes.data || []).some((bucket) => clean(bucket?.name) === ATTACH_BUCKET);
+  if (exists) return;
+
+  const created = await supabaseAdmin!.storage.createBucket(ATTACH_BUCKET, {
+    public: false,
+    fileSizeLimit: "25MB",
+    allowedMimeTypes: [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/plain",
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+    ],
+  });
+  if (created.error) throw created.error;
+}
+
 async function requireAdminUser(req: Request) {
   const authHeader = clean(req.headers.get("authorization"));
   const token = authHeader.replace(/^Bearer\s+/i, "");
@@ -73,12 +105,19 @@ export async function POST(req: Request) {
     const arrayBuffer = await file.arrayBuffer();
     const filePath = `cms/${slug}/${Date.now()}-${safeFileName(file.name)}`;
 
-    const { error: uploadError } = await supabaseAdmin!.storage
-      .from(ATTACH_BUCKET)
-      .upload(filePath, arrayBuffer, {
-        upsert: false,
-        contentType: clean(file.type) || "application/octet-stream",
-      });
+    const uploadOnce = async () =>
+      supabaseAdmin!.storage
+        .from(ATTACH_BUCKET)
+        .upload(filePath, arrayBuffer, {
+          upsert: false,
+          contentType: clean(file.type) || "application/octet-stream",
+        });
+
+    let { error: uploadError } = await uploadOnce();
+    if (uploadError && isMissingBucketError(uploadError)) {
+      await ensureAttachmentBucket();
+      ({ error: uploadError } = await uploadOnce());
+    }
 
     if (uploadError) {
       throw uploadError;

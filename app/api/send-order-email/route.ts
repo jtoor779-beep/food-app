@@ -335,6 +335,15 @@ function ownerRejectReason(ctx: any) {
       ctx?.rejection_reason ||
       ctx?.cancel_reason ||
       ctx?.owner_reject_reason ||
+      ctx?.owner_rejection_reason ||
+      ctx?.owner_cancel_reason ||
+      ctx?.cancel_note ||
+      ctx?.cancellation_note ||
+      ctx?.rejected_reason ||
+      ctx?.reject_note ||
+      ctx?.rejection_note ||
+      ctx?.status_note ||
+      ctx?.status_notes ||
       ""
   ).trim();
 }

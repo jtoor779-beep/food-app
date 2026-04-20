@@ -40,23 +40,76 @@ function getOrderTable(orderType: string) {
   return orderType === "grocery" ? "grocery_orders" : "orders";
 }
 
+function orderSelectColumns() {
+  return [
+    "id",
+    "user_id",
+    "customer_user_id",
+    "customer_id",
+    "delivery_user_id",
+    "driver_user_id",
+    "rider_user_id",
+  ];
+}
+
+function resolveOrderParticipants(order: Record<string, any> | null | undefined) {
+  const customerUserId = clean(
+    order?.user_id ||
+      order?.customer_user_id ||
+      order?.customer_id
+  );
+  const driverUserId = clean(
+    order?.delivery_user_id ||
+      order?.driver_user_id ||
+      order?.rider_user_id
+  );
+  return { customerUserId, driverUserId };
+}
+
 async function loadOrder(orderType: string, orderId: string) {
   const table = getOrderTable(orderType);
-  const { data, error } = await supabaseAdmin
-    .from(table)
-    .select("id, user_id, customer_user_id, delivery_user_id")
-    .eq("id", orderId)
-    .maybeSingle();
+  const columns = orderSelectColumns();
+  const removed = new Set<string>();
 
-  if (error) throw error;
-  return data as
-    | {
-        id?: string | null;
-        user_id?: string | null;
-        customer_user_id?: string | null;
-        delivery_user_id?: string | null;
-      }
-    | null;
+  for (let attempt = 0; attempt < columns.length + 3; attempt += 1) {
+    const { data, error } = await supabaseAdmin
+      .from(table)
+      .select(columns.join(", "))
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (!error) {
+      return (data || null) as
+        | {
+            id?: string | null;
+            user_id?: string | null;
+            customer_user_id?: string | null;
+            customer_id?: string | null;
+            delivery_user_id?: string | null;
+            driver_user_id?: string | null;
+            rider_user_id?: string | null;
+          }
+        | null;
+    }
+
+    if (!isSchemaMismatchError(error)) throw error;
+    const missing = extractMissingColumnName(error);
+    if (
+      !missing ||
+      missing === "id" ||
+      !columns.includes(missing) ||
+      removed.has(missing)
+    ) {
+      throw error;
+    }
+
+    removed.add(missing);
+    const idx = columns.indexOf(missing);
+    if (idx >= 0) columns.splice(idx, 1);
+    if (!columns.length) throw error;
+  }
+
+  return null;
 }
 
 async function insertChatMessageAuto(payload: Record<string, any>) {
@@ -115,8 +168,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const customerUserId = clean(order.user_id || order.customer_user_id);
-    const driverUserId = clean(order.delivery_user_id);
+    const { customerUserId, driverUserId } = resolveOrderParticipants(order);
     if (viewerUserId !== customerUserId && viewerUserId !== driverUserId) {
       return NextResponse.json(
         { success: false, message: "You do not have access to this chat." },
@@ -173,8 +225,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const customerUserId = clean(order.user_id || order.customer_user_id);
-    const driverUserId = clean(order.delivery_user_id);
+    const { customerUserId, driverUserId } = resolveOrderParticipants(order);
 
     if (senderRole === "customer" && senderUserId !== customerUserId) {
       return NextResponse.json(

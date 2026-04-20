@@ -503,6 +503,15 @@ async function updateOrderStatusAuto({ table, orderId, nextStatus, rejectReason 
     patch.rejection_reason = rejectReason;
     patch.cancel_reason = rejectReason;
     patch.owner_reject_reason = rejectReason;
+    patch.owner_rejection_reason = rejectReason;
+    patch.owner_cancel_reason = rejectReason;
+    patch.rejected_reason = rejectReason;
+    patch.reject_note = rejectReason;
+    patch.rejection_note = rejectReason;
+    patch.cancel_note = rejectReason;
+    patch.cancellation_note = rejectReason;
+    patch.status_note = rejectReason;
+    patch.status_notes = rejectReason;
   }
 
   // First try: update by id

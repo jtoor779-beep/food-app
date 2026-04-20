@@ -43,14 +43,19 @@ function ownerRejectReason(row: AnyRow | null | undefined) {
   return String(
     row?.owner_reject_reason ||
       row?.owner_rejection_reason ||
+      row?.owner_cancel_reason ||
       row?.reject_reason ||
       row?.rejection_reason ||
       row?.cancel_reason ||
+      row?.cancel_note ||
       row?.cancelled_reason ||
       row?.cancellation_reason ||
       row?.rejected_reason ||
       row?.reject_note ||
       row?.rejection_note ||
+      row?.cancellation_note ||
+      row?.owner_cancel_note ||
+      row?.owner_reject_note ||
       row?.status_note ||
       row?.status_notes ||
       ""

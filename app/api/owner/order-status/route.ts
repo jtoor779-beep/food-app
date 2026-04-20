@@ -46,9 +46,18 @@ async function updateWithFallback(table: string, orderId: string, storeKey: stri
   const variants = buildFallbackVariants(patch, [
     "updated_at",
     "owner_reject_reason",
+    "owner_rejection_reason",
+    "owner_cancel_reason",
     "cancel_reason",
+    "cancel_note",
+    "cancellation_note",
     "rejection_reason",
     "reject_reason",
+    "rejected_reason",
+    "reject_note",
+    "rejection_note",
+    "status_note",
+    "status_notes",
   ]);
 
   let lastError: any = null;
@@ -130,6 +139,15 @@ export async function POST(req: Request) {
         rejection_reason: rejectReason,
         cancel_reason: rejectReason,
         owner_reject_reason: rejectReason,
+        owner_rejection_reason: rejectReason,
+        owner_cancel_reason: rejectReason,
+        rejected_reason: rejectReason,
+        reject_note: rejectReason,
+        rejection_note: rejectReason,
+        cancel_note: rejectReason,
+        cancellation_note: rejectReason,
+        status_note: rejectReason,
+        status_notes: rejectReason,
       });
     }
 

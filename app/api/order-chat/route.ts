@@ -27,13 +27,32 @@ function isSchemaMismatchError(error: any) {
 }
 
 function extractMissingColumnName(error: any) {
-  const msg = clean(error?.message);
-  const quoted = msg.match(/'([^']+)'/);
-  if (!quoted?.[1]) return "";
-  const column = quoted[1];
-  if (!column.includes(".")) return column.trim();
-  const parts = column.split(".");
-  return String(parts[parts.length - 1] || "").trim();
+  const joined = [error?.message, error?.details, error?.hint]
+    .map((value) => clean(value))
+    .filter(Boolean)
+    .join(" ");
+
+  if (!joined) return "";
+
+  const unquoted = joined.match(
+    /column\s+["']?(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)["']?\s+does not exist/i
+  );
+  if (unquoted?.[1]) return clean(unquoted[1]);
+
+  const quoted = joined.match(/'([^']+)'/);
+  if (quoted?.[1]) {
+    const value = clean(quoted[1]);
+    if (!value.includes(".")) return value;
+    const parts = value.split(".");
+    return clean(parts[parts.length - 1]);
+  }
+
+  const cacheMatch = joined.match(
+    /could not find (?:the )?["']?([a-zA-Z0-9_]+)["']?\s+column/i
+  );
+  if (cacheMatch?.[1]) return clean(cacheMatch[1]);
+
+  return "";
 }
 
 function getOrderTable(orderType: string) {
